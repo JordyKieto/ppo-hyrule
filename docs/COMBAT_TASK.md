@@ -136,11 +136,23 @@ Leaving the room was ~0.3% throughout gru-v2b.
 
 **PPO health at the end:** explained variance 0.97, approx KL 0.010, clip fraction 0.11, entropy 3.5 (of ln 63 = 4.14), no skipped minibatches.
 
-### Compute and cost
-- **41.8 M fleet env steps** in total: 8.6 M in gru-v2 (G1–30) + 33.2 M in gru-v2b (G31–154). That's ≈1,160 game-hours of Deku Baba fighting at 10 Hz.
-- 20 CPU pods (16 vCPU), 3,300–3,800 env steps/s fleet-wide, $10.38/hr. Each pod plays ≈17 game-hours per wall-clock hour (≈170 env steps/s).
-- gru-v2b ran 11:24 → 15:02 (≈3 h 40 min, **≈$38**); gru-v2 G1–30 took 09:44 → 10:57 (≈1 h 15 min, ≈$13), plus ≈25 min of discarded updates 31–38.
-- Pods ran at very different speeds: ranks 1, 2 and 13 fell 25–45 updates behind, but sync kept them on current weights (RUNPOD.md).
+### Compute, run time and cost
+
+Wall-clock times come from wandb run creation and last-logged timestamps plus the fleet kill log. Cost is 20 CPU pods at $10.24–10.38/hr (a mix of $0.48 cpu3c and $0.56 cpu5c pods).
+
+| Phase | Wall clock (PDT, 2026-09-13) | Duration | Global updates | Fleet env steps | Cost |
+|---|---|---|---|---|---|
+| Pod creation, bootstrap, obs-v3 run `gru-v1` (superseded) | 09:02 → 09:43 | 0 h 41 m | – | – | ≈ $5 (fleet grew from 5 to 20 pods) |
+| **`deku-combat-gru-v2`**: used part (G1–30) | 09:43 → 10:57 | 1 h 14 m | 1–30 | 8.6 M | ≈ $13 |
+| `deku-combat-gru-v2`: updates 31–38 (discarded after divergence) + relaunch | 10:57 → 11:24 | 0 h 27 m | – | – | ≈ $5 |
+| **`deku-combat-gru-v2b`** | 11:24 → 15:02 | 3 h 38 m | 31–154 | 33.2 M | ≈ $38 |
+| **Both training runs (gru-v2 + gru-v2b)** | **09:43 → 15:02** | **5 h 19 m** | **154** | **41.8 M** | **≈ $55** |
+| **Whole session, all RunPod spend** (balance $74.42 → $12.92) | 09:02 → 15:02 | 6 h 00 m | | | **$61.50** |
+
+- Only **4 h 52 m / ≈ $51** produced the final policy (G1–30 + G31–154); the rest was setup and the discarded gru-v2 tail.
+- 41.8 M env steps ≈ **1,160 game-hours** of Deku Baba fighting at 10 Hz. Cost ≈ **$1.3 per million env steps**.
+- 3,300–3,800 env steps/s fleet-wide; each pod plays ≈17 game-hours per wall-clock hour (≈170 env steps/s).
+- Pods ran at very different speeds: ranks 1, 2 and 13 ended 32–48 updates behind, but sync kept them on current weights (RUNPOD.md).
 
 ### Next stage: Gohma (boss)
 Same pattern (`docs/ADDING_OBSERVATIONS.md`): record a human Gohma fight at 20 Hz, decode Gohma's action routine (eye open / stunned / climbing / spawning larvae), boss HP, and Gohma larvae (eggs + Gohma Larva actors). Then: new savestate slots at the boss door and mid-fight, a `boss` reward variant (boss damage, stun via slingshot/Deku nut to the eye, larva kills), and init from this combat policy where the observation layout allows.

@@ -21,7 +21,7 @@ Investigation log for driving *The Legend of Zelda: Ocarina of Time* (Wii Virtua
 | Resets? | Savestate load via hotkey: **45/45 succeeded, ~29 ms p50** from press to Link back at spawn (verified in RAM). |
 | Do we need OCR for rupees? | **No.** Rupees, health, scene, Link's position and collectibles are all readable from RAM. |
 | Concurrency on one Mac? | **Not measured yet.** Estimate: 3–4 instances at 1× speed, CPU-bound. |
-| **Can PPO learn OoT combat from RAM?** | **Yes (2026-09-13).** A GRU entity policy trained on 20 RunPod CPU pods (41.8 M env steps, ~5 h 20 min, ~$55 incl. discarded updates) clears the Deku Tree Deku Baba room in **77%** of episodes across 10 start states (3.7% deaths). Watched locally: **3/3 successes**, fastest clear 17.7 s with no damage. See `docs/COMBAT_TASK.md` § Results. |
+| **Can PPO learn OoT combat from RAM?** | **Yes (2026-09-13).** A GRU entity policy trained on 20 RunPod CPU pods (41.8 M env steps; both training runs 5 h 19 m ≈ $55, whole session incl. setup $61.50) clears the Deku Tree Deku Baba room in **77%** of episodes across 10 start states (3.7% deaths). Watched locally: **3/3 successes**, fastest clear 17.7 s with no damage. See `docs/COMBAT_TASK.md` § Results. |
 
 ---
 
