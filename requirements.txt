@@ -1,0 +1,9 @@
+boto3==1.43.93
+lz4==4.4.5
+matplotlib==3.11.2
+numpy==2.5.3
+pillow==12.3.0
+PyYAML==6.0.3
+requests==2.34.2
+torch==2.14.0
+wandb==0.30.0

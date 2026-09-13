@@ -1,0 +1,2024 @@
+{
+  "dataset": "zelda/combat/deku-baba",
+  "created": "2026-09-13T16:04:06-0700",
+  "bucket": "zelda-rl",
+  "region": "us-west-1",
+  "game": {
+    "title": "The Legend of Zelda: Ocarina of Time",
+    "platform": "Wii Virtual Console",
+    "game_id": "NACE01",
+    "title_id": "000100014e414345",
+    "n64_rom": "NTSC 1.2",
+    "save_file": "File 1 \"LINK\""
+  },
+  "emulator": {
+    "name": "Dolphin",
+    "version": "2603a",
+    "savestate_version": 177
+  },
+  "location": {
+    "scene": 0,
+    "scene_name": "Inside the Deku Tree",
+    "room": 0,
+    "room_name": "entrance room (first room)"
+  },
+  "task": {
+    "doc": "docs/COMBAT_TASK.md",
+    "env_hz": 10,
+    "episode_max_s": 180,
+    "success": "all Deku Babas alive at start defeated",
+    "terminal": [
+      "success",
+      "death",
+      "left_room"
+    ]
+  },
+  "fields": {
+    "hearts": "save ctx +0x30 / 16",
+    "behaviour": "Deku Baba action routine +0x1B0 (docs/RAM_MAP.md \u00a711)",
+    "head_facing_link_deg_off": "|shape yaw +0xB6 - yaw to Link +0x8A|, 0 = looking at Link",
+    "game_time_vi": "VI counter (60 Hz) at save time"
+  },
+  "slots": [
+    {
+      "slot": 1,
+      "title": "Entrance, three Babas ahead",
+      "where": "Deku Tree first room, standing just inside the entrance (position -4, 0, 597).",
+      "what": "Full health. All three Deku Babas are underground and 530-830 units away, so Link has to walk up and wake them.",
+      "why": "The baseline full fight. The exit is right behind Link, so it also tests that the policy doesn't leave the room.",
+      "ram": {
+        "file": "NACE01.s01",
+        "bytes": 38426927,
+        "sha256": "9d1776bfe5dcfe40a0e2adb951b98842036861dedede1b432573530295f43d54",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 8519,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -4.0,
+            0.0,
+            597.0
+          ],
+          "facing_deg": 180.0,
+          "camera_yaw_rad": -1.571,
+          "z_targeting": false,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 531,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 89.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 575,
+            "position": [
+              -218.0,
+              14.0,
+              63.0
+            ],
+            "head_facing_link_deg_off": 89.8,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 608,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 79.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 792,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 62.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 803,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 78.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 828,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 177.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1129,
+            "position": [
+              -67.0,
+              1073.7,
+              255.0
+            ],
+            "head_facing_link_deg_off": 25.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1288,
+            "position": [
+              256.0,
+              1075.7,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 126.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1345,
+            "position": [
+              -179.0,
+              1076.7,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 147.6,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 6
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s01",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s01"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            8.0,
+            20.2,
+            24.3
+          ],
+          "hearts_lost": 0.5,
+          "return": 83.0,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.9,
+          "death_rate": 0.04
+        }
+      }
+    },
+    {
+      "slot": 2,
+      "title": "Mid-room, Babas already up",
+      "where": "Deku Tree first room, in among the Babas.",
+      "what": "Full health, already Z-targeting. Three Babas at 144-303 units: one idle (up and swaying), one hidden, one retracting.",
+      "why": "Starts mid-engagement: the policy must fight immediately instead of approaching.",
+      "ram": {
+        "file": "NACE01.s02",
+        "bytes": 38709995,
+        "sha256": "915527b1b831cbb8580d8d3d2772c5935786ded4011162e2725a1216ea3fbe02",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 15085,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            63.2,
+            -6.5,
+            -31.9
+          ],
+          "facing_deg": 37.5,
+          "camera_yaw_rad": 0.352,
+          "z_targeting": true,
+          "shielding": false,
+          "locked_on_enemy": true,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "idle",
+            "distance_to_link": 144,
+            "position": [
+              141.2,
+              12.9,
+              87.0
+            ],
+            "head_facing_link_deg_off": 38.1,
+            "action_timer": 11
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 225,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 12.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "emerge_retract",
+            "distance_to_link": 303,
+            "position": [
+              -220.0,
+              43.1,
+              62.9
+            ],
+            "head_facing_link_deg_off": 21.1,
+            "action_timer": 11
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 663,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 20.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 674,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 12.6,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 813,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 15.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1098,
+            "position": [
+              256.0,
+              1074.1,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 173.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1120,
+            "position": [
+              -179.0,
+              1075.1,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 168.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1124,
+            "position": [
+              -67.0,
+              1072.1,
+              255.0
+            ],
+            "head_facing_link_deg_off": 170.6,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 6
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s02",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s02"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            2.6,
+            7.1,
+            14.7
+          ],
+          "hearts_lost": 0.5,
+          "return": 82.9,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.77,
+          "death_rate": 0.0
+        }
+      }
+    },
+    {
+      "slot": 3,
+      "title": "A lunge is incoming",
+      "where": "Deku Tree first room, close to the Babas.",
+      "what": "Full health, Z-targeting. Three Babas at 130-355 units: hidden, retracting, and one **preparing a lunge** at Link.",
+      "why": "Tests reacting to an attack already in progress (block, dodge or strike first).",
+      "ram": {
+        "file": "NACE01.s03",
+        "bytes": 38352695,
+        "sha256": "e145e4ed12d84041dfd4a359fd0ed8e51347d2626927b2a9240b0fd5ab88aa3b",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 16241,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -98.8,
+            0.0,
+            111.4
+          ],
+          "facing_deg": 234.7,
+          "camera_yaw_rad": 3.1,
+          "z_targeting": true,
+          "shielding": false,
+          "locked_on_enemy": true,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "prepare_lunge",
+            "distance_to_link": 130,
+            "position": [
+              -211.8,
+              44.1,
+              65.6
+            ],
+            "head_facing_link_deg_off": 0.8,
+            "action_timer": 7
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 293,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 20.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "emerge_retract",
+            "distance_to_link": 355,
+            "position": [
+              -40.4,
+              37.6,
+              -236.4
+            ],
+            "head_facing_link_deg_off": 3.8,
+            "action_timer": 8
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 663,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 7.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 742,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 10.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 827,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 11.8,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1084,
+            "position": [
+              -67.0,
+              1073.6,
+              255.0
+            ],
+            "head_facing_link_deg_off": 152.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1121,
+            "position": [
+              -179.0,
+              1076.6,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 149.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1146,
+            "position": [
+              256.0,
+              1075.6,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 168.9,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 6
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s03",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s03"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            0.6,
+            7.3,
+            10.9
+          ],
+          "hearts_lost": 0.5,
+          "return": 83.5,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.67,
+          "death_rate": 0.04
+        }
+      }
+    },
+    {
+      "slot": 4,
+      "title": "One down, one hidden",
+      "where": "Deku Tree first room.",
+      "what": "Full health, Z-targeting. One Baba is dying (0 HP, being removed); the one live target is hidden underground 364 units away.",
+      "why": "Late-fight state with a single hidden target that must be found and woken. Only 32% in training (timeouts); input was intermittently ignored on some Linux pods.",
+      "ram": {
+        "file": "NACE01.s04",
+        "bytes": 38268490,
+        "sha256": "67f9180ea57c18e26a9328ac0e92355a6d10b079798e8d22d15ececf6095c2ce",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 17864,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            16.5,
+            0.0,
+            -212.9
+          ],
+          "facing_deg": 249.0,
+          "camera_yaw_rad": -1.998,
+          "z_targeting": true,
+          "shielding": false,
+          "locked_on_enemy": true,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 0,
+            "alive_target": false,
+            "behaviour": "dying",
+            "distance_to_link": 67,
+            "position": [
+              -41.0,
+              30.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 0.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 364,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 42.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 771,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 26.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 794,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 24.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 916,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 21.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1093,
+            "position": [
+              -179.0,
+              1074.9,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 128.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1111,
+            "position": [
+              256.0,
+              1073.9,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 132.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1173,
+            "position": [
+              -67.0,
+              1071.9,
+              255.0
+            ],
+            "head_facing_link_deg_off": 175.1,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 1,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 2
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s04",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s04"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            2.7
+          ],
+          "hearts_lost": 0.0,
+          "return": 52.5,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.32,
+          "death_rate": 0.0
+        }
+      }
+    },
+    {
+      "slot": 5,
+      "title": "Last Baba, hidden",
+      "where": "Deku Tree first room.",
+      "what": "Full health. A single live Baba (2 HP), hidden underground.",
+      "why": "Cleanup: find and kill the last one quickly.",
+      "ram": {
+        "file": "NACE01.s05",
+        "bytes": 39486599,
+        "sha256": "0c5a45565a9cd435922b380663fce2c92818ab1bf845939ae5d17a9cfebde088",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 18749,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            25.9,
+            -3.9,
+            -81.5
+          ],
+          "facing_deg": 93.3,
+          "camera_yaw_rad": -0.015,
+          "z_targeting": false,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 252,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 29.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 704,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 19.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 710,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 15.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 846,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 15.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1100,
+            "position": [
+              256.0,
+              1072.0,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 160.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1102,
+            "position": [
+              -179.0,
+              1073.0,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 162.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1129,
+            "position": [
+              -67.0,
+              1070.0,
+              255.0
+            ],
+            "head_facing_link_deg_off": 179.6,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 1,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 2
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s05",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s05"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            2.7
+          ],
+          "hearts_lost": 0.0,
+          "return": 53.6,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.93,
+          "death_rate": 0.0
+        }
+      }
+    },
+    {
+      "slot": 6,
+      "title": "Three Babas, close cluster",
+      "where": "Deku Tree first room, near the middle.",
+      "what": "Full health. Three hidden Babas at 211-276 units.",
+      "why": "Full fight starting at medium range; tests handling several Babas waking at once.",
+      "ram": {
+        "file": "NACE01.s06",
+        "bytes": 39358831,
+        "sha256": "10cba7226cd649baf5969e5e9ccc92da5f88bef886dae8f1b0901fd5f9cd5a3a",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 9103,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -6.2,
+            -9.0,
+            42.4
+          ],
+          "facing_deg": 179.6,
+          "camera_yaw_rad": -1.571,
+          "z_targeting": false,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 211,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 175.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 214,
+            "position": [
+              -218.0,
+              14.0,
+              63.0
+            ],
+            "head_facing_link_deg_off": 163.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 276,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 172.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 651,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 7.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 697,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 0.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 812,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 1.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1103,
+            "position": [
+              -67.0,
+              1071.6,
+              255.0
+            ],
+            "head_facing_link_deg_off": 179.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1119,
+            "position": [
+              256.0,
+              1073.6,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 173.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1122,
+            "position": [
+              -179.0,
+              1074.6,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 171.6,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 6
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s06",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s06"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            5.2,
+            11.0,
+            17.5
+          ],
+          "hearts_lost": 0.0,
+          "return": 87.1,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.77,
+          "death_rate": 0.09
+        }
+      }
+    },
+    {
+      "slot": 7,
+      "title": "Mid-lunge while two more wait",
+      "where": "Deku Tree first room.",
+      "what": "Full health, Z-targeting. One Baba at 1 HP is **mid-lunge**; two more (2 HP) are hidden.",
+      "why": "Hardest mix: an active attack plus hidden targets to find afterwards. 41% in training.",
+      "ram": {
+        "file": "NACE01.s07",
+        "bytes": 38473723,
+        "sha256": "e73517406115c04fb89af4b7aa505e4196480db0430a33ee6bb4967a618a1a4c",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 9777,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -42.7,
+            -9.0,
+            8.5
+          ],
+          "facing_deg": 287.3,
+          "camera_yaw_rad": -3.132,
+          "z_targeting": true,
+          "shielding": false,
+          "locked_on_enemy": true,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 1,
+            "alive_target": true,
+            "behaviour": "lunge",
+            "distance_to_link": 131,
+            "position": [
+              -164.6,
+              21.7,
+              46.4
+            ],
+            "head_facing_link_deg_off": 0.0,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 240,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 179.6,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 257,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 179.8,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 686,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 6.8,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 727,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 2.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 840,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 2.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1109,
+            "position": [
+              -67.0,
+              1071.6,
+              255.0
+            ],
+            "head_facing_link_deg_off": 170.6,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1110,
+            "position": [
+              -179.0,
+              1074.6,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 169.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1125,
+            "position": [
+              256.0,
+              1073.6,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 178.3,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 5
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s07",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s07"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            0.6,
+            11.9,
+            18.6
+          ],
+          "hearts_lost": 1.5,
+          "return": 76.4,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.41,
+          "death_rate": 0.0
+        }
+      }
+    },
+    {
+      "slot": 8,
+      "title": "Hurt Link, two Babas",
+      "where": "Deku Tree first room.",
+      "what": "Link at **2.5 hearts**. Two hidden Babas (2 HP each).",
+      "why": "Lower health: mistakes are costlier. Highest training death rate (21%).",
+      "ram": {
+        "file": "NACE01.s08",
+        "bytes": 38716584,
+        "sha256": "11698b413875a23e809236dcdfc9c69c0505ba9ce3d6c15bb25eb49798a2ec8b",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 10882,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 2.5,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -178.6,
+            0.0,
+            83.8
+          ],
+          "facing_deg": 146.8,
+          "camera_yaw_rad": -1.328,
+          "z_targeting": false,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 343,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 13.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 373,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 161.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 723,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 9.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 803,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 8.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 878,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 12.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1092,
+            "position": [
+              -67.0,
+              1073.0,
+              255.0
+            ],
+            "head_facing_link_deg_off": 131.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1110,
+            "position": [
+              -179.0,
+              1076.0,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 135.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1169,
+            "position": [
+              256.0,
+              1075.0,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 176.5,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 2,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 4
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s08",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s08"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            5.4,
+            8.8
+          ],
+          "hearts_lost": 0.0,
+          "return": 70.5,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.75,
+          "death_rate": 0.21
+        }
+      }
+    },
+    {
+      "slot": 9,
+      "title": "Low health, stunned Baba",
+      "where": "Deku Tree first room, right next to a Baba.",
+      "what": "Link at **1.5 hearts**. One Baba at 1 HP, **stunned** 91 units away: the kill window is open.",
+      "why": "Tests taking a free kill immediately while one hit from death.",
+      "ram": {
+        "file": "NACE01.s09",
+        "bytes": 37303159,
+        "sha256": "8e47dc6d359047b6d63a012165b63a94238c3e366768c47bbe79ef88a31563f5",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 13139,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 1.5,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            131.5,
+            -0.0,
+            78.5
+          ],
+          "facing_deg": 49.6,
+          "camera_yaw_rad": 0.706,
+          "z_targeting": true,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 1,
+            "alive_target": true,
+            "behaviour": "stunned",
+            "distance_to_link": 91,
+            "position": [
+              194.0,
+              60.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 126.2,
+            "action_timer": 4
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 576,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 21.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 606,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 1.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 746,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 13.2,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1094,
+            "position": [
+              256.0,
+              1077.3,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 146.6,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1108,
+            "position": [
+              -67.0,
+              1075.3,
+              255.0
+            ],
+            "head_facing_link_deg_off": 146.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1154,
+            "position": [
+              -179.0,
+              1078.3,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 175.8,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 1,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 1
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s09",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s09"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            0.5
+          ],
+          "hearts_lost": 0.0,
+          "return": 51.3,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.9,
+          "death_rate": 0.05
+        }
+      }
+    },
+    {
+      "slot": 10,
+      "title": "Three Babas, one awake",
+      "where": "Deku Tree first room.",
+      "what": "Full health. Three Babas at 179-271 units: two hidden, one idle.",
+      "why": "Full fight with one Baba already up and able to attack.",
+      "ram": {
+        "file": "NACE01.s10",
+        "bytes": 39552591,
+        "sha256": "8ef04f22eb97782e752a58318d1432349efef37b0a77dbbd7b0d3a71f05b86a3",
+        "game_id": "NACE01",
+        "dolphin_version_string": "Dolphin 2603a",
+        "game_time_vi": 9161,
+        "scene": 0,
+        "room": 0,
+        "link": {
+          "hearts": 3.0,
+          "heart_containers": 3.0,
+          "rupees": 0,
+          "position": [
+            -56.0,
+            -9.0,
+            3.4
+          ],
+          "facing_deg": 145.7,
+          "camera_yaw_rad": -1.79,
+          "z_targeting": false,
+          "shielding": false,
+          "locked_on_enemy": false,
+          "b_button_item": 59,
+          "equipment_bits": "0x1111"
+        },
+        "enemies": [
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "idle",
+            "distance_to_link": 179,
+            "position": [
+              -215.6,
+              47.1,
+              62.1
+            ],
+            "head_facing_link_deg_off": 0.0,
+            "action_timer": 21
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 235,
+            "position": [
+              -41.0,
+              14.0,
+              -230.0
+            ],
+            "head_facing_link_deg_off": 176.3,
+            "action_timer": 0
+          },
+          {
+            "actor": "Deku Baba",
+            "actor_id": "0x0055",
+            "hp": 2,
+            "alive_target": true,
+            "behaviour": "hidden",
+            "distance_to_link": 271,
+            "position": [
+              194.0,
+              14.0,
+              105.0
+            ],
+            "head_facing_link_deg_off": 179.9,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 695,
+            "position": [
+              287.2,
+              478.0,
+              360.5
+            ],
+            "head_facing_link_deg_off": 6.1,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 737,
+            "position": [
+              425.5,
+              520.0,
+              182.1
+            ],
+            "head_facing_link_deg_off": 2.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skullwalltula (En_Sw)",
+            "actor_id": "0x0095",
+            "hp": 1,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 848,
+            "position": [
+              326.1,
+              678.0,
+              320.3
+            ],
+            "head_facing_link_deg_off": 1.7,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1108,
+            "position": [
+              -179.0,
+              1075.1,
+              -190.0
+            ],
+            "head_facing_link_deg_off": 167.4,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1110,
+            "position": [
+              -67.0,
+              1072.1,
+              255.0
+            ],
+            "head_facing_link_deg_off": 167.5,
+            "action_timer": 0
+          },
+          {
+            "actor": "Skulltula (En_St)",
+            "actor_id": "0x0037",
+            "hp": 2,
+            "alive_target": false,
+            "behaviour": "other",
+            "distance_to_link": 1129,
+            "position": [
+              256.0,
+              1074.1,
+              -62.0
+            ],
+            "head_facing_link_deg_off": 176.9,
+            "action_timer": 0
+          }
+        ],
+        "targets_at_start": 3,
+        "other_enemies": {
+          "Skulltula (En_St)": 3,
+          "Skullwalltula (En_Sw)": 3
+        },
+        "target_hp_total": 6
+      },
+      "state": {
+        "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/states/NACE01.s10",
+        "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/states/NACE01.s10"
+      },
+      "results": {
+        "final_policy_local": {
+          "global_update": 150,
+          "end": "success",
+          "kill_times_s": [
+            4.1,
+            7.1,
+            12.3
+          ],
+          "hearts_lost": 0.0,
+          "return": 87.0,
+          "actions": "sampled"
+        },
+        "fleet_training": {
+          "global_update": "145-154",
+          "success_rate": 0.65,
+          "death_rate": 0.1
+        }
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "global_update": 150,
+      "run": "deku-combat-gru-v2b",
+      "local_update": 120,
+      "obs_version": 4,
+      "recurrent": true,
+      "weight_hash": "daae8dc43a96",
+      "bytes": 7419801,
+      "sha256": "30826ae27efc975eb90c297f824aa8e12ac49ee8fe9def119ba5ab903195ccd6",
+      "local_path": "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt",
+      "wandb_run": "https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/vxejacj7",
+      "note": "FINAL: 10/10 slots cleared locally; 77% fleet success",
+      "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G150_deku-combat-gru-v2b_u00120.pt",
+      "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/checkpoints/G150_deku-combat-gru-v2b_u00120.pt"
+    },
+    {
+      "global_update": 130,
+      "run": "deku-combat-gru-v2b",
+      "local_update": 100,
+      "obs_version": 4,
+      "recurrent": true,
+      "weight_hash": "da032a1f5487",
+      "bytes": 7419801,
+      "sha256": "20c1735d8c7f5afe84e1dd01e2be6ed2de95609dc6f64043479d334ba9661a59",
+      "local_path": "checkpoints/inbox/deku-combat-gru-v2b_u00100.pt",
+      "wandb_run": "https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/vxejacj7",
+      "note": "",
+      "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G130_deku-combat-gru-v2b_u00100.pt",
+      "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/checkpoints/G130_deku-combat-gru-v2b_u00100.pt"
+    },
+    {
+      "global_update": 110,
+      "run": "deku-combat-gru-v2b",
+      "local_update": 80,
+      "obs_version": 4,
+      "recurrent": true,
+      "weight_hash": "b2ca5cca82af",
+      "bytes": 7419801,
+      "sha256": "6a7f242f5459ebc12dc5766008ba02254e7cdf03103dea4818324b0bf51088cc",
+      "local_path": "checkpoints/inbox/deku-combat-gru-v2b_u00080.pt",
+      "wandb_run": "https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/vxejacj7",
+      "note": "",
+      "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G110_deku-combat-gru-v2b_u00080.pt",
+      "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/checkpoints/G110_deku-combat-gru-v2b_u00080.pt"
+    },
+    {
+      "global_update": 90,
+      "run": "deku-combat-gru-v2b",
+      "local_update": 60,
+      "obs_version": 4,
+      "recurrent": true,
+      "weight_hash": "4e149364d3ab",
+      "bytes": 7419801,
+      "sha256": "ef0755e63a28a7967b5f1677fa8ac8bb545122607a7269e909ab6175ec71adf2",
+      "local_path": "checkpoints/inbox/deku-combat-gru-v2b_u00060.pt",
+      "wandb_run": "https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/vxejacj7",
+      "note": "",
+      "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G090_deku-combat-gru-v2b_u00060.pt",
+      "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/checkpoints/G090_deku-combat-gru-v2b_u00060.pt"
+    },
+    {
+      "global_update": 30,
+      "run": "deku-combat-gru-v2",
+      "local_update": 30,
+      "obs_version": 4,
+      "recurrent": true,
+      "weight_hash": "8a95bd0ad2e2",
+      "bytes": 7419737,
+      "sha256": "406704e4ca236036e5a625f71fe7ad5d51a76236457bc9587ae81ee2c32379be",
+      "local_path": "checkpoints/inbox/deku-combat-gru-v2_u00030.pt",
+      "wandb_run": "https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/nhj5bcde",
+      "note": "init for gru-v2b; 1 kill in 67 s on slot 1",
+      "s3_uri": "s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G030_deku-combat-gru-v2_u00030.pt",
+      "console_url": "https://us-west-1.console.aws.amazon.com/s3/object/zelda-rl?region=us-west-1&prefix=zelda/combat/deku-baba/checkpoints/G030_deku-combat-gru-v2_u00030.pt"
+    }
+  ]
+}
