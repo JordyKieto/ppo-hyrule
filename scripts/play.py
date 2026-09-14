@@ -40,6 +40,8 @@ def main():
     ap.add_argument("--watch", action="store_true", help="loop forever; reload when a newer checkpoint appears")
     ap.add_argument("--headless", action="store_true", help="no Dolphin window (Null backend)")
     ap.add_argument("--mute", action="store_true", help="no game sound (sound is on for windowed play)")
+    ap.add_argument("--fullscreen", action="store_true", help="start the Dolphin window fullscreen")
+    ap.add_argument("--end-hold", type=float, default=0.0, help="seconds to keep the game on screen after the last episode")
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--hud-hz", type=float, default=2.0)
     ap.add_argument("--episode-seconds", type=float, default=None,
@@ -71,7 +73,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     env, states = make_env(cfg, out / "instance", slots=slots, slots_dir=args.slots_dir,
                            video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast,
-                           audio=not (args.headless or args.mute))
+                           audio=not (args.headless or args.mute),
+                           fullscreen=args.fullscreen and not args.headless)
     goal = env.goal
     print(f"▶ {path}  (update {ck['update']}, {ck['global_step']:,} steps, obs v{cfg.get('obs_version', 1)})\n"
           f"  goal slot {cfg['goal_slot']}: pos ({goal.pos[0]:.0f}, {goal.pos[1]:.0f}, {goal.pos[2]:.0f}) rupees {goal.rupees}"
@@ -160,7 +163,8 @@ def play_combat(args, path, model, cfg, ck, slots):
         cfg["episode_seconds"] = args.episode_seconds
     env, _ = make_env(cfg, out / "instance", slots=slots, slots_dir=args.slots_dir,
                       video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast,
-                      audio=not (args.headless or args.mute))
+                      audio=not (args.headless or args.mute),
+                      fullscreen=args.fullscreen and not args.headless)
     rec = bool(getattr(model, "recurrent", False))
     if not args.headless and sys.platform == "darwin":        # a hidden Metal window stalls Dolphin: bring it to the front
         import subprocess
@@ -206,6 +210,9 @@ def play_combat(args, path, model, cfg, ck, slots):
                                                                      "kill_times_s", "lockons", "blocks")}))
                 print(f"■ slot {slot}: {ep['end'].upper()} | killed {ep['defeated']}/{ep['targets_start']} at {ep['kill_times_s']} s | "
                       f"hearts lost {ep['hp_lost'] / 16:.1f} | return {ep['return']:.1f}")
+        if args.end_hold > 0:                                  # let the last kill / result play out on screen
+            env.send_action(0)
+            time.sleep(args.end_hold)
     except KeyboardInterrupt:
         pass
     finally:

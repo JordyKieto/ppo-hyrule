@@ -32,3 +32,8 @@ secrets*.env
 
 # Superseded copy of fleet/ (kept locally, not part of the repo)
 runpod_fleet/
+
+# Screen recordings
+recordings/
+*.mp4
+*.mov

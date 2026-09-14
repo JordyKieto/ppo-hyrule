@@ -45,7 +45,8 @@ def _ini(sections: dict[str, dict[str, str]]) -> str:
 
 
 def build_user_dir(root: Path, *, dump_frames: bool = True, internal_res: int = 1,
-                   unlimited_speed: bool = False, audio: bool = False) -> Path:
+                   unlimited_speed: bool = False, audio: bool = False,
+                   fullscreen: bool = False) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     cfg = root / "Config"
     cfg.mkdir(exist_ok=True)
@@ -77,7 +78,7 @@ def build_user_dir(root: Path, *, dump_frames: bool = True, internal_res: int = 
         "Analytics": {"PermissionAsked": "True", "Enabled": "False"},
         "AutoUpdate": {"UpdateTrack": ""},
         "Display": {"RenderWindowAutoSize": "False", "RenderWindowWidth": "640",
-                    "RenderWindowHeight": "480"},
+                    "RenderWindowHeight": "480", "Fullscreen": str(fullscreen)},
     }))
     (cfg / "GFX.ini").write_text(_ini({
         "Settings": {

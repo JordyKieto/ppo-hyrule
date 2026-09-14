@@ -38,3 +38,14 @@ aws s3 cp s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G150_deku-combat-gru-
 DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
   .venv/bin/python-dbg scripts/play.py checkpoints/kept/G150_deku-combat-gru-v2b_u00120.pt --slot 1 --slot 7
 ```
+
+## Record a video (fullscreen + game audio)
+
+```sh
+scripts/record_play.sh                      # final policy through slots 1-10 -> recordings/deku-baba_<time>.mp4
+```
+
+- **How:** a ScreenCaptureKit recorder (`tools/screenrec.swift`) captures only Dolphin's window and Dolphin's audio, with no loopback driver.
+- **Stops by itself** when the last slot ends; Ctrl+C also stops and still saves the file.
+- **First run:** allow Screen Recording for your terminal app, restart it, and run again.
+

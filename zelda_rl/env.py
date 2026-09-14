@@ -56,6 +56,7 @@ class EnvConfig:
     combat: "object" = None           # CombatConfig when task == "combat"
     unlimited_speed: bool = False
     audio: bool = False                # game sound (visible play only)
+    fullscreen: bool = False
     goal: GoalConfig = field(default_factory=GoalConfig)
 
     @property
@@ -70,7 +71,7 @@ class DolphinGoalEnv:
         self.slot_states = slot_states
         shutil.rmtree(instance_dir, ignore_errors=True)
         ud = build_user_dir(instance_dir.resolve(), dump_frames=False, unlimited_speed=cfg.unlimited_speed,
-                            audio=cfg.audio)
+                            audio=cfg.audio, fullscreen=cfg.fullscreen)
         for k, f in slot_files.items():
             shutil.copy(f, ud / "StateSaves" / f"NACE01.s{k:02d}")
         self.inst = DolphinInstance(ud, video_backend=cfg.video_backend)
