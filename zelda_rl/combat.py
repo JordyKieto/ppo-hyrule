@@ -180,10 +180,8 @@ class CombatConfig:
     g_sword_range: float = 90.0
     g_sword_ready: float = 0.02        # per step sword out within sword range while she is stunned
     g_sword_ready_cap: float = 1.0
-    g_larva_damage: float = 0.5        # larvae pay, but capped: never worth farming over the boss
-    g_larva_damage_cap: float = 3.0
+    g_larva_damage: float = 0.5        # larvae: uncapped (Gohma reopens her eye only after they die); time limit bounds it
     g_larva_kill: float = 2.0
-    g_larva_kill_cap: float = 8.0
     g_link_heal: float = 0.1           # per HP unit healed (recovery hearts)
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0

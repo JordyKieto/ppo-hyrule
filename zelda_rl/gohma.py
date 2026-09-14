@@ -2,7 +2,8 @@
 
 Built on the Deku Baba combat task (zelda_rl/combat.py): same RAM reader, same reward bookkeeping (`pay`), same
 core observation block, so a Deku Baba policy transfers (zelda_rl/transfer.py). Gohma is the single *target*
-(success = Gohma HP 0); larvae are secondary enemies (rewarded, capped, never required).
+(success = Gohma HP 0); larvae are rewarded per kill, uncapped: Gohma only becomes vulnerable again once her larvae
+are dead, so clearing them is progress (the episode time limit bounds it).
 
 RAM (verified on two recorded human fights, runs/manual/boss_20260914-*.jsonl, and all 10 boss-room savestates):
   Gohma        actor id 0x0028, category 9 (boss), params 0xFFFF, HP +0xAF = 10 (one per sword hit), action fn +0x180
@@ -197,14 +198,14 @@ class GohmaTracker(CombatTracker):
                         ep["kill_mults"].append(round(mult, 3))
                         self.last_kill_t = self.t
                         ev["boss_defeat"] = True
-                else:
-                    self._capped(pay, "larva_damage", c.g_larva_damage * dmg, c.g_larva_damage_cap, "out")
+                else:                                               # uncapped: she only reopens her eye once larvae die
+                    pay("larva_damage", c.g_larva_damage * dmg, "out")
                     ep["larva_damage"] += dmg
                     ev["larva_hit"] = ev.get("larva_hit", 0) + dmg
                     if e.hp == 0:
                         tr.defeated = True
                         ep["larva_kills"] += 1
-                        self._capped(pay, "larva_kill", c.g_larva_kill, c.g_larva_kill_cap, "out")
+                        pay("larva_kill", c.g_larva_kill, "out")
                         ev["larva_kill"] = True
             tr.hp = e.hp
         for p in [p for p in self.tracks if p not in cur.enemies]:

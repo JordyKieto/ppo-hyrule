@@ -1,6 +1,6 @@
 # Boss Task: Queen Gohma (Inside the Deku Tree, boss room)
 
-The agent must **defeat Queen Gohma without dying**, as fast as possible. Larvae are secondary enemies: killing them pays a little, capped, and is never required.
+The agent must **defeat Queen Gohma without dying**, as fast as possible. Larvae pay per kill, **uncapped**: Gohma doesn't make herself vulnerable again until her larvae are dead, so killing them is progress. Only the episode time limit bounds it.
 
 - **Code:** `zelda_rl/gohma.py` (states, `GohmaTracker` reward, `boss_features` observation block), `zelda_rl/combat.py` (shared RAM reader and config, `profile="gohma"`), `zelda_rl/env.py` (slingshot actions), `zelda_rl/transfer.py` (warm start from the Deku Baba policy), `scripts/train_combat.py --profile gohma`.
 - **Built on the Deku Baba task** (`docs/COMBAT_TASK.md`): same RAM reader, the same `pay()` reward bookkeeping, and the same core observation block. The Deku Baba policy transfers.
@@ -103,7 +103,7 @@ The agent must **defeat Queen Gohma without dying**, as fast as possible. Larvae
 | **`boss_defeat`** | **+60** | outcome |
 | `boss_defeat_speed_bonus` | +60 × 2 × max(0, 1 − minutes/3) | outcome |
 | `success` + `success_time_bonus` | +20, and +30 × fraction of the time limit left | outcome |
-| `larva_damage` / `larva_kill` | +0.5 per HP (cap 3), +2 per kill (cap 8) | outcome (capped: never worth farming) |
+| `larva_damage` / `larva_kill` | +0.5 per HP, +2 per kill (**uncapped**; larvae only exist when she lays eggs, and the 300 s limit bounds it) | outcome |
 | `link_damage` / `link_heal` | −0.25 / +0.1 per HP unit (−2 / +0.8 per half heart) | outcome |
 | `death`, `left_room` | −30 | outcome |
 | `timeout` | −10 if Gohma is alive at the cap | outcome |
@@ -123,7 +123,7 @@ The agent must **defeat Queen Gohma without dying**, as fast as possible. Larvae
 |---|---|---|
 | Win | 2/2 real stuns (2 of 6 seeds), 10 HP damage, defeat, 0.5 ♥ lost. Parts: defeat 60, speed bonus 47, damage 40, stun hits 20, success 20 + 19, seed stuns 12, shaping ≈ 7 | **+225** |
 | Death segment | 1 larva kill, 3 ♥ lost, death | −38.6 |
-| Larva segment | 6 larva kills (reward capped), 0 stun credits from 12 non-red-eye seeds | +11.5 |
+| Larva segment | 6 larva kills (+12 kills, +6 damage, uncapped), 0 stun credits from 12 non-red-eye seeds | +18.5 |
 
 ## Observation v5 (542 dims = v4 483 + 59)
 
