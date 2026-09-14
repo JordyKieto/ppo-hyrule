@@ -26,7 +26,7 @@ fi
 slot_args=()
 for s in $SLOTS; do slot_args+=(--slot "$s"); done
 
-before=" $(pgrep -f 'MacOS/Dolphin -u' | tr '\n' ' ') "
+before=" $( (pgrep -f 'MacOS/Dolphin -u' || true) | tr '\n' ' ') "
 .venv/bin/python-dbg -u scripts/play.py "$CKPT" "${slot_args[@]}" -n 1 --fullscreen --end-hold 3 --hud-hz 0.5 "$@" \
   > >(tee "${OUT%.*}.log") 2>&1 &
 PLAY=$!

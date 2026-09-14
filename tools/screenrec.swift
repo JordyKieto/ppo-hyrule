@@ -5,6 +5,7 @@
 //   ~/.cache/zelda-rl/screenrec --pid <PID> --out video.mp4 [--fps 60] [--max-width 1920]
 //
 // Needs Screen Recording permission for the terminal app that launches it (System Settings > Privacy & Security).
+import AppKit
 import AVFoundation
 import Foundation
 import ScreenCaptureKit
@@ -54,6 +55,10 @@ func stop(_ reason: String) async {
     print("screenrec: saved \(out)")
     exit(0)
 }
+
+// ScreenCaptureKit adds a menu-bar recording indicator, which needs a running AppKit application (no Dock icon).
+let application = NSApplication.shared
+application.setActivationPolicy(.accessory)
 
 signal(SIGINT, SIG_IGN)
 signal(SIGTERM, SIG_IGN)
@@ -113,4 +118,4 @@ Task {
         fail("screenrec: \(error) (grant Screen Recording to your terminal in System Settings > Privacy & Security, then restart it)")
     }
 }
-dispatchMain()
+application.run()
