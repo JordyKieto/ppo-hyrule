@@ -7,7 +7,10 @@ PPO agents that play *The Legend of Zelda: Ocarina of Time* (Wii VC) in Dolphin,
 - It reaches **77%** success over the fleet's sampled training episodes.
 - See [docs/COMBAT_TASK.md](docs/COMBAT_TASK.md).
 
-**Next:** Gohma (boss).
+**In progress: Queen Gohma (boss).**
+- Task, reward, observation v5 and slingshot actions are built and validated on recorded human fights.
+- Training warm-starts from the Deku Baba policy.
+- See [docs/GOHMA_TASK.md](docs/GOHMA_TASK.md).
 
 ## Artifacts
 

@@ -262,3 +262,20 @@ stateFlags1 bits (🔶 decomp names; bit 15/16 ✅ consistent with slot 1):
 | Animation updater | +0x19C (`0x8008D3C4` loop / `0x8008D50C` one-shot) | ✅ |
 | +0x154 float triple | | ❌ not the lunging head (≈220 from base in all normal states) |
 | Focus point | +0x38 | ✅ within 35 units of the base |
+
+## 12. Queen Gohma boss room (scene 17) — see docs/GOHMA_TASK.md
+
+| Field | Address | Status |
+|---|---|---|
+| Queen Gohma | actor id `0x0028`, category 9 (boss), params `0xFFFF`, HP +0xAF (10) | ✅ |
+| Larva / egg | actor id `0x0028`, category 5, params 0–2, HP 2 | ✅ |
+| Hatch / death debris | actor id `0x0028`, params ≥ 10 | ✅ (ignored) |
+| Gohma action function | actor **+0x180**, decode relative to the update function +0x130 | ✅ 18 states; red eye = rel −0x0E4C (ceiling), −0x1630 (floor) |
+| Larva action function | actor **+0x2A0**, relative to +0x130 | ✅ 11 states; overlay moved 0x280 between loads |
+| Actor update / draw function | actor +0x130 / +0x134; overlay entry +0x138 | ✅ |
+| Actor focus (aim point) | actor +0x38 | ✅ lock-on point |
+| Player held item action | Player **+0x141** (s8) | ✅ 15 slingshot, 4 sword, 6 (brief, likely Deku Stick), 0 none |
+| Aiming flags | stateFlags1 bit 3 item out, bit 9 ready to fire, bit 20 first-person | ✅ |
+| Button items | save ctx +0x68 B, +0x69 C-left, +0x6A C-down, +0x6B C-right | ✅ `[59, 255, 6, 0]` |
+| Heart container / blue warp | actor `0x005F` (misc) / `0x005D` (item action) | ✅ spawn after the defeat |
+

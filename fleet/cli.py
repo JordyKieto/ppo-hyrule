@@ -20,6 +20,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -305,6 +306,11 @@ def cmd_launch(a) -> None:
     def prepare(pod):
         rsync(pod, [f"{REPO}/"], f"{R_REPO}/", extra=CODE_EXCLUDES)      # always run the Mac's current code
         push_secrets(pod)
+        init = re.search(r"--init-from\s+(\S+)", a.train_args or "")
+        if init and "{rank}" not in init.group(1) and (REPO / init.group(1)).is_file():   # local warm-start checkpoint
+            rel = init.group(1)
+            run(pod, f"mkdir -p {R_REPO}/{Path(rel).parent}")
+            rsync(pod, [str(REPO / rel)], f"{R_REPO}/{rel}")
         tag = f"-{a.run_tag}" if a.run_tag else ""
         run_name = f"{a.experiment}{tag}-r{pod['rank']}"
         envs = a.num_envs or max(1, (pod.get("vcpu") or 2) // 2)

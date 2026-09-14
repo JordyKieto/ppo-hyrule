@@ -46,10 +46,20 @@ class Enemy:
     shape_yaw: int = 0          # +0xB6: where the head points
     yaw_to_player: int = 0      # +0x8A
     timer: int = 0              # +0x1B6: action countdown
+    cat: int = 5                # actor category (5 enemy, 9 boss)
+    params: int = 0             # +0x1C
+    upd: int = 0                # +0x130 update function: states of relocatable overlays are decoded relative to it
+    focus: tuple[float, float, float] = (0.0, 0.0, 0.0)   # +0x38 focus point (lock-on / aim point: Gohma's eye)
+    yaw: int = 0                # +0x32 world rotation y (body facing)
 
     @property
     def state(self) -> str:
         return DEKU_BABA_STATE.get(self.fn, "other") if self.id == DEKU_BABA else "other"
+
+    @property
+    def fn_rel(self) -> int:
+        """Action function relative to the actor's own update function: stable wherever the overlay is loaded."""
+        return self.fn - self.upd if self.upd else 0
 
 
 # Deku Baba action routines (+0x1B0), decoded from a live fight recording and present in all 10 savestates.
@@ -57,6 +67,10 @@ DEKU_BABA_STATE = {0x801EDF30: "hidden", 0x801EDFDC: "emerge_retract", 0x801EE44
                    0x801EEE94: "idle", 0x801EE910: "idle", 0x801EEDC8: "prepare_lunge", 0x801EEB40: "lunge",
                    0x801EF220: "pull_back", 0x801EF318: "hit", 0x801EF428: "stunned", 0x801EF5EC: "dying",
                    0x801EF950: "dying"}
+# Action-function field per (actor id, category); default = Deku Baba's +0x1B0. Found by scanning 20 Hz fight traces
+# (runs/manual/boss_*.jsonl) for code-pointer fields with few distinct values (docs/ADDING_OBSERVATIONS.md step 2).
+GOHMA_ID = 0x0028                     # Boss_Goma (category 9) and its larvae/eggs/debris En_Goma share this id in RAM
+ACTION_FN_OFFSET = {(GOHMA_ID, 9): 0x180, (GOHMA_ID, 5): 0x2A0}
 BABA_STATES = ["hidden", "emerge_retract", "idle", "prepare_lunge", "lunge", "pull_back", "hit", "stunned", "dying", "other"]
 
 
@@ -72,6 +86,9 @@ class CombatState:
     targeted: int
     arrow: int
     enemies: dict[int, Enemy]           # by actor pointer (ENEMY + BOSS categories)
+    held_item: int = 0                  # Player +0x141 held item action (verified: 15 slingshot, 4 sword, 0 none)
+    seeds: int = 0                      # slingshot seeds (save ctx ammo slot 6)
+    nuts: int = 0                       # Deku nuts (ammo slot 1)
 
     @property
     def dead(self) -> bool:
@@ -89,9 +106,13 @@ def read_combat_state(ram) -> CombatState:
     for cat in (5, 9):
         a, guard = _u32(ram, ps + 0x1C24 + 0x10 + cat * 8), 0
         while 0x80000000 <= a < 0x80400000 and guard < 64:
-            enemies[a] = Enemy(a, _u16(ram, a), int(ram[(a + 0xAF) & 0x3FFFFF]), _vec3(ram, a + 0x24),
-                               fn=_u32(ram, a + 0x1B0), shape_yaw=_s16(ram, a + 0xB6),
-                               yaw_to_player=_s16(ram, a + 0x8A), timer=_s16(ram, a + 0x1B6))
+            aid = _u16(ram, a)
+            fn_off = ACTION_FN_OFFSET.get((aid, cat), 0x1B0)
+            enemies[a] = Enemy(a, aid, int(ram[(a + 0xAF) & 0x3FFFFF]), _vec3(ram, a + 0x24),
+                               fn=_u32(ram, a + fn_off), shape_yaw=_s16(ram, a + 0xB6),
+                               yaw_to_player=_s16(ram, a + 0x8A), timer=_s16(ram, a + 0x1B6), cat=cat,
+                               params=_u16(ram, a + 0x1C), upd=_u32(ram, a + 0x130), focus=_vec3(ram, a + 0x38),
+                               yaw=_s16(ram, a + 0x32))
             a = _u32(ram, a + 0x124)
             guard += 1
     return CombatState(
@@ -99,11 +120,14 @@ def read_combat_state(ram) -> CombatState:
         hp_cap=_s16(ram, SAVE_CTX + 0x2E), sf1=_u32(ram, player + 0x66C) if ok else 0,
         pos=_vec3(ram, player + 0x24) if ok else (math.nan,) * 3, yaw=_u16(ram, player + 0x32) if ok else 0,
         targeted=_u32(ram, TARGETED_ACTOR), arrow=_u32(ram, ARROW_ACTOR), enemies=enemies,
+        held_item=struct.unpack_from(">b", ram, (player + 0x141) & 0x3FFFFF)[0] if ok else 0,
+        seeds=int(ram[(SAVE_CTX + 0x8C + 6) & 0x3FFFFF]), nuts=int(ram[(SAVE_CTX + 0x8C + 1) & 0x3FFFFF]),
     )
 
 
 @dataclass
 class CombatConfig:
+    profile: str = "deku_baba"          # "deku_baba" (CombatTracker) | "gohma" (zelda_rl.gohma.GohmaTracker)
     target_ids: tuple[int, ...] = (DEKU_BABA,)
     max_seconds: float = 180.0
     # outcomes
@@ -140,6 +164,29 @@ class CombatConfig:
     fall_drop: float = 150.0           # Link this far below his start height = fell through the floor web
     room_radius: float = 1400.0        # Link this far (x/z) from his start = left the room area
     spawn_grace_steps: int = 2         # ignore HP changes of actors younger than this (spawn HP=8 frame)
+    # ---- Gohma profile (zelda_rl/gohma.py); ignored by the Deku Baba tracker
+    g_boss_damage: float = 4.0         # per Gohma HP (10 HP -> 40)
+    g_boss_defeat: float = 60.0        # outsized: x speed multiplier (1 + speed_mult_max * (1 - minutes/g_speed_ref_min))
+    g_speed_ref_min: float = 3.0
+    g_stun_hit: float = 2.0            # extra per HP dealt while she is knocked down / stunned
+    g_seed_stun: float = 6.0           # a seed that actually reaches the eye (she is knocked down right after it)
+    g_seed_stun_cap: float = 30.0
+    g_seed_window_steps: int = 10      # stun within this many steps of a seed counts as the seed's hit
+    g_seed_cost: float = 0.03          # per seed fired (no spamming)
+    g_lock_red_eye: float = 0.02       # per step locked on (or facing the eye) while the eye is red
+    g_lock_red_eye_cap: float = 2.0
+    g_sling_red_eye: float = 0.03      # per step with the slingshot out, locked on the red eye
+    g_sling_red_eye_cap: float = 2.0
+    g_sword_range: float = 90.0
+    g_sword_ready: float = 0.02        # per step sword out within sword range while she is stunned
+    g_sword_ready_cap: float = 1.0
+    g_larva_damage: float = 0.5        # larvae pay, but capped: never worth farming over the boss
+    g_larva_damage_cap: float = 3.0
+    g_larva_kill: float = 2.0
+    g_larva_kill_cap: float = 8.0
+    g_link_heal: float = 0.1           # per HP unit healed (recovery hearts)
+    g_death_penalty: float = 30.0
+    g_block_range: float = 250.0
 
 
 @dataclass
@@ -345,6 +392,13 @@ class CombatTracker:
         ep["r_outcome"] += acc["out"]
         ep["r_shaping"] += acc["shape"]
         return float(r), terminated, ev
+
+
+def make_tracker(cfg: "CombatConfig"):
+    if cfg.profile == "gohma":
+        from zelda_rl.gohma import GohmaTracker
+        return GohmaTracker(cfg)
+    return CombatTracker(cfg)
 
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),

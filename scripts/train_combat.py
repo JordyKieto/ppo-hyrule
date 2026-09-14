@@ -24,11 +24,15 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.combat import COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
-from zelda_rl.env import N_COMBAT_ACTIONS, DolphinGoalEnv, EnvConfig, EnvError, action_name  # noqa: E402
+from zelda_rl.env import N_COMBAT_ACTIONS, N_COMBAT_ACTIONS_V5, DolphinGoalEnv, EnvConfig, EnvError, action_name  # noqa: E402
 from zelda_rl.obs import (ACTOR_DIM_V2, ACTOR_FIELDS_V2, GLOBAL_DIM_V2, GLOBAL_FIELDS_V2, N_ACTORS,  # noqa: E402
                           read_state_file_v2)
 from zelda_rl.ppo import build_model, gae, ppo_update, ppo_update_recurrent  # noqa: E402
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
+
+# Gohma profile overrides (boss room: large arena, no exits once the door shuts; the fight takes 2-3 minutes)
+GOHMA_DEFAULTS = {"target_ids": (0x0028,), "room_radius": 3000.0, "fall_drop": 400.0, "timeout_penalty_per_target": 10.0,
+                  "success_bonus": 20.0, "success_time_bonus": 30.0, "lockon_cap": 8}
 
 DEFAULT_SLOTS_DIR = (os.path.expanduser("~/Library/Application Support/Dolphin/StateSaves")
                      if sys.platform == "darwin" else "assets/states")
@@ -39,7 +43,11 @@ def parse_args():
     ap.add_argument("--run-name", default=time.strftime("combat-%Y%m%d-%H%M%S"))
     ap.add_argument("--out-dir", default="runs")
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--init-from", default=None, help="initialise weights from a checkpoint (same obs/action spec)")
+    ap.add_argument("--init-from", default=None, help="initialise weights from a checkpoint; a smaller obs/action spec "
+                    "(e.g. the obs-v4 Deku Baba policy) is widened function-preservingly (zelda_rl/transfer.py)")
+    ap.add_argument("--profile", default="deku_baba", choices=["deku_baba", "gohma"], help="combat task profile")
+    ap.add_argument("--obs-version", type=int, default=None, help="4 (Deku Baba v4) | 5 (+boss/larva/item block, "
+                    "+slingshot actions); default 4 for deku_baba, 5 for gohma")
     ap.add_argument("--num-envs", type=int, default=3)
     ap.add_argument("--total-updates", type=int, default=200)
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
@@ -92,20 +100,26 @@ def main():
     start_slots = [int(s) for s in args.start_slots.split(",")]
     slot_files = {k: Path(args.slots_dir) / f"NACE01.s{k:02d}" for k in start_slots}
     slot_states = {k: read_state_file_v2(f) for k, f in slot_files.items()}
-    ccfg = CombatConfig(max_seconds=args.episode_seconds, **(json.loads(args.combat_json) if args.combat_json else {}))
+    obs_version = args.obs_version or (5 if args.profile == "gohma" else 4)
+    profile_defaults = GOHMA_DEFAULTS if args.profile == "gohma" else {}
+    ccfg = CombatConfig(profile=args.profile, max_seconds=args.episode_seconds,
+                        **{**profile_defaults, **(json.loads(args.combat_json) if args.combat_json else {})})
     env_cfg = EnvConfig(episode_vi=int(args.episode_seconds * 60), vi_per_step=args.vi_per_step,
-                        video_backend=args.video_backend, unlimited_speed=not args.realtime, obs_version=4,
+                        video_backend=args.video_backend, unlimited_speed=not args.realtime, obs_version=obs_version,
                         task="combat", combat=ccfg)
     T, N = env_cfg.max_steps, args.num_envs
-    global_dim = GLOBAL_DIM_V2 + COMBAT_DIM
+    from zelda_rl.gohma import BOSS_DIM, BOSS_FIELDS
+    global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + (BOSS_DIM if obs_version >= 5 else 0)
     obs_dim = global_dim + N_ACTORS * ACTOR_DIM_V2
-    config = {**vars(args), "task": "combat", "obs_version": 4, "obs_dim": obs_dim, "global_dim": global_dim,
-              "n_actors": N_ACTORS, "actor_dim": ACTOR_DIM_V2, "n_actions": N_COMBAT_ACTIONS, "action_frame": "world",
-              "obs_fields": GLOBAL_FIELDS_V2 + COMBAT_FIELDS, "actor_fields": ACTOR_FIELDS_V2,
+    n_actions = N_COMBAT_ACTIONS_V5 if obs_version >= 5 else N_COMBAT_ACTIONS
+    config = {**vars(args), "task": "combat", "obs_version": obs_version, "obs_dim": obs_dim, "global_dim": global_dim,
+              "n_actors": N_ACTORS, "actor_dim": ACTOR_DIM_V2, "n_actions": n_actions, "action_frame": "world",
+              "obs_fields": GLOBAL_FIELDS_V2 + COMBAT_FIELDS + (BOSS_FIELDS if obs_version >= 5 else []),
+              "actor_fields": ACTOR_FIELDS_V2,
               "combat_cfg": asdict(ccfg), "steps_per_rollout": T, "recurrent": args.recurrent, "gru": args.gru, "batch_size": T * N, "goal_slot": start_slots[0],
               "goal_cfg": {}}
     log = RunLogger(run_dir, config, use_wandb=args.wandb, project=args.wandb_project, entity=args.wandb_entity,
-                    run_name=args.run_name, resume=args.resume, tags=["combat", "deku-tree"],
+                    run_name=args.run_name, resume=args.resume, tags=["combat", "deku-tree", args.profile],
                     group=args.wandb_group or args.fleet_experiment)
     (run_dir / "config.json").write_text(json.dumps(config, indent=2, default=str))
     link = None
@@ -113,7 +127,7 @@ def main():
         from zelda_rl.fleet_link import FleetLink
         link = FleetLink(args.fleet_experiment, args.fleet_rank, args.fleet_world_size, args.fleet_launch_id)
     LOGGER.info("combat run %s | obs %d (global %d) | actions %d | %d envs x %d steps (%.0fs @ %d Hz) | slots %s",
-                run_dir, obs_dim, global_dim, N_COMBAT_ACTIONS, N, T, args.episode_seconds, 60 // args.vi_per_step,
+                run_dir, obs_dim, global_dim, n_actions, N, T, args.episode_seconds, 60 // args.vi_per_step,
                 start_slots)
 
     def make_env(i: int) -> DolphinGoalEnv:
@@ -141,8 +155,18 @@ def main():
         start_update, global_step, episode_count = ck["update"] + 1, ck["global_step"], ck["episode_count"]
     elif args.init_from:
         src = args.init_from.format(rank=args.fleet_rank)          # e.g. runs/deku-combat-gru-v2-r{rank}/checkpoints/update_00030.pt
-        model.load_state_dict(torch.load(src, weights_only=False)["model"])
-        LOGGER.info("initialised weights from %s", src)
+        ck = torch.load(src, weights_only=False)
+        src_cfg = ck["config"]
+        if (src_cfg["global_dim"], src_cfg["n_actions"]) == (global_dim, n_actions):
+            model.load_state_dict(ck["model"])
+            LOGGER.info("initialised weights from %s", src)
+        else:
+            from zelda_rl.transfer import transfer_state_dict
+            src_model = build_model(src_cfg)
+            src_model.load_state_dict(ck["model"])
+            model.load_state_dict(transfer_state_dict(src_model, src_cfg, config))
+            LOGGER.info("transferred weights from %s (obs global %d -> %d, actions %d -> %d)", src,
+                        src_cfg["global_dim"], global_dim, src_cfg["n_actions"], n_actions)
 
     rec = bool(getattr(model, "recurrent", False))
     h_buf = np.zeros((T, N, args.gru), np.float32)
@@ -268,9 +292,7 @@ def main():
                 **{f"combat/end_{k}": frac(lambda e, k=k: e["end"] == k) for k in ("success", "death", "left_room", "timeout")},
                 # per reward component: mean contribution per episode (sums to episode/return)
                 **{f"reward/{k}": float(np.mean([e["r_parts"].get(k, 0.0) for e in eps]))
-                   for k in ("enemy_damage", "kill", "kill_speed_bonus", "success", "success_time_bonus", "link_damage",
-                             "link_heal", "death", "left_room", "timeout", "lockon", "lock_hold", "approach",
-                             "shield_facing", "block", "dodge", "stun_hit", "time_penalty")},
+                   for k in sorted({k for e in eps for k in e["r_parts"]} | {"success", "death", "link_damage", "time_penalty"})},
                 "combat/time_to_clear_s": float(np.mean([e["time_to_clear_s"] * args.vi_per_step / 60 for e in eps
                                                          if e["time_to_clear_s"]])) if any(e["time_to_clear_s"] for e in eps) else float("nan"),
                 "episode/count": episode_count, "episode/return": m("return"), "episode/r_outcome": m("r_outcome"),
@@ -279,8 +301,25 @@ def main():
                 "perf/env_steps_per_sec": T * N / rollout_s, "perf/rollout_seconds": rollout_s, "perf/update_seconds": update_s,
                 **{f"fleet/{k}": v for k, v in sync.items() if k != "weight_hash"}, "update": update,
             }
+            if args.profile == "gohma" and eps:
+                n_seeds = float(np.sum([e["seeds_fired"] for e in eps]))
+                metrics.update({
+                    "gohma/defeat_rate": frac(lambda e: e["boss_defeated"]), "gohma/boss_damage": m("boss_damage"),
+                    "gohma/boss_hp_end": m("boss_hp_end"), "gohma/seed_stuns": m("seed_stuns"), "gohma/stuns": m("stuns"),
+                    "gohma/seeds_fired": m("seeds_fired"), "gohma/red_eye_seeds": m("red_eye_seeds"),
+                    "gohma/seed_hit_rate": float(np.sum([e["seed_stuns"] for e in eps])) / max(1.0, n_seeds),
+                    "gohma/stun_hits": m("stun_hits"), "gohma/larva_kills": m("larva_kills"), "gohma/larvae_seen": m("larvae_seen"),
+                    "gohma/boss_attacks": m("boss_attacks"), "gohma/boss_blocks": m("boss_blocks"),
+                    "gohma/vulnerable_steps": m("vulnerable_steps"), "gohma/vulnerable_lock_steps": m("vulnerable_lock_steps"),
+                    "gohma/sling_aim_steps": m("sling_aim_steps"),
+                    "gohma/time_to_defeat_s": float(np.mean([e["time_to_defeat_s"] * args.vi_per_step / 60 for e in eps
+                                                            if e["time_to_defeat_s"]])) if any(e["time_to_defeat_s"] for e in eps) else float("nan"),
+                })
             for k in usable:
                 se = [e for e in eps if e["slot"] == k]
+                if se and args.profile == "gohma":
+                    metrics[f"by_slot/s{k}/boss_damage"] = m("boss_damage", se)
+                    metrics[f"by_slot/s{k}/seed_stuns"] = m("seed_stuns", se)
                 if se:
                     metrics[f"by_slot/s{k}/success_rate"] = frac(lambda e: e["success"], se)
                     metrics[f"by_slot/s{k}/kill_frac"] = float(np.mean([kill(e) for e in se]))
@@ -291,7 +330,7 @@ def main():
             log.update(metrics, global_step)
             if link is not None:
                 hb = {"update": update, "global_step": global_step, "run": args.run_name, "weight_hash": sync.get("weight_hash"),
-                      **{k.split("/")[-1]: v for k, v in metrics.items() if k.startswith("combat/") or k == "episode/return"},
+                      **{k.split("/")[-1]: v for k, v in metrics.items() if k.startswith(("combat/", "gohma/")) or k == "episode/return"},
                       "env_steps_per_sec": metrics["perf/env_steps_per_sec"]}
                 link.heartbeat(hb)
                 if update % args.publish_every == 0:

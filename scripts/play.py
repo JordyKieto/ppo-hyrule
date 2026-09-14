@@ -200,7 +200,15 @@ def play_combat(args, path, model, cfg, ck, slots):
                         t_hud = now
                         live = tr.live_targets(c)
                         near = min((round(float(np.linalg.norm(np.subtract(e.pos, c.pos)))) for e in live), default=None)
-                        print(f"  t={t * env.cfg.vi_per_step / 60:5.1f}s {aname(int(a[0]), 'combat'):12s} V={float(v[0]):6.2f} "
+                        if env.combat_cfg.profile == "gohma":
+                            from zelda_rl.gohma import find_gohma, gohma_state, larvae
+                            g = find_gohma(c)
+                            print(f"  t={t * env.cfg.vi_per_step / 60:5.1f}s {aname(int(a[0]), 'combat'):12s} V={float(v[0]):6.2f} "
+                                  f"hp {c.hp / 16:.1f} | gohma {g.hp if g else '-'}hp {gohma_state(g) if g else '-'} d {near} | "
+                                  f"larvae {sum(1 for e in larvae(c) if e.hp > 0)} | locked {bool(g) and c.targeted == g.ptr} "
+                                  f"held {c.held_item} seeds {c.seeds} | R={ep['return']:6.2f}" + (f" | EVENTS {ev}" if ev else ""))
+                        else:
+                          print(f"  t={t * env.cfg.vi_per_step / 60:5.1f}s {aname(int(a[0]), 'combat'):12s} V={float(v[0]):6.2f} "
                               f"hp {c.hp / 16:.1f} | babas {len(live)}/{tr.targets_start} nearest {near} | "
                               f"locked {c.targeted in {e.ptr for e in live}} shield {bool(c.sf1 >> 22 & 1)} | R={ep['return']:6.2f}"
                               + (f" | EVENTS {ev}" if ev else ""))

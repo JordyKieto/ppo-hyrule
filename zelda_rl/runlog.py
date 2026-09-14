@@ -44,7 +44,7 @@ class RunLogger:
                                   resume="allow" if resume else None, config=config, tags=tags, group=group,
                                   dir=str(run_dir))
             wandb.define_metric("global_step")
-            for prefix in ("episode", "goal", "combat", "reward", "by_slot", "ppo", "perf", "fleet", "charts"):
+            for prefix in ("episode", "goal", "combat", "gohma", "reward", "by_slot", "ppo", "perf", "fleet", "charts"):
                 wandb.define_metric(f"{prefix}/*", step_metric="global_step")
             LOGGER.info("wandb run: %s", self.run.url)
 

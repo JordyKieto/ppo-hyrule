@@ -24,12 +24,20 @@ COMBAT_BUTTONS = [(), ("A",), ("B",), ("L",), ("R",), ("L", "B"), ("L", "A")]
 COMBAT_BUTTON_NAMES = ["", "+A", "+B", "+Z", "+Shield", "+Z+B", "+Z+A"]
 COMBAT_ACTIONS = [(d, b) for d in DIRECTIONS for b in range(len(COMBAT_BUTTONS))]
 N_COMBAT_ACTIONS = len(COMBAT_ACTIONS)
+# v5 (boss fights): + C-down item (slingshot on the user's save) and Z-target + C-down. Verified live
+# (scripts/probe_boss_controls.py): a C-down tap draws the slingshot; alternating press/release fires (first seed ~0.9 s
+# after drawing, then every 0.4 s); holding C-down never fires; B puts it away. Appended AFTER the 63 v4 actions so
+# index a < 63 means exactly the same thing in v4 and v5 (checkpoint transfer copies those policy rows).
+COMBAT_BUTTONS_V5 = COMBAT_BUTTONS + [("CD",), ("L", "CD")]
+COMBAT_BUTTON_NAMES_V5 = COMBAT_BUTTON_NAMES + ["+Sling", "+Z+Sling"]
+COMBAT_ACTIONS_V5 = COMBAT_ACTIONS + [(d, b) for d in DIRECTIONS for b in (7, 8)]
+N_COMBAT_ACTIONS_V5 = len(COMBAT_ACTIONS_V5)
 
 
 def action_name(a: int, task: str = "goal") -> str:
     if task == "combat":
-        d, b = divmod(a, len(COMBAT_BUTTONS))
-        return DIR_NAMES[d] + COMBAT_BUTTON_NAMES[b]
+        d, b = COMBAT_ACTIONS_V5[a]
+        return DIR_NAMES[DIRECTIONS.index(d)] + COMBAT_BUTTON_NAMES_V5[b]
     d, b = divmod(a, len(BUTTONS))
     return DIR_NAMES[d] + ("+" + BUTTONS[b] if b else "")
 DIR_NAMES = ["-", "E", "NE", "N", "NW", "W", "SW", "S", "SE"]
@@ -78,9 +86,9 @@ class DolphinGoalEnv:
         self._read = read_state_v2 if cfg.obs_version >= 2 else read_state
         self.start_flags = None
         if cfg.task == "combat":
-            from zelda_rl.combat import CombatConfig, CombatTracker
+            from zelda_rl.combat import CombatConfig, make_tracker
             self.combat_cfg = cfg.combat or CombatConfig()
-            self.tracker = CombatTracker(self.combat_cfg)
+            self.tracker = make_tracker(self.combat_cfg)
         self.ram = attach_n64_ram(self.inst.proc.pid)
         self._ram_refresh = getattr(self.ram, "refresh", None)
         # Load immediately while booting: first loads sent later (during the title/attract sequence) often don't fire.
@@ -158,10 +166,11 @@ class DolphinGoalEnv:
     # ---- stepping --------------------------------------------------------------------------
     def send_action(self, a: int) -> None:
         if self.cfg.task == "combat":
-            d, b = COMBAT_ACTIONS[a]
-            held = COMBAT_BUTTONS[b]
+            d, b = COMBAT_ACTIONS_V5[a]
+            held = COMBAT_BUTTONS_V5[b]
             x, y = (0.5, 0.5) if d is None else self._stick(d)
-            self.inst.pad.send(f"SET MAIN {x:.3f} {y:.3f}", *[f"{'PRESS' if n in held else 'RELEASE'} {n}" for n in ("A", "B", "L", "R")])
+            self.inst.pad.send(f"SET MAIN {x:.3f} {y:.3f}", f"SET C 0.5 {0.0 if 'CD' in held else 0.5}",
+                               *[f"{'PRESS' if n in held else 'RELEASE'} {n}" for n in ("A", "B", "L", "R")])
             self.prev_action = (d, b)
             return
         d, b = ACTIONS[a]
@@ -226,7 +235,11 @@ class DolphinGoalEnv:
             from zelda_rl.obs import GLOBAL_DIM_V2
             v2 = featurize_v2(self.state, self.start_state, self.prev_pos, tl, self.prev_action[0], self.prev_action[1],
                               self.start_flags)
-            return np.concatenate([v2[:GLOBAL_DIM_V2], combat_features(self.cstate, self.tracker, tl), v2[GLOBAL_DIM_V2:]])
+            parts = [v2[:GLOBAL_DIM_V2], combat_features(self.cstate, self.tracker, tl)]
+            if self.cfg.obs_version >= 5:                      # boss / larva / item block (zeros outside boss rooms)
+                from zelda_rl.gohma import boss_features
+                parts.append(boss_features(self.cstate, self.tracker))
+            return np.concatenate(parts + [v2[GLOBAL_DIM_V2:]])
         if self.cfg.obs_version >= 2:
             return featurize_v2(self.state, self.goal, self.prev_pos, tl, self.prev_action[0], self.prev_action[1],
                                 self.start_flags)

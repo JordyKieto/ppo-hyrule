@@ -49,6 +49,9 @@ Then build a **timeline table** per actor: one row per contiguous stretch of eac
 - the value only at HP 0 → `dying`
 
 **Pitfalls:**
+- **Relocatable actor code.** An actor's code is loaded wherever there's room, so action-function pointers can change between scene loads. The Gohma larva functions moved by exactly 0x280 after a reload. Decode `fn − update function (actor +0x130)`, which is stable, not the absolute pointer. The Deku Baba table predates this and still uses absolute pointers; they matched in all 10 of its slots.
+- **Shared actor ids.** Queen Gohma, her larvae and her debris are all id `0x0028`; they differ only by category and params.
+- **Label states by what the action enables, not by name guesses.** Gohma's red-eye states were identified as "the only states in which a seed ever caused a stun" (`docs/GOHMA_TASK.md`).
 - A single long segment overlaps many events. Name states by **short, repeated** segments.
 - Some behaviours have two routine values (e.g. two `idle`, two `dying`). Merge them into one semantic state.
 - A flag that flickers for 1–2 frames is invisible at 10 Hz. Derive the event from a slower signal instead (blocks came from `lunge` → `pull_back` cycles plus "no HP lost").
