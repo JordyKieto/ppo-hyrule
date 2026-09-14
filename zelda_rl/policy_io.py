@@ -51,7 +51,7 @@ def load_policy(path: Path):
 
 
 def make_env(cfg: dict, instance_dir: Path, *, slots: list[int], slots_dir: str = DEFAULT_SLOTS_DIR,
-             video_backend: str = "Metal", unlimited_speed: bool = False, idx: int = 0):
+             video_backend: str = "Metal", unlimited_speed: bool = False, idx: int = 0, audio: bool = False):
     """Build a DolphinGoalEnv matching the checkpoint (obs version, goal slot, reward config, step timing)."""
     version = cfg.get("obs_version", 1)
     if cfg.get("task") == "combat":
@@ -62,7 +62,8 @@ def make_env(cfg: dict, instance_dir: Path, *, slots: list[int], slots_dir: str 
         ccfg = CombatConfig(**{k: (tuple(v) if k == "target_ids" else v) for k, v in cfg["combat_cfg"].items()})
         ecfg = EnvConfig(episode_vi=int(cfg["episode_seconds"] * 60), vi_per_step=cfg["vi_per_step"],
                          video_backend=video_backend, unlimited_speed=unlimited_speed, obs_version=cfg.get("obs_version", 3),
-                         task="combat", combat=ccfg, stall_timeout=300.0 if video_backend != "Null" else 10.0)
+                         task="combat", combat=ccfg, stall_timeout=300.0 if video_backend != "Null" else 10.0,
+                         audio=audio)
         return DolphinGoalEnv(idx, instance_dir, files, states, states[min(slots)], ecfg), states
     from zelda_rl.obs import read_state_file, read_state_file_v2
     reader = read_state_file_v2 if version >= 2 else read_state_file
@@ -74,6 +75,7 @@ def make_env(cfg: dict, instance_dir: Path, *, slots: list[int], slots_dir: str 
         states[goal_slot] = dataclasses.replace(states[goal_slot], rupees=cfg["goal_rupees"])
     gcfg = GoalConfig(**cfg["goal_cfg"])
     ecfg = EnvConfig(episode_vi=int(cfg["episode_seconds"] * 60), vi_per_step=cfg["vi_per_step"],
-                     video_backend=video_backend, unlimited_speed=unlimited_speed, obs_version=version, goal=gcfg)
+                     video_backend=video_backend, unlimited_speed=unlimited_speed, obs_version=version, goal=gcfg,
+                     audio=audio)
     env = DolphinGoalEnv(idx, instance_dir, files, states, states[goal_slot], ecfg)
     return env, states

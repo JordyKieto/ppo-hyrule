@@ -55,6 +55,7 @@ class EnvConfig:
     stall_timeout: float = 10.0       # seconds without VI progress before EnvError (visible-window play uses more)
     combat: "object" = None           # CombatConfig when task == "combat"
     unlimited_speed: bool = False
+    audio: bool = False                # game sound (visible play only)
     goal: GoalConfig = field(default_factory=GoalConfig)
 
     @property
@@ -68,7 +69,8 @@ class DolphinGoalEnv:
         self.idx, self.cfg, self.goal = idx, cfg, goal
         self.slot_states = slot_states
         shutil.rmtree(instance_dir, ignore_errors=True)
-        ud = build_user_dir(instance_dir.resolve(), dump_frames=False, unlimited_speed=cfg.unlimited_speed)
+        ud = build_user_dir(instance_dir.resolve(), dump_frames=False, unlimited_speed=cfg.unlimited_speed,
+                            audio=cfg.audio)
         for k, f in slot_files.items():
             shutil.copy(f, ud / "StateSaves" / f"NACE01.s{k:02d}")
         self.inst = DolphinInstance(ud, video_backend=cfg.video_backend)

@@ -39,6 +39,7 @@ def main():
     ap.add_argument("--deterministic", action="store_true", help="argmax actions instead of sampling")
     ap.add_argument("--watch", action="store_true", help="loop forever; reload when a newer checkpoint appears")
     ap.add_argument("--headless", action="store_true", help="no Dolphin window (Null backend)")
+    ap.add_argument("--mute", action="store_true", help="no game sound (sound is on for windowed play)")
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--hud-hz", type=float, default=2.0)
     ap.add_argument("--episode-seconds", type=float, default=None,
@@ -69,7 +70,8 @@ def main():
     out = Path("runs/play") / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     env, states = make_env(cfg, out / "instance", slots=slots, slots_dir=args.slots_dir,
-                           video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast)
+                           video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast,
+                           audio=not (args.headless or args.mute))
     goal = env.goal
     print(f"▶ {path}  (update {ck['update']}, {ck['global_step']:,} steps, obs v{cfg.get('obs_version', 1)})\n"
           f"  goal slot {cfg['goal_slot']}: pos ({goal.pos[0]:.0f}, {goal.pos[1]:.0f}, {goal.pos[2]:.0f}) rupees {goal.rupees}"
@@ -157,7 +159,8 @@ def play_combat(args, path, model, cfg, ck, slots):
     if args.episode_seconds:
         cfg["episode_seconds"] = args.episode_seconds
     env, _ = make_env(cfg, out / "instance", slots=slots, slots_dir=args.slots_dir,
-                      video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast)
+                      video_backend="Null" if args.headless else "Metal", unlimited_speed=args.fast,
+                      audio=not (args.headless or args.mute))
     rec = bool(getattr(model, "recurrent", False))
     if not args.headless and sys.platform == "darwin":        # a hidden Metal window stalls Dolphin: bring it to the front
         import subprocess
