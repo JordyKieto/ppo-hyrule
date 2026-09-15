@@ -247,7 +247,12 @@ class DolphinGoalEnv:
             if self.cfg.obs_version >= 5:                      # boss / larva / item block (zeros outside boss rooms)
                 from zelda_rl.gohma import boss_features
                 parts.append(boss_features(self.cstate, self.tracker))
-            return np.concatenate(parts + [v2[GLOBAL_DIM_V2:]])
+            actors = v2[GLOBAL_DIM_V2:]
+            if self.cfg.obs_version >= 6:                      # raw aim + egocentric geometry (zelda_rl/ego.py)
+                from zelda_rl.ego import aim_features, splice_actor_table
+                parts.append(aim_features(self.state, self.cstate, self.prev_pos))
+                actors = splice_actor_table(actors, self.state)
+            return np.concatenate(parts + [actors])
         if self.cfg.obs_version >= 2:
             return featurize_v2(self.state, self.goal, self.prev_pos, tl, self.prev_action[0], self.prev_action[1],
                                 self.start_flags)

@@ -153,6 +153,10 @@ class GameStateV2(GameState):
     equipment: int = 0
     flags: np.ndarray | None = None    # uint8 blob: FLAG_BLOCKS + current scene's saved flags
     actors: list[ActorInfo] = field(default_factory=list)   # sorted by distance, Link and Navi excluded
+    cam_eye: tuple[float, float, float] = (0.0, 0.0, 0.0)   # main camera eye (first-person: Link's head)
+    cam_at: tuple[float, float, float] = (0.0, 0.0, 1.0)    # main camera look-at (first-person: along the aim)
+    aim_pitch: int = 0                 # Player focus.rot.x (s16, verified live: -14000 = aiming ~77 deg up in first person)
+    aim_yaw: int = 0                   # Player focus.rot.y (s16, follows the first-person aim)
 
 
 def read_state_v2(ram) -> GameStateV2:
@@ -184,7 +188,9 @@ def read_state_v2(ram) -> GameStateV2:
             guard += 1
     actors.sort(key=lambda x: x.dist)
     return GameStateV2(**vars(base), cam_yaw=cam_yaw, sf1=sf1, equipment=_s16(ram, sc + 0x9C) & 0xFFFF,
-                       flags=np.frombuffer(b"".join(blob), np.uint8), actors=actors[:N_ACTORS])
+                       flags=np.frombuffer(b"".join(blob), np.uint8), actors=actors[:N_ACTORS],
+                       cam_eye=eye, cam_at=at, aim_pitch=_s16(ram, player + 0x44) if ok else 0,
+                       aim_yaw=_s16(ram, player + 0x46) if ok else 0)
 
 
 def read_state_file_v2(path: str | Path) -> GameStateV2:

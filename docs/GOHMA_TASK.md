@@ -156,6 +156,22 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 
 The Gohma and larva blocks are all zeros in rooms without them, so one v5 policy can train on Deku Baba and Gohma slots together.
 
+## Observation v6 (675 dims): raw aim + egocentric geometry
+
+v5 described the world only in world-frame offsets plus Link's body yaw. But Link acts camera-relative: the stick is rotated by the camera, and in first person it rotates the view. A live probe confirmed the aim is in RAM:
+- the camera eye sits at Link's head (22–31 units up)
+- the eye→at vector is the aim ray (pitch followed the stick from −46° to +77°)
+- Player `focus.rot.x/.y` (+0x44/+0x46) hold the raw aim pitch/yaw (−14000 ≈ 77° up, the limit)
+
+v6 adds no hand-crafted aim-error features. It gives the policy the same frames it acts in, for walking and aiming alike:
+
+| Block | Dims | Contents |
+|---|---|---|
+| **AIM / EGO** (global) | 27 | camera forward vector; raw aim pitch and yaw (sin/cos); camera eye relative to Link; Link facing relative to the camera (sin/cos); Link displacement per step in the camera frame; Gohma's eye in the **camera frame** and in **Link's body frame** (right, up, forward); nearest larva in both frames |
+| **Actor table** | 16 × 30 | v2 fields + every actor's position in the **camera frame** and in **Link's body frame**, inserted before `present` |
+
+Code: `zelda_rl/ego.py`. `zelda_rl/transfer.py` can also widen the actor encoder (zero columns before `present`); a v8 → v6 widening was checked exact (logit and value difference 0.0 on 4 savestates). **`gohma-v9` trains v6 from scratch.**
+
 ## Warm start from the Deku Baba policy
 
 `--init-from checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt` (global update 150) is widened function-preservingly:
@@ -192,5 +208,6 @@ python -m fleet launch --experiment gohma --script train_combat.py --wandb-proje
 | `gohma-v4`, `v5` | new actions start at 10% (`--transfer-action-margin 0.3`); v5 adds favorable red-eye savestates (slots 4–6) and copies slot 1 into slot 10 | seeds 3–5/episode, first seed stuns. Over v5 updates 1–9 (2,937 episodes): seed stuns only in slots 3–7 (2–3% of episodes); slots 4 and 5 die 98% within ~50 s; **entrance slots farm `sling_ready` (~150 steps, 10 seeds) without starting the fight** |
 | `gohma-v6` | `sling_ready` / `elevated_seed` only pre-red or red; `dropped_red_eye_shot` penalty; curriculum: half of all episodes start in slots 4–6 (`--slot-weights 4=2.33,5=2.33,6=2.33`); init from v5 update 10 | 6 updates: entrance farming stopped, nut stuns up (3.4/episode in slot 3), but red-eye seeds still ~0.2/episode in slots 4–5, ~2 dropped shots per episode, **slot 6 waits cocked ~1,400 steps and never fires** |
 | `gohma-v7` | red-eye seeds +4 and never penalised as misses; `sling_ready` once per window; `unfired_red_eye` −1.5; init from v6 update 10 | ~26 updates (9,124 episodes): return −18 → −14.5, deaths 52%; **learned Deku Nut stuns (up to 5.9/episode in slot 3), not the slingshot**: red-eye seeds flat ~0.2/episode, 2–3 unfired red-eye windows and ~2.7 dropped shots per episode, seed stuns falling; 3 defeats. Locally (update 20, slot 5): missed the opening red eye, 4 nut stuns, no sword hits, died |
-| `gohma-v8` | same config as v7, **trained from scratch** (no Deku Baba transfer) | (running) |
+| `gohma-v8` | same config as v7, **trained from scratch** (no Deku Baba transfer) | ~126 updates: return −22 → **−5.6**, Gohma damage 0.61/episode, nut stuns 2.8, seeds 7/episode but seed stuns flat at 0.04 (free aim without aim information), deaths ~54%, 0 defeats |
+| `gohma-v9` | **observation v6** (raw aim + camera/body-frame geometry), from scratch, same reward and curriculum | (running) |
 
