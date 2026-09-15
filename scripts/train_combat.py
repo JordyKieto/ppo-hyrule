@@ -144,6 +144,9 @@ def main():
     for k in start_slots:
         envs[0].load_slot(k)
         chk = envs[0].input_check(wait_vi=60)
+        if not chk["game_sees_stick"]:        # some boss states (red eye, stunned) ignore input for ~1 s after loading
+            envs[0].load_slot(k)
+            chk = envs[0].input_check(wait_vi=240)
         (usable.append(k) if chk["game_sees_stick"] else LOGGER.warning("slot %d ignores input -> excluded (%s)", k, chk))
     LOGGER.info("usable start slots: %s", usable)
 
