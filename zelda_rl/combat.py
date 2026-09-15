@@ -183,10 +183,11 @@ class CombatConfig:
     g_boss_hp_progress: float = 2.0    # boss_damage x (1 + this * fraction of her HP gone after the hit): last hits pay 3x
     g_seed_stun: float = 15.0          # a red-eye seed that actually reaches the eye: THE key skill (long sword window)
     g_seed_stun_cap: float = 60.0
-    g_red_eye_seed: float = 1.5        # every seed fired while the eye is red (hit or not): shoot at the right time
-    g_red_eye_seed_cap: float = 9.0
-    g_sling_ready: float = 0.08        # per step holding the slingshot cocked, Z-targeting or free-aiming at Gohma while
-    g_sling_ready_cap: float = 6.0     #   her eye is about to turn red or is red (not while she just waits / crawls)
+    g_red_eye_seed: float = 4.0        # every seed fired while the eye is red (hit or not): firing clearly beats waiting
+    g_red_eye_seed_cap: float = 12.0
+    g_unfired_red_eye: float = 1.5     # penalty: a red-eye window closes with the slingshot cocked but no seed fired
+    g_sling_ready: float = 1.0         # ONCE per red-eye window (pre-red + red span): slingshot cocked and aimed at her
+    g_sling_ready_cap: float = 6.0     #   (not per step: waiting can't be milked)
     g_drop_red_eye_shot: float = 1.0   # penalty: slingshot put away (no seed fired) while her eye is red
     g_elevated_seed: float = 0.5       # per seed fired at her (aimed / locked) right before or during the red eye
     g_elevated_seed_cap: float = 5.0

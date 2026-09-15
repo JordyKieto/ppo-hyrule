@@ -121,9 +121,10 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 | `timeout` | −10 if Gohma is alive at the cap | outcome |
 | `lockon`, `lock_hold` | +0.3 per lock on Gohma (cap 8), +0.005/step (cap 1) | shaping |
 | `lock_on_red_eye` | +0.05/step locked on (or facing the eye) while the eye is red (cap 5) | shaping |
-| **`sling_ready`** | +0.08/step holding the slingshot **cocked**, Z-targeting or free-aiming at her, **only right before or during the red eye** (`ceiling_spawn`, `floor_prepare`, `floor_eye_opening`, red-eye states) (cap 6). Paying it during `ceiling_wait` / `ceiling_move` let v5 farm it from the entrance slots | shaping |
+| **`sling_ready`** | **+1.0 once per red-eye window** (contiguous `ceiling_spawn` / `floor_prepare` / `floor_eye_opening` / red-eye span) when the slingshot is **cocked** and Z-targeted or free-aimed at her (cap 6). v5 farmed a per-step version from the entrance slots; v6 farmed it by waiting cocked in slot 6 | shaping |
 | **`slingshot_on_red_eye`** | **+0.3/step** with the slingshot out and **aimed at the red eye (Z-lock or free aim), wherever she is** (cap 8) | shaping |
-| `red_eye_seed` | +1.5 per seed fired while the eye is red, hit or miss (cap 9) | shaping |
+| **`red_eye_seed`** | **+4.0 per seed fired while the eye is red**, hit or miss (cap 12); **such seeds never pay `seed_miss`** | shaping |
+| **`unfired_red_eye`** | **−1.5** when a red-eye window closes with the slingshot cocked during the red eye but no seed fired | shaping |
 | `elevated_seed` | +0.5 per seed fired at her (aimed / locked) right before or during the red eye (cap 5) | shaping |
 | **`dropped_red_eye_shot`** | **−1.0** when the slingshot is put away without firing while her eye is red (targets the Deku Baba habit of switching to the sword) | shaping |
 | **`seed_stun`** | **+15** when she is knocked down ≤ 1 s after a seed fired in a red-eye state (cap 60): **the key skill** | shaping |
@@ -189,5 +190,6 @@ python -m fleet launch --experiment gohma --script train_combat.py --wandb-proje
 | `gohma-v1` | first launch (held C-buttons) | 0.3 seeds/episode: held C never fires |
 | `gohma-v2`, `v3` | C taps inside the step; stronger slingshot reward; miss penalties; grass and pickups | still ~0.4 seeds: new actions started at only 2–3% probability |
 | `gohma-v4`, `v5` | new actions start at 10% (`--transfer-action-margin 0.3`); v5 adds favorable red-eye savestates (slots 4–6) and copies slot 1 into slot 10 | seeds 3–5/episode, first seed stuns. Over v5 updates 1–9 (2,937 episodes): seed stuns only in slots 3–7 (2–3% of episodes); slots 4 and 5 die 98% within ~50 s; **entrance slots farm `sling_ready` (~150 steps, 10 seeds) without starting the fight** |
-| `gohma-v6` | `sling_ready` / `elevated_seed` only pre-red or red; `dropped_red_eye_shot` penalty; curriculum: half of all episodes start in slots 4–6 (`--slot-weights 4=2.33,5=2.33,6=2.33`); init from v5 update 10 | (running) |
+| `gohma-v6` | `sling_ready` / `elevated_seed` only pre-red or red; `dropped_red_eye_shot` penalty; curriculum: half of all episodes start in slots 4–6 (`--slot-weights 4=2.33,5=2.33,6=2.33`); init from v5 update 10 | 6 updates: entrance farming stopped, nut stuns up (3.4/episode in slot 3), but red-eye seeds still ~0.2/episode in slots 4–5, ~2 dropped shots per episode, **slot 6 waits cocked ~1,400 steps and never fires** |
+| `gohma-v7` | red-eye seeds +4 and never penalised as misses; `sling_ready` once per window; `unfired_red_eye` −1.5; init from v6's latest weights | (running) |
 

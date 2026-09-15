@@ -139,9 +139,10 @@ class GohmaTracker(CombatTracker):
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
-                       nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, dropped_red_eye_shots=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
+                       nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, dropped_red_eye_shots=0, unfired_red_eye_windows=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
         self._r = {}                              # running totals of capped shaping terms
         self.pending_shots: list[dict] = []
+        self.window = None
         self._larva_seen = set()
         self.attack_cycle = None
 
@@ -263,6 +264,19 @@ class GohmaTracker(CombatTracker):
             self.g_prev_state = gs
             ep["boss_hp_end"] = g.hp
 
+        # ---- red-eye windows: a contiguous pre-red + red span; closing it cocked but unfired is penalised
+        in_window = g is not None and gs in (GOHMA_PRE_RED | GOHMA_VULNERABLE)
+        if in_window and self.window is None:
+            self.window = {"fired": False, "cocked_red": False, "ready_paid": False}
+        if self.window is not None and g is not None and gs in GOHMA_VULNERABLE and cur.held_item == HELD_SLINGSHOT:
+            self.window["cocked_red"] = True
+        if self.window is not None and not in_window:
+            win, self.window = self.window, None
+            if win["cocked_red"] and not win["fired"] and not cur.dead and cur.seeds == prev.seeds:
+                ep["unfired_red_eye_windows"] += 1
+                ev["unfired_red_eye"] = True
+                pay("unfired_red_eye", -c.g_unfired_red_eye, "shape")
+
         # ---- seeds
         if cur.seeds < prev.seeds and not prev.dead:
             n = prev.seeds - cur.seeds
@@ -277,7 +291,10 @@ class GohmaTracker(CombatTracker):
                 ep["red_eye_seeds"] += 1
                 self._capped(pay, "red_eye_seed", c.g_red_eye_seed * n, c.g_red_eye_seed_cap)
             ev["seed"] = n
-            self.pending_shots += [{"kind": "seed", "t": self.t, "left": cur.seeds}] * n
+            red = g is not None and gs in GOHMA_VULNERABLE
+            self.pending_shots += [{"kind": "seed", "t": self.t, "left": cur.seeds, "red_eye": red}] * n
+            if self.window is not None:
+                self.window["fired"] = True
 
         if cur.nuts < prev.nuts and not prev.dead:
             n = prev.nuts - cur.nuts
@@ -290,7 +307,8 @@ class GohmaTracker(CombatTracker):
             self.pending_shots.remove(shot)
             if shot["kind"] == "seed":
                 ep["seed_misses"] += 1
-                pay("seed_miss", -c.g_seed_miss * (c.g_seed_scarcity + 5) / (shot["left"] + 5), "shape")
+                if not shot.get("red_eye"):                          # shooting at the red eye never costs anything
+                    pay("seed_miss", -c.g_seed_miss * (c.g_seed_scarcity + 5) / (shot["left"] + 5), "shape")
             else:
                 ep["nut_misses"] += 1
                 pay("nut_miss", -c.g_nut_miss * (c.g_nut_scarcity + 4) / (shot["left"] + 4), "shape")
@@ -380,11 +398,12 @@ class GohmaTracker(CombatTracker):
                         ep["sling_aim_steps"] += 1
                         self._capped(pay, "slingshot_on_red_eye", c.g_sling_red_eye, c.g_sling_red_eye_cap)
             if sling and gs in (GOHMA_PRE_RED | GOHMA_VULNERABLE):   # cocked at her right before / during the red eye
-
                 aim_h, _ = link_aim(cur, g.focus)
                 if locked or aim_h > 0.85:
                     ep["sling_ready_steps"] += 1
-                    self._capped(pay, "sling_ready", c.g_sling_ready, c.g_sling_ready_cap)
+                    if self.window is not None and not self.window["ready_paid"]:      # once per red-eye window
+                        self.window["ready_paid"] = True
+                        self._capped(pay, "sling_ready", c.g_sling_ready, c.g_sling_ready_cap)
             if gs in GOHMA_STUNNED:                                # close the distance for the sword window
                 d0, d1 = math.dist(g_prev.pos, prev.pos) if g_prev else math.nan, math.dist(g.pos, cur.pos)
                 if math.isfinite(d0) and math.isfinite(d1) and d1 > c.g_sword_range:
