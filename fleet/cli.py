@@ -2,6 +2,7 @@
 
     python -m fleet create    --experiment E --count 1 [--vcpu 16] [--confirm]   # dry run without --confirm
     python -m fleet bootstrap --experiment E            # apt deps, code, NAND + savestates, Dolphin, venv, secrets
+    python -m fleet assets    --experiment E [--upload] [--states-only]   # S3 -> pods (presigned URLs, datacenter speed)
     python -m fleet verify    --experiment E [--instances 8]   # acceptance test on every pod (load, input, speed)
     python -m fleet launch    --experiment E [--num-envs N] [--train-args "..."]
     python -m fleet status    --experiment E            # last update line + dolphin count + load per pod
@@ -168,7 +169,11 @@ def cmd_bootstrap(a) -> None:
                  ">/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq rsync tmux python3 python3-venv python3-pip)")
         run(pod, f"mkdir -p {R_REPO}/assets/states {R_REPO}/assets/dolphin_user {R_REPO}/logs {R_DOLPHIN}")
         usable_seeds = [sd for sd in seeds if sd["ip"] != pod["ip"] and sd["rank"] != r]   # same public IP = NAT hairpin
-        if usable_seeds:
+        if a.assets_s3:
+            log(f"rank{r}: push code")
+            rsync(pod, [f"{REPO}/"], f"{R_REPO}/", extra=CODE_EXCLUDES)
+            s3_pull_assets(pod)
+        elif usable_seeds:
             sd = usable_seeds[r % len(usable_seeds)]
             t0 = time.time()
             log(f"rank{r}: seed rank{sd['rank']} -> code + NAND + savestates + Dolphin (datacenter link)")
@@ -239,6 +244,73 @@ def cmd_bootstrap(a) -> None:
         boot(pods[0])
         pods = pods[1:]
     for_pods(pods, boot)
+
+
+S3_BUCKET, S3_REGION, S3_PROFILE = "zelda-rl", "us-west-1", "race-wm"
+S3_STATES_PREFIX = "zelda/boss/gohma/states"          # current training start states (slots 1-10)
+S3_FLEET_PREFIX = "fleet"                             # Dolphin build + NAND
+
+
+def s3_asset_keys() -> dict[str, str]:
+    """S3 key -> pod destination path for every bootstrap asset."""
+    keys = {f"{S3_FLEET_PREFIX}/{DOLPHIN_TARBALL.name}": f"{R_DOLPHIN}/{DOLPHIN_TARBALL.name}",
+            f"{S3_FLEET_PREFIX}/nand-Wii.tgz": f"{R_REPO}/assets/dolphin_user/nand-Wii.tgz"}
+    keys.update({f"{S3_STATES_PREFIX}/NACE01.s{k:02d}": f"{R_REPO}/assets/states/NACE01.s{k:02d}" for k in START_SLOTS})
+    return keys
+
+
+def s3_upload_assets() -> None:
+    """Mac -> S3, once (multipart, parallel). Skips objects whose size already matches."""
+    import boto3
+    import tarfile
+    s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+    nand = REPO / "runs" / "fleet" / "s3stage" / "nand-Wii.tgz"
+    nand.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(nand, "w:gz") as tf:
+        tf.add(LOCAL_DOLPHIN_USER / "Wii", arcname="Wii")
+    local = {f"{S3_FLEET_PREFIX}/{DOLPHIN_TARBALL.name}": DOLPHIN_TARBALL, f"{S3_FLEET_PREFIX}/nand-Wii.tgz": nand}
+    local.update({f"{S3_STATES_PREFIX}/NACE01.s{k:02d}": LOCAL_DOLPHIN_USER / "StateSaves" / f"NACE01.s{k:02d}" for k in START_SLOTS})
+    for key, path in local.items():
+        try:
+            same = s3.head_object(Bucket=S3_BUCKET, Key=key)["ContentLength"] == path.stat().st_size and not key.startswith(S3_STATES_PREFIX)
+        except Exception:  # noqa: BLE001
+            same = False
+        if same:
+            log(f"s3: {key} up to date")
+            continue
+        t0 = time.time()
+        s3.upload_file(str(path), S3_BUCKET, key)
+        log(f"s3: uploaded {key} ({path.stat().st_size / 1e6:.0f} MB, {time.time() - t0:.0f}s)")
+
+
+def s3_pull_assets(pod: dict, only_states: bool = False) -> None:
+    """Pod <- S3 over the datacenter link, with presigned GET URLs (no AWS credentials on the pod)."""
+    import boto3
+    s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+    items = [(k, v) for k, v in s3_asset_keys().items() if not only_states or k.startswith(S3_STATES_PREFIX)]
+    lines = ["set -e", f"mkdir -p {R_REPO}/assets/states {R_REPO}/assets/dolphin_user {R_DOLPHIN}"]
+    for key, dest in items:
+        url = s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=6 * 3600)
+        lines.append(f"curl -sfL --retry 5 -o {shlex.quote(dest)}.part {shlex.quote(url)} && mv {shlex.quote(dest)}.part {shlex.quote(dest)} &")
+    lines += ["wait",
+              f"tar -C {R_REPO}/assets/dolphin_user -xzf {R_REPO}/assets/dolphin_user/nand-Wii.tgz" if not only_states else "true",
+              f"cd {R_DOLPHIN} && tar xzf {DOLPHIN_TARBALL.name} && rm {DOLPHIN_TARBALL.name}" if not only_states else "true",
+              f"ls {R_REPO}/assets/states | wc -l"]
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
+        f.write("\n".join(lines) + "\n")
+        tmp = f.name
+    rsync(pod, [tmp], "/workspace/s3_pull.sh")
+    Path(tmp).unlink(missing_ok=True)
+    t0 = time.time()
+    n = run(pod, "bash /workspace/s3_pull.sh && rm /workspace/s3_pull.sh", capture=True).strip().splitlines()[-1]
+    log(f"rank{pod['rank']}: pulled {'savestates' if only_states else 'Dolphin + NAND + savestates'} from S3 in {time.time() - t0:.0f}s ({n} states)")
+
+
+def cmd_assets(a) -> None:
+    st = load_state(a.experiment)
+    if a.upload:
+        s3_upload_assets()
+    for_pods(select(st, a.ranks), lambda pod: s3_pull_assets(pod, only_states=a.states_only), workers=24)
 
 
 def setup_seed_access(pods: list[dict], seeds: list[dict]) -> None:
@@ -493,7 +565,12 @@ def main() -> None:
     p.add_argument("--confirm", action="store_true")
     p = add("bootstrap", cmd_bootstrap)
     p.add_argument("--via-seeds", default=None, help="comma-separated seed ranks that rsync assets to the others")
+    p.add_argument("--assets-s3", action="store_true", help="pods download Dolphin + NAND + savestates from S3 "
+                   "(presigned URLs; run `fleet assets --upload` once first) instead of pushes from the Mac")
     p.add_argument("--workers", type=int, default=8)
+    p = add("assets", cmd_assets)
+    p.add_argument("--upload", action="store_true", help="first upload the Mac's savestates + NAND + Dolphin build to S3")
+    p.add_argument("--states-only", action="store_true", help="pods re-download only the savestates")
     p = add("verify", cmd_verify)
     p.add_argument("--instances", type=int, default=0)
     p = add("launch", cmd_launch)
