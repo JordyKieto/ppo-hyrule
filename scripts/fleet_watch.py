@@ -47,12 +47,24 @@ while True:
                 lag_warned[r] = lag
                 print(f"WARN rank{r} lags {lag} updates behind update {top_upd}", flush=True)
         hashes = {h.get("weight_hash", "")[:12] for h in ranks.values() if h.get("update") == top_upd}
-        if first or top_upd >= last_reported + 10:
+        if first or top_upd >= last_reported + int(sys.argv[3] if len(sys.argv) > 3 else 10):
             first = False; last_reported = top_upd
             def f(k):
                 vals = [h.get(k) for h in ranks.values() if isinstance(h.get(k), (int, float)) and math.isfinite(h.get(k))]
                 return sum(vals) / len(vals) if vals else float("nan")
             sps = sum(h.get("env_steps_per_sec", 0) or 0 for h in ranks.values())
+            if any("defeat_rate" in h for h in ranks.values()):
+                print(f"fleet update {top_upd} (slowest {upd}): defeat {f('defeat_rate'):.0%} bossDmg {f('boss_damage'):.2f} "
+                      f"hpEnd {f('boss_hp_end'):.1f} seedStuns {f('seed_stuns'):.2f} nutStuns {f('nut_stuns'):.2f} "
+                      f"seeds {f('seeds_fired'):.1f} larvaKills {f('larva_kills'):.2f} death {f('death_rate'):.0%} "
+                      f"hpLost {f('hp_lost_hearts'):.2f} return {f('return'):.1f} | fleet {sps:.0f} env steps/s | hash {hashes}", flush=True)
+                continue
+            if any("defeat_rate" in h for h in ranks.values()):
+                print(f"fleet update {top_upd} (slowest {upd}): defeat {f('defeat_rate'):.0%} bossDmg {f('boss_damage'):.2f} "
+                      f"hpEnd {f('boss_hp_end'):.1f} seedStuns {f('seed_stuns'):.2f} nutStuns {f('nut_stuns'):.2f} "
+                      f"seeds {f('seeds_fired'):.1f} larvaKills {f('larva_kills'):.2f} death {f('death_rate'):.0%} "
+                      f"hpLost {f('hp_lost_hearts'):.2f} return {f('return'):.1f} | fleet {sps:.0f} env steps/s | hash {hashes}", flush=True)
+                continue
             if any("kill_frac" in h for h in ranks.values()):
                 print(f"fleet update {top_upd} (slowest {upd}): succ {f('success_rate'):.0%} kills {f('kills'):.2f} kill% {f('kill_frac'):.0%} "
                       f"death {f('death_rate'):.0%} left {f('left_room_rate'):.0%} hpLost {f('hp_lost_hearts'):.2f} "

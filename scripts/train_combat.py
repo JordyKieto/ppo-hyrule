@@ -314,7 +314,7 @@ def main():
                     "gohma/stun_hits": m("stun_hits"), "gohma/larva_kills": m("larva_kills"), "gohma/larvae_seen": m("larvae_seen"),
                     "gohma/boss_attacks": m("boss_attacks"), "gohma/boss_blocks": m("boss_blocks"),
                     "gohma/vulnerable_steps": m("vulnerable_steps"), "gohma/vulnerable_lock_steps": m("vulnerable_lock_steps"),
-                    "gohma/sling_aim_steps": m("sling_aim_steps"),
+                    "gohma/sling_aim_steps": m("sling_aim_steps"), "gohma/sling_ready_steps": m("sling_ready_steps"), "gohma/elevated_seeds": m("elevated_seeds"),
                     "gohma/time_to_defeat_s": float(np.mean([e["time_to_defeat_s"] * args.vi_per_step / 60 for e in eps
                                                             if e["time_to_defeat_s"]])) if any(e["time_to_defeat_s"] for e in eps) else float("nan"),
                 })

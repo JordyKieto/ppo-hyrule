@@ -102,6 +102,8 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 
 **Actions v5 (90)** = the 63 Deku Baba actions (indices unchanged) + 9 directions × {slingshot, Z + slingshot} + 9 directions × Deku Nut.
 
+**Item buttons are tapped within the step:** C is pressed for 3 VIs, then released. A held C never fires the slingshot, and fleet run `gohma-v1` fired only 0.3–0.4 seeds per episode because of it. With the tap (verified live), repeating Z + slingshot draws and then fires every 0.4 s. The human technique also works: draw once, hold it cocked with Z, tap to fire the moment the eye turns red.
+
 ## Reward (`GohmaTracker`; every term is logged as `reward/<name>`)
 
 | Component | Value | Kind |
@@ -116,9 +118,12 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 | `death`, `left_room` | −30 | outcome |
 | `timeout` | −10 if Gohma is alive at the cap | outcome |
 | `lockon`, `lock_hold` | +0.3 per lock on Gohma (cap 8), +0.005/step (cap 1) | shaping |
-| `lock_on_red_eye` | +0.02/step locked on (or facing the eye) while the eye is red (cap 2) | shaping |
-| `slingshot_on_red_eye` | +0.03/step with the slingshot out, locked on the red eye (cap 2) | shaping |
-| **`seed_stun`** | **+8** when she is knocked down ≤ 1 s after a seed fired in a red-eye state (cap 40): the main stun | shaping |
+| `lock_on_red_eye` | +0.05/step locked on (or facing the eye) while the eye is red (cap 5) | shaping |
+| **`sling_ready`** | +0.08/step holding the slingshot **cocked** while Gohma is **up on the ceiling** (or winding up on the floor), Z-targeting or free-aiming at her (cap 6): the human technique | shaping |
+| `slingshot_on_red_eye` | +0.2/step with the slingshot out, locked on the red eye (cap 6) | shaping |
+| `red_eye_seed` | +1.5 per seed fired while the eye is red, hit or miss (cap 9) | shaping |
+| `elevated_seed` | +0.5 per seed fired at her while she is up and Link is aimed at or locked on her (cap 5) | shaping |
+| **`seed_stun`** | **+15** when she is knocked down ≤ 1 s after a seed fired in a red-eye state (cap 60): **the key skill** | shaping |
 | `nut_stun` | +2 when she is stunned ≤ 0.6 s after a Deku Nut (cap 10): weaker, short stun | shaping |
 | `stun_hit` | +2 per HP dealt while she is stunned (on top of `boss_damage`) | shaping |
 | `approach_stunned`, `sword_ready_stunned` | close in while she's stunned; sword out within 90 units (cap 1) | shaping |
@@ -130,10 +135,10 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 
 | Recording | Detected | Return |
 |---|---|---|
-| Win | 2/2 real stuns (2 of 6 seeds), 10 HP damage, defeat, 0.5 ♥ lost. Parts: defeat 60, speed bonus 47, **HP progress bonus 44**, damage 40, stun hits 20, success 20 + 19, seed stuns 16, shaping ≈ 7 | **+273** |
+| Win | 2/2 real stuns (2 of 6 seeds), 10 HP damage, defeat, 0.5 ♥ lost. Parts: defeat 60, speed bonus 47, HP progress bonus 44, damage 40, **seed stuns 30**, stun hits 20, success 20 + 19, **slingshot shaping (ready, red-eye aim, red-eye and elevated seeds) 17.5**, other shaping ≈ 7 | **+305** |
 | Death segment | 1 larva kill, 3 ♥ lost, death | −38.6 |
 | Larva segment | 6 larva kills (+12 kills, +6 damage, uncapped), 0 stun credits from 12 non-red-eye seeds | +18.5 |
-| Nut fight (0–258 s) | **6/6 nut stuns** detected (cap reached), 5 HP damage (+20 damage, +20 progress bonus), 6 larva kills, 2.5 ♥ lost, 0 seed stuns from 3 non-red-eye seeds | +76.1 |
+| Nut fight (0–258 s) | **6/6 nut stuns** detected (cap reached), 5 HP damage (+20 damage, +20 progress bonus), 6 larva kills, 2.5 ♥ lost, 0 seed stuns from 3 non-red-eye seeds | +87.4 |
 
 ## Observation v5 (552 dims = v4 483 + 69)
 

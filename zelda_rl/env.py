@@ -30,6 +30,7 @@ N_COMBAT_ACTIONS = len(COMBAT_ACTIONS)
 # index a < 63 means exactly the same thing in v4 and v5 (checkpoint transfer copies those policy rows).
 # + C-left item (Deku Nut on the user's save; verified live: a tap throws one, Gohma is stunned ~0.22 s later for ~2 s).
 COMBAT_BUTTONS_V5 = COMBAT_BUTTONS + [("CD",), ("L", "CD"), ("CL",)]
+C_TAP_VI = 3                          # C-button items are pressed for 3 VIs then released within the 6-VI step
 COMBAT_BUTTON_NAMES_V5 = COMBAT_BUTTON_NAMES + ["+Sling", "+Z+Sling", "+Nut"]
 COMBAT_ACTIONS_V5 = COMBAT_ACTIONS + [(d, b) for d in DIRECTIONS for b in (7, 8)] + [(d, 9) for d in DIRECTIONS]
 N_COMBAT_ACTIONS_V5 = len(COMBAT_ACTIONS_V5)
@@ -171,6 +172,8 @@ class DolphinGoalEnv:
             held = COMBAT_BUTTONS_V5[b]
             x, y = (0.5, 0.5) if d is None else self._stick(d)
             cx, cy = (0.0, 0.5) if "CL" in held else (0.5, 0.0) if "CD" in held else (0.5, 0.5)
+            if (cx, cy) != (0.5, 0.5):     # item buttons are TAPPED inside the step (held C never fires the slingshot)
+                self._c_release_vi = read_state_vi(self.ram) + C_TAP_VI
             self.inst.pad.send(f"SET MAIN {x:.3f} {y:.3f}", f"SET C {cx} {cy}",
                                *[f"{'PRESS' if n in held else 'RELEASE'} {n}" for n in ("A", "B", "L", "R")])
             self.prev_action = (d, b)
@@ -204,6 +207,9 @@ class DolphinGoalEnv:
         elif self.cfg.stall_timeout > 10 and now - self._last_vi_change > 3 and now - getattr(self, "_last_pause_msg", 0) > 5:
             self._last_pause_msg = now
             print(f"  (Dolphin paused {now - self._last_vi_change:.0f}s: bring its window to the front / un-minimize it)", flush=True)
+        if getattr(self, "_c_release_vi", None) is not None and vi >= self._c_release_vi:
+            self.inst.pad.send("SET C 0.5 0.5")
+            self._c_release_vi = None
         return vi >= self._next_vi
 
     def observe(self) -> tuple[np.ndarray, float, bool, bool, dict]:
