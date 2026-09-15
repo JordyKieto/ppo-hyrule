@@ -104,7 +104,7 @@ def main():
     start_slots = [int(s) for s in args.start_slots.split(",")]
     slot_files = {k: Path(args.slots_dir) / f"NACE01.s{k:02d}" for k in start_slots}
     slot_states = {k: read_state_file_v2(f) for k, f in slot_files.items()}
-    obs_version = args.obs_version or (6 if args.profile == "gohma" else 4)
+    obs_version = args.obs_version or (7 if args.profile == "gohma" else 4)
     if args.profile == "gohma" and args.episode_seconds == 180.0:     # boss fight: 5-minute episodes unless overridden
         args.episode_seconds = 300.0
     profile_defaults = GOHMA_DEFAULTS if args.profile == "gohma" else {}
@@ -114,16 +114,17 @@ def main():
                         video_backend=args.video_backend, unlimited_speed=not args.realtime, obs_version=obs_version,
                         task="combat", combat=ccfg)
     T, N = env_cfg.max_steps, args.num_envs
-    from zelda_rl.ego import ACTOR_DIM_V6, ACTOR_FIELDS_V6, AIM_DIM, AIM_FIELDS
+    from zelda_rl.ego import ACTOR_DIM_V6, ACTOR_DIM_V7, ACTOR_FIELDS_V6, ACTOR_FIELDS_V7, AIM_DIM, AIM_FIELDS, EGO_V7_DIM, EGO_V7_FIELDS
     from zelda_rl.gohma import BOSS_DIM, BOSS_FIELDS
-    global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + (BOSS_DIM if obs_version >= 5 else 0) + (AIM_DIM if obs_version >= 6 else 0)
-    actor_dim = ACTOR_DIM_V6 if obs_version >= 6 else ACTOR_DIM_V2
+    ego_dim, ego_fields = (EGO_V7_DIM, EGO_V7_FIELDS) if obs_version >= 7 else (AIM_DIM, AIM_FIELDS) if obs_version >= 6 else (0, [])
+    global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + (BOSS_DIM if obs_version >= 5 else 0) + ego_dim
+    actor_dim = ACTOR_DIM_V7 if obs_version >= 7 else ACTOR_DIM_V6 if obs_version >= 6 else ACTOR_DIM_V2
     obs_dim = global_dim + N_ACTORS * actor_dim
     n_actions = N_COMBAT_ACTIONS_V5 if obs_version >= 5 else N_COMBAT_ACTIONS
     config = {**vars(args), "task": "combat", "obs_version": obs_version, "obs_dim": obs_dim, "global_dim": global_dim,
               "n_actors": N_ACTORS, "actor_dim": actor_dim, "n_actions": n_actions, "action_frame": "world",
-              "obs_fields": GLOBAL_FIELDS_V2 + COMBAT_FIELDS + (BOSS_FIELDS if obs_version >= 5 else []) + (AIM_FIELDS if obs_version >= 6 else []),
-              "actor_fields": ACTOR_FIELDS_V6 if obs_version >= 6 else ACTOR_FIELDS_V2,
+              "obs_fields": GLOBAL_FIELDS_V2 + COMBAT_FIELDS + (BOSS_FIELDS if obs_version >= 5 else []) + ego_fields,
+              "actor_fields": ACTOR_FIELDS_V7 if obs_version >= 7 else ACTOR_FIELDS_V6 if obs_version >= 6 else ACTOR_FIELDS_V2,
               "combat_cfg": asdict(ccfg), "steps_per_rollout": T, "recurrent": args.recurrent, "gru": args.gru, "batch_size": T * N, "goal_slot": start_slots[0],
               "goal_cfg": {}}
     log = RunLogger(run_dir, config, use_wandb=args.wandb, project=args.wandb_project, entity=args.wandb_entity,

@@ -172,6 +172,33 @@ v6 adds no hand-crafted aim-error features. It gives the policy the same frames 
 
 Code: `zelda_rl/ego.py`. `zelda_rl/transfer.py` can also widen the actor encoder (zero columns before `present`); a v8 → v6 widening was checked exact (logit and value difference 0.0 on 4 savestates). **`gohma-v9` trains v6 from scratch.**
 
+## Observation v7 (1033 dims): every larva, velocities, facing, shape, seed impacts
+
+v7 keeps v6's raw aim and adds the rest of what Link needs to relate himself to the world:
+
+| Block | Dims | Contents |
+|---|---|---|
+| **EGO v7** (global) | 129 | camera forward, raw aim pitch/yaw, camera eye, Link facing and displacement (camera frame) |
+| | | Gohma: eye in the camera and body frames, velocity (camera frame), facing in both frames |
+| | | **3 larva/egg slots** (nearest first), each with: present, HP, state one-hot (11), camera- and body-frame position, velocity, facing vs Link |
+| | | **2 seed slots**: present, camera-frame position, velocity in the camera and body frames |
+| | | **Last seed impact**: present, time since, camera-frame position, offset from Gohma's eye, distance to the eye |
+| **Actor table** | 16 × 46 | v2 fields |
+| | | camera- and body-frame position |
+| | | **velocity in both frames** |
+| | | **facing in both frames** and relative to Link (cos/sin) |
+| | | **shape**: scale, collision cylinder radius/height, mass |
+
+Signals checked live:
+- **Velocity is the actor's own `velocity` field (+0x5C).** It is populated for Gohma and larvae (for example Gohma `ceiling_move` 4.9/frame, larva jump 8.3), is proportional to their motion, and is 0 when they stand still.
+- **Seed impacts are tracked every emulated frame** (`EgoMemory.poll` from `env.ready()`), because a seed crosses the room in a few frames.
+  - An impact is where a *flying* seed (speed > 5) vanished.
+  - The cocked seed also exists as an En_Arrow at Link's hand with zero velocity, so it never counts as an impact.
+- **Shape is generic**: the colChkInfo cylinder is a 10/10 placeholder for most actors (grass 12/30). The true colliders are actor-specific, so Gohma's eye is given explicitly as a position.
+- **The arc is not given as a precomputed trajectory.** The policy sees the raw aim, the seed's position and velocity while it is in flight, and where it landed.
+
+Code: `zelda_rl/ego.py` (`EGO_V7_FIELDS`, `ACTOR_FIELDS_V7`, `EgoMemory`). **`gohma-v10` trains v7 from scratch.**
+
 ## Warm start from the Deku Baba policy
 
 `--init-from checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt` (global update 150) is widened function-preservingly:
@@ -209,5 +236,6 @@ python -m fleet launch --experiment gohma --script train_combat.py --wandb-proje
 | `gohma-v6` | `sling_ready` / `elevated_seed` only pre-red or red; `dropped_red_eye_shot` penalty; curriculum: half of all episodes start in slots 4–6 (`--slot-weights 4=2.33,5=2.33,6=2.33`); init from v5 update 10 | 6 updates: entrance farming stopped, nut stuns up (3.4/episode in slot 3), but red-eye seeds still ~0.2/episode in slots 4–5, ~2 dropped shots per episode, **slot 6 waits cocked ~1,400 steps and never fires** |
 | `gohma-v7` | red-eye seeds +4 and never penalised as misses; `sling_ready` once per window; `unfired_red_eye` −1.5; init from v6 update 10 | ~26 updates (9,124 episodes): return −18 → −14.5, deaths 52%; **learned Deku Nut stuns (up to 5.9/episode in slot 3), not the slingshot**: red-eye seeds flat ~0.2/episode, 2–3 unfired red-eye windows and ~2.7 dropped shots per episode, seed stuns falling; 3 defeats. Locally (update 20, slot 5): missed the opening red eye, 4 nut stuns, no sword hits, died |
 | `gohma-v8` | same config as v7, **trained from scratch** (no Deku Baba transfer) | ~126 updates: return −22 → **−5.6**, Gohma damage 0.61/episode, nut stuns 2.8, seeds 7/episode but seed stuns flat at 0.04 (free aim without aim information), deaths ~54%, 0 defeats |
-| `gohma-v9` | **observation v6** (raw aim + camera/body-frame geometry), from scratch, same reward and curriculum | (running) |
+| `gohma-v9` | **observation v6** (raw aim + camera/body-frame geometry), from scratch, same reward and curriculum | stopped after 7 updates for v7: return −24.9, deaths 57%, seed stuns 0.02, nut stuns 1.1 per episode (on track with v8's start) |
+| `gohma-v10` | **observation v7** (all larvae, actor velocities, facing, shape, seed impacts), from scratch, same reward and curriculum | (running) |
 

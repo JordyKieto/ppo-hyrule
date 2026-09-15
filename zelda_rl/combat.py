@@ -51,6 +51,7 @@ class Enemy:
     upd: int = 0                # +0x130 update function: states of relocatable overlays are decoded relative to it
     focus: tuple[float, float, float] = (0.0, 0.0, 0.0)   # +0x38 focus point (lock-on / aim point: Gohma's eye)
     yaw: int = 0                # +0x32 world rotation y (body facing)
+    vel: tuple[float, float, float] = (0.0, 0.0, 0.0)   # +0x5C velocity per game update (verified live for Gohma, larvae)
 
     @property
     def state(self) -> str:
@@ -114,7 +115,7 @@ def read_combat_state(ram) -> CombatState:
                                fn=_u32(ram, a + fn_off), shape_yaw=_s16(ram, a + 0xB6),
                                yaw_to_player=_s16(ram, a + 0x8A), timer=_s16(ram, a + 0x1B6), cat=cat,
                                params=_u16(ram, a + 0x1C), upd=_u32(ram, a + 0x130), focus=_vec3(ram, a + 0x38),
-                               yaw=_s16(ram, a + 0x32))
+                               yaw=_s16(ram, a + 0x32), vel=_vec3(ram, a + 0x5C))
             a = _u32(ram, a + 0x124)
             guard += 1
     return CombatState(

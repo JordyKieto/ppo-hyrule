@@ -120,6 +120,7 @@ def featurize(s: GameState, goal: GameState, prev_pos: np.ndarray, time_left: fl
 # ==== v2: nearest actors of any type, camera, player state flags, save-progress flags ================
 PLAYER_SF1 = 0x66C
 MAIN_CAMERA = PLAY_STATE + 0x1E0
+ACTOR_SEED = 0x0016                   # En_Arrow: slingshot seed in flight (verified live: velocity at +0x5C, despawns on impact)
 ACTOR_EN_ELF = 0x0018              # Navi: always next to Link, excluded from the actor table
 N_ACTORS = 16
 ACTOR_ID_VOCAB = 512
@@ -144,6 +145,14 @@ class ActorInfo:
     health: int
     pos: tuple[float, float, float]
     dist: float
+    ptr: int = 0
+    yaw: int = 0                       # +0x32 world rotation y (body facing)
+    yaw_to_player: int = 0             # +0x8A
+    vel: tuple[float, float, float] = (0.0, 0.0, 0.0)   # +0x5C (used by projectiles; many actors move without it)
+    scale: float = 0.0                 # +0x50 scale.x
+    cyl_radius: int = 0                # colChkInfo cylinder radius / height (+0xA8 / +0xAA; 10/10 = unset placeholder)
+    cyl_height: int = 0
+    mass: int = 0                      # +0xAE (50 movable, 255 immovable)
 
 
 @dataclass
@@ -157,6 +166,7 @@ class GameStateV2(GameState):
     cam_at: tuple[float, float, float] = (0.0, 0.0, 1.0)    # main camera look-at (first-person: along the aim)
     aim_pitch: int = 0                 # Player focus.rot.x (s16, verified live: -14000 = aiming ~77 deg up in first person)
     aim_yaw: int = 0                   # Player focus.rot.y (s16, follows the first-person aim)
+    seeds: list[ActorInfo] = field(default_factory=list)   # slingshot seeds in flight (En_Arrow 0x0016, category 7), any distance
 
 
 def read_state_v2(ram) -> GameStateV2:
@@ -179,18 +189,23 @@ def read_state_v2(ram) -> GameStateV2:
         a, guard = _u32(ram, ps + 0x1C24 + 0x10 + cat * 8), 0
         while 0x80000000 <= a < 0x80400000 and guard < 128:
             aid = struct.unpack_from(">H", ram, a & 0x3FFFFF)[0]
-            if a != player and aid != ACTOR_EN_ELF:
+            prm = _s16(ram, a + 0x1C) & 0xFFFF
+            if a != player and aid != ACTOR_EN_ELF and not (aid == 0x0028 and prm < 0xFFFF and prm >= 10):  # skip Gohma debris
                 p = _vec3(ram, a + 0x24)
                 d = math.dist(p, lp) if ok else math.inf
-                actors.append(ActorInfo(aid, ram[(a + 2) & 0x3FFFFF], _s16(ram, a + 0x1C) & 0xFFFF,
-                                        _u32(ram, a + 4), ram[(a + 0xAF) & 0x3FFFFF], p, d))
+                actors.append(ActorInfo(aid, ram[(a + 2) & 0x3FFFFF], prm, _u32(ram, a + 4), ram[(a + 0xAF) & 0x3FFFFF], p, d,
+                                        ptr=a, yaw=_s16(ram, a + 0x32), yaw_to_player=_s16(ram, a + 0x8A),
+                                        vel=_vec3(ram, a + 0x5C), scale=struct.unpack_from(">f", ram, (a + 0x50) & 0x3FFFFF)[0],
+                                        cyl_radius=_s16(ram, a + 0xA8), cyl_height=_s16(ram, a + 0xAA),
+                                        mass=int(ram[(a + 0xAE) & 0x3FFFFF])))
             a = _u32(ram, a + 0x124)
             guard += 1
     actors.sort(key=lambda x: x.dist)
+    seeds = [a for a in actors if a.id == ACTOR_SEED and a.category == 7]
     return GameStateV2(**vars(base), cam_yaw=cam_yaw, sf1=sf1, equipment=_s16(ram, sc + 0x9C) & 0xFFFF,
                        flags=np.frombuffer(b"".join(blob), np.uint8), actors=actors[:N_ACTORS],
                        cam_eye=eye, cam_at=at, aim_pitch=_s16(ram, player + 0x44) if ok else 0,
-                       aim_yaw=_s16(ram, player + 0x46) if ok else 0)
+                       aim_yaw=_s16(ram, player + 0x46) if ok else 0, seeds=seeds)
 
 
 def read_state_file_v2(path: str | Path) -> GameStateV2:

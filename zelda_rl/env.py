@@ -146,6 +146,9 @@ class DolphinGoalEnv:
             self.start_state = self.state
             self.cstate = read_combat_state(self.ram)
             self.tracker.reset(self.cstate, self.cfg.max_steps)
+            from zelda_rl.ego import EgoMemory
+            self.ego_mem = getattr(self, "ego_mem", None) or EgoMemory()
+            self.ego_mem.reset()
         self.slot, self.t = slot, 0
         self.prev_pos = self.state.xyz
         self.prev_action: tuple[float | None, int] = (None, 0)
@@ -202,6 +205,8 @@ class DolphinGoalEnv:
         now = time.perf_counter()
         if vi != getattr(self, "_seen_vi", None):
             self._seen_vi, self._last_vi_change = vi, now
+            if self.cfg.obs_version >= 7 and getattr(self, "ego_mem", None) is not None:
+                self.ego_mem.poll(self.ram)                  # per-frame seed tracking (impact points)
         elif now - self._last_vi_change > self.cfg.stall_timeout:
             raise EnvError(f"env{self.idx}: emulation stalled (VI stuck at {vi})", self.idx)
         elif self.cfg.stall_timeout > 10 and now - self._last_vi_change > 3 and now - getattr(self, "_last_pause_msg", 0) > 5:
@@ -248,6 +253,13 @@ class DolphinGoalEnv:
                 from zelda_rl.gohma import boss_features
                 parts.append(boss_features(self.cstate, self.tracker))
             actors = v2[GLOBAL_DIM_V2:]
+            if self.cfg.obs_version >= 7:                      # + motion / facing / size / all larvae / seeds / impact
+                from zelda_rl.ego import actor_table_v7, ego_v7_features
+                mem = self.ego_mem
+                mem.step(self.state)
+                parts.append(ego_v7_features(self.state, self.cstate, self.prev_pos, mem))
+                actors = actor_table_v7(actors, self.state, mem)
+                return np.concatenate(parts + [actors])
             if self.cfg.obs_version >= 6:                      # raw aim + egocentric geometry (zelda_rl/ego.py)
                 from zelda_rl.ego import aim_features, splice_actor_table
                 parts.append(aim_features(self.state, self.cstate, self.prev_pos))
