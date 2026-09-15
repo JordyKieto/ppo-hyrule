@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.live import attach_n64_ram
 from zelda_rl.obs import PLAY_STATE as PS, SAVE_CTX as SC, SF1_BITS
+from zelda_rl.gohma import GOHMA_STATE, LARVA_STATE
 
 u8 = lambda r, a: r[a & 0x3FFFFF]
 u32 = lambda r, a: struct.unpack_from(">I", r, a & 0x3FFFFF)[0]
@@ -49,7 +50,8 @@ def actors(r, lp):
             p = v3(r, a + 0x24)
             d = {"ptr": a, "id": u16(r, a), "cat": cat, "params": u16(r, a + 0x1C), "hp": int(u8(r, a + 0xAF)),
                  "pos": [round(x, 1) for x in p], "dist": None if math.isnan(lp[0]) else round(math.dist(p, lp), 1),
-                 "yaw": s16(r, a + 0x32), "shape_yaw": s16(r, a + 0xB6), "yaw_to_player": s16(r, a + 0x8A), "flags": u32(r, a + 4)}
+                 "yaw": s16(r, a + 0x32), "shape_yaw": s16(r, a + 0xB6), "yaw_to_player": s16(r, a + 0x8A), "flags": u32(r, a + 4),
+                 "upd": u32(r, a + 0x130)}
             if cat in FIGHTERS:
                 d["raw"] = raw(r, a + WIN[cat][0], WIN[cat][1] - WIN[cat][0])
             out[a] = d
@@ -139,6 +141,10 @@ def main():
                 if a["cat"] in FIGHTERS:
                     watches[ptr] = FieldWatch(a["raw"], WIN[a["cat"]][0])
                 continue
+            if a["id"] == 0x28 and a["cat"] == 9 and a["params"] == 0xFFFF:
+                gs = lambda x: GOHMA_STATE.get(struct.unpack_from(">I", bytes.fromhex(x["raw"]), 0x180 - 0x14C)[0] - x["upd"], "?")
+                if gs(a) != gs(o):
+                    say(f"GOHMA STATE {gs(o)} -> {gs(a)} (hp {a['hp']}, d {a['dist']})")
             if a["hp"] != o["hp"]:
                 say(f"HP {tag} {o['hp']} -> {a['hp']}{'  *** DEFEATED ***' if a['hp'] == 0 else ''} (dist {a['dist']})")
             if ptr in watches:

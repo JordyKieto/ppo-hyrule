@@ -259,7 +259,7 @@ def seed_push(seed: dict, target: dict) -> None:
     rsh = (f"ssh -i {R_FLEET_KEY} -p {target['port']} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
            f"-o ServerAliveInterval=30")
     base = f"rsync -rlptz --no-owner --no-group -e '{rsh}'"
-    run(seed, f"{base} --exclude runs/ --exclude logs/ --exclude .fleet_secrets --exclude __pycache__/ "
+    run(seed, f"{base} --exclude runs/ --exclude logs/ --exclude .fleet_secrets --exclude __pycache__/ --exclude recordings/ "
               f"{R_REPO}/ root@{target['ip']}:{R_REPO}/ && "
               f"{base} {R_DOLPHIN}/install root@{target['ip']}:{R_DOLPHIN}/", timeout=3600)
 
@@ -292,6 +292,7 @@ def cmd_verify(a) -> None:
 
 
 CODE_EXCLUDES = ["--exclude", ".venv/", "--exclude", "runs/", "--exclude", "assets/", "--exclude", "__pycache__/",
+                 "--exclude", "recordings/", "--exclude", "*.mp4", "--exclude", "*.mov",
                  "--exclude", "checkpoints/", "--exclude", ".git/", "--exclude", "*.pt", "--exclude", ".DS_Store"]
 
 

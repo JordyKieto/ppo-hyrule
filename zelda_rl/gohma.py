@@ -11,7 +11,7 @@ RAM (verified on two recorded human fights, runs/manual/boss_20260914-*.jsonl, a
   debris       actor id 0x0028, params >= 10 (egg-shell pieces while hatching, body pieces when Gohma dies): ignored
   action fns are decoded RELATIVE to the actor's update function (+0x130): the En_Goma overlay was seen loaded at
   two addresses 0x280 apart, so absolute pointers are not stable across scene reloads.
-  Link         held item +0x141 (15 slingshot, 4 sword, 0 none), stateFlags1 bit 20 first-person aim, bit 9 ready to
+  Link         held item +0x141 (15 slingshot, 4 sword, 6 Deku Nut throw, 0 none), stateFlags1 bit 20 first-person aim, bit 9 ready to
                fire, bit 3 item out; slingshot seeds = save ctx ammo slot 6
 """
 from __future__ import annotations
@@ -125,8 +125,9 @@ class GohmaTracker(CombatTracker):
         self.g_prev_state = gohma_state(g) if g else "other"
         self.g_state_t = 0
         self.last_seed_t = None
+        self.last_nut_t = None
         self.seed_state = "other"
-        self.ep.update(boss_hp_start=g.hp if g else 0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
+        self.ep.update(boss_hp_start=g.hp if g else 0, boss_hp_max=10, nut_stuns=0, nuts_thrown=0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
@@ -178,7 +179,10 @@ class GohmaTracker(CombatTracker):
             if e.hp < tr.hp and alive_now and not tr.defeated and k in ("gohma", "larva"):
                 dmg = tr.hp - e.hp
                 if k == "gohma":
+                    hp_max = max(ep["boss_hp_max"], 1)
                     pay("boss_damage", c.g_boss_damage * dmg, "out")
+                    gone = (hp_max - e.hp) / hp_max                 # 0.1 after the first of 10 hits ... 1.0 on the last
+                    pay("boss_hp_progress_bonus", c.g_boss_damage * dmg * c.g_boss_hp_progress * gone, "out")
                     ep["boss_damage"] += dmg
                     ep["damage_dealt"] += dmg
                     ev["boss_hit"] = ev.get("boss_hit", 0) + dmg
@@ -221,10 +225,15 @@ class GohmaTracker(CombatTracker):
                     ep["stuns"] += 1
                     ev["boss_stunned"] = True
                     recent = self.last_seed_t is not None and self.t - self.last_seed_t <= c.g_seed_window_steps
+                    recent_nut = self.last_nut_t is not None and self.t - self.last_nut_t <= c.g_nut_window_steps
                     if recent and self.seed_state in GOHMA_VULNERABLE:   # knocked down right after a red-eye seed = eye hit
                         ep["seed_stuns"] += 1
                         ev["seed_stun"] = True
                         self._capped(pay, "seed_stun", c.g_seed_stun, c.g_seed_stun_cap, "shape")
+                    elif recent_nut:                                     # Deku Nut flash: shorter stun, smaller credit
+                        ep["nut_stuns"] += 1
+                        ev["nut_stun"] = True
+                        self._capped(pay, "nut_stun", c.g_nut_stun, c.g_nut_stun_cap, "shape")
                 if gs in GOHMA_ATTACK and self.g_prev_state not in GOHMA_ATTACK:
                     ep["boss_attacks"] += 1
                     self.attack_cycle = {"shield": False, "dmg": 0}
@@ -241,6 +250,13 @@ class GohmaTracker(CombatTracker):
                 ep["red_eye_seeds"] += 1
             ev["seed"] = n
             pay("seed_cost", -c.g_seed_cost * n, "shape")
+
+        if cur.nuts < prev.nuts and not prev.dead:
+            n = prev.nuts - cur.nuts
+            ep["nuts_thrown"] += n
+            self.last_nut_t = self.t
+            ev["nut"] = n
+            pay("nut_cost", -c.g_nut_cost * n, "shape")
 
         # ---- Link health
         ep["hp_end"] = max(cur.hp, 0)
@@ -326,7 +342,8 @@ BOSS_FIELDS = [("gohma_present", 1), ("gohma_hp_frac", 1), ("gohma_eye_rel_pos",
                ("larvae_alive", 1), ("larva1_rel_pos", 3), ("larva1_dist", 1), ("larva1_hp", 1),
                ("larva1_state_onehot", len(LARVA_STATES)), ("larva2_dist", 1),
                ("held_slingshot", 1), ("held_sword", 1), ("first_person_aim", 1), ("ready_to_fire", 1),
-               ("seeds", 1), ("since_last_seed", 1), ("mem_stuns", 1), ("mem_larva_kills", 1)]
+               ("seeds", 1), ("since_last_seed", 1), ("mem_stuns", 1), ("mem_larva_kills", 1),
+               ("nuts", 1), ("since_last_nut", 1)]
 BOSS_DIM = sum(n for _, n in BOSS_FIELDS)
 
 
@@ -361,6 +378,8 @@ def boss_features(s: CombatState, tracker) -> np.ndarray:
     since = 1.0 if last_seed is None else min((tracker.t - last_seed) / 50.0, 1.0)
     out += [float(s.held_item == HELD_SLINGSHOT), float(s.held_item == HELD_SWORD), float(s.bit(SF1_FIRST_PERSON)),
             float(s.bit(SF1_READY_TO_FIRE)), s.seeds / 30.0, since, ep.get("stuns", 0) / 5.0, ep.get("larva_kills", 0) / 6.0]
+    last_nut = getattr(tracker, "last_nut_t", None)
+    out += [s.nuts / 20.0, 1.0 if last_nut is None else min((tracker.t - last_nut) / 50.0, 1.0)]
     arr = np.asarray(out, np.float32)
     assert arr.shape == (BOSS_DIM,), (arr.shape, BOSS_DIM)
     return np.clip(np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0), -10, 10)

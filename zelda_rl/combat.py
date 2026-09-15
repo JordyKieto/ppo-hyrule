@@ -169,8 +169,13 @@ class CombatConfig:
     g_boss_defeat: float = 60.0        # outsized: x speed multiplier (1 + speed_mult_max * (1 - minutes/g_speed_ref_min))
     g_speed_ref_min: float = 3.0
     g_stun_hit: float = 2.0            # extra per HP dealt while she is knocked down / stunned
-    g_seed_stun: float = 6.0           # a seed that actually reaches the eye (she is knocked down right after it)
-    g_seed_stun_cap: float = 30.0
+    g_boss_hp_progress: float = 2.0    # boss_damage x (1 + this * fraction of her HP gone after the hit): last hits pay 3x
+    g_seed_stun: float = 8.0           # a red-eye seed that actually reaches the eye: the main stun (long sword window)
+    g_seed_stun_cap: float = 40.0
+    g_nut_stun: float = 2.0            # Deku Nut stun: works in any floor state but only ~2 s (weaker than the seed)
+    g_nut_stun_cap: float = 10.0
+    g_nut_window_steps: int = 6        # stun within 0.6 s of a nut throw (measured 0.22 s)
+    g_nut_cost: float = 0.1            # per nut (20 max, finite)
     g_seed_window_steps: int = 10      # stun within this many steps of a seed counts as the seed's hit
     g_seed_cost: float = 0.03          # per seed fired (no spamming)
     g_lock_red_eye: float = 0.02       # per step locked on (or facing the eye) while the eye is red

@@ -307,6 +307,7 @@ def main():
                     "gohma/defeat_rate": frac(lambda e: e["boss_defeated"]), "gohma/boss_damage": m("boss_damage"),
                     "gohma/boss_hp_end": m("boss_hp_end"), "gohma/seed_stuns": m("seed_stuns"), "gohma/stuns": m("stuns"),
                     "gohma/seeds_fired": m("seeds_fired"), "gohma/red_eye_seeds": m("red_eye_seeds"),
+                    "gohma/nut_stuns": m("nut_stuns"), "gohma/nuts_thrown": m("nuts_thrown"),
                     "gohma/seed_hit_rate": float(np.sum([e["seed_stuns"] for e in eps])) / max(1.0, n_seeds),
                     "gohma/stun_hits": m("stun_hits"), "gohma/larva_kills": m("larva_kills"), "gohma/larvae_seen": m("larvae_seen"),
                     "gohma/boss_attacks": m("boss_attacks"), "gohma/boss_blocks": m("boss_blocks"),
