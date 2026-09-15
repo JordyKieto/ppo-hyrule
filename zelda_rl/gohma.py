@@ -105,11 +105,17 @@ def _yaw_diff(a: int, b: int) -> float:
 
 def link_aim(s: CombatState, point) -> tuple[float, float]:
     """(cos of horizontal angle between Link's facing and the direction to `point`, elevation angle to it / (pi/2))."""
+    c, _, elev = link_aim3(s, point)
+    return c, elev
+
+
+def link_aim3(s: CombatState, point) -> tuple[float, float, float]:
+    """Link facing vs direction to `point`: (cos, signed sin: + = point is to Link's left, elevation / (pi/2))."""
     yaw = s.yaw / 65536.0 * 2 * math.pi
     fx, fz = math.sin(yaw), math.cos(yaw)
     dx, dy, dz = point[0] - s.pos[0], point[1] - s.pos[1], point[2] - s.pos[2]
     h = math.hypot(dx, dz) or 1.0
-    return (fx * dx + fz * dz) / h, math.atan2(dy, h) / (math.pi / 2)
+    return (fx * dx + fz * dz) / h, (fz * dx - fx * dz) / h, math.atan2(dy, h) / (math.pi / 2)
 
 
 class GohmaTracker(CombatTracker):
@@ -338,9 +344,10 @@ class GohmaTracker(CombatTracker):
 BOSS_FIELDS = [("gohma_present", 1), ("gohma_hp_frac", 1), ("gohma_eye_rel_pos", 3), ("gohma_eye_dist", 1),
                ("gohma_on_ceiling", 1), ("gohma_state_onehot", len(GOHMA_STATES)), ("gohma_vulnerable", 1),
                ("gohma_stunned", 1), ("gohma_time_in_state", 1), ("gohma_facing_link_cos_sin", 2),
-               ("link_aim_to_eye_cos_elev", 2), ("locked_on_gohma", 1),
+               ("link_aim_to_eye_cos_sin_elev", 3), ("locked_on_gohma", 1),
                ("larvae_alive", 1), ("larva1_rel_pos", 3), ("larva1_dist", 1), ("larva1_hp", 1),
-               ("larva1_state_onehot", len(LARVA_STATES)), ("larva2_dist", 1),
+               ("larva1_state_onehot", len(LARVA_STATES)), ("larva1_facing_link_cos_sin", 2),
+               ("link_facing_larva1_cos_sin", 2), ("larva2_rel_pos", 3), ("larva2_dist", 1),
                ("held_slingshot", 1), ("held_sword", 1), ("first_person_aim", 1), ("ready_to_fire", 1),
                ("seeds", 1), ("since_last_seed", 1), ("mem_stuns", 1), ("mem_larva_kills", 1),
                ("nuts", 1), ("since_last_nut", 1)]
@@ -356,23 +363,29 @@ def boss_features(s: CombatState, tracker) -> np.ndarray:
         onehot[GOHMA_STATES.index(st)] = 1.0
         rel = [(g.focus[j] - s.pos[j]) / POS_SCALE for j in range(3)]
         ang = _yaw_diff(g.yaw, g.yaw_to_player)
-        aim_h, aim_v = link_aim(s, g.focus)
+        aim_c, aim_s, aim_v = link_aim3(s, g.focus)
         t_state = (tracker.t - getattr(tracker, "g_state_t", tracker.t)) / 50.0
         out += [1.0, g.hp / 10.0, *rel, math.dist(g.focus, s.pos) / POS_SCALE, float(g.pos[1] > GOHMA_FLOOR_Y + 150),
                 *onehot, float(st in GOHMA_VULNERABLE), float(st in GOHMA_STUNNED), min(t_state, 1.0),
-                math.cos(ang), math.sin(ang), aim_h, aim_v, float(s.targeted == g.ptr)]
+                math.cos(ang), math.sin(ang), aim_c, aim_s, aim_v, float(s.targeted == g.ptr)]
     else:
-        out += [0.0] * (1 + 1 + 3 + 1 + 1 + len(GOHMA_STATES) + 1 + 1 + 1 + 2 + 2 + 1)
+        out += [0.0] * (1 + 1 + 3 + 1 + 1 + len(GOHMA_STATES) + 1 + 1 + 1 + 2 + 3 + 1)
     lv = sorted((e for e in larvae(s) if e.hp > 0), key=lambda e: math.dist(e.pos, s.pos))
     out.append(len(lv) / 6.0)
     if lv:
         e = lv[0]
         onehot = [0.0] * len(LARVA_STATES)
         onehot[LARVA_STATES.index(larva_state(e))] = 1.0
+        la = _yaw_diff(e.yaw, e.yaw_to_player)                     # larva body facing vs direction to Link
+        lc, ls, _ = link_aim3(s, e.pos)                            # Link facing vs direction to the larva
         out += [(e.pos[j] - s.pos[j]) / POS_SCALE for j in range(3)] + [math.dist(e.pos, s.pos) / POS_SCALE, e.hp / 2.0] + onehot
+        out += [math.cos(la), math.sin(la), lc, ls]
     else:
-        out += [0.0] * (3 + 1 + 1 + len(LARVA_STATES))
-    out.append(math.dist(lv[1].pos, s.pos) / POS_SCALE if len(lv) > 1 else 0.0)
+        out += [0.0] * (3 + 1 + 1 + len(LARVA_STATES) + 4)
+    if len(lv) > 1:
+        out += [(lv[1].pos[j] - s.pos[j]) / POS_SCALE for j in range(3)] + [math.dist(lv[1].pos, s.pos) / POS_SCALE]
+    else:
+        out += [0.0] * 4
     ep = getattr(tracker, "ep", {})
     last_seed = getattr(tracker, "last_seed_t", None)
     since = 1.0 if last_seed is None else min((tracker.t - last_seed) / 50.0, 1.0)

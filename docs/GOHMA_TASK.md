@@ -29,9 +29,9 @@ The agent must **defeat Queen Gohma without dying**, as fast as possible. Larvae
 | 7 | 2.5 ♥ | 25 / 6 | 5 HP, **stunned**, 38 away | locked on, in sword range |
 | 8 | 2.5 ♥ | 26 / 16 | 10 HP, **stunned**, 448 away | locked on, slingshot out (knocked down by a seed) |
 | 9 | 3.0 ♥ | 26 / 7 | 5 HP, `ceiling_move` | **3 larvae** alive |
-| 10 | 2.0 ♥ | 22 / 0 | **0 HP, defeated** (death cutscene) | **excluded from training** (no target) |
+| 10 | 3.0 ♥ | 30 / 20 | 10 HP, `ceiling_wait`, 1,143 away | **replaced**: the user's slot 10 was Gohma already defeated. Made with `scripts/make_walk_state.py` (loaded slot 1, walked 165 units into the room, saved; input check passed) |
 
-The first set (used for the recordings above) is replaced.
+The first set (used for the recordings above) is replaced. Stick input check: slots 1, 6 and 10 pass 3/3 (their Link state flags read 0, which had been suspicious in the first set).
 
 ## RAM signals (✅ verified on the recordings, savestates and live probes)
 
@@ -135,13 +135,13 @@ The first set (used for the recordings above) is replaced.
 | Larva segment | 6 larva kills (+12 kills, +6 damage, uncapped), 0 stun credits from 12 non-red-eye seeds | +18.5 |
 | Nut fight (0–258 s) | **6/6 nut stuns** detected (cap reached), 5 HP damage (+20 damage, +20 progress bonus), 6 larva kills, 2.5 ♥ lost, 0 seed stuns from 3 non-red-eye seeds | +76.1 |
 
-## Observation v5 (544 dims = v4 483 + 61)
+## Observation v5 (552 dims = v4 483 + 69)
 
 | Block | Dims | Contents |
 |---|---|---|
 | v2 global + combat core + episode memory + Baba behaviour | 99 | unchanged from v4. The core "nearest target" fields now describe Gohma, which is what lets the Deku Baba policy transfer |
-| **Gohma** | 33 | present, HP fraction, **eye** relative position and distance, on ceiling, 18-way state one-hot, **red eye**, stunned, time in state, Gohma facing Link cos/sin, **Link aim to the eye (horizontal cos, elevation)**, locked on |
-| **Larvae** | 18 | alive count, nearest larva relative position, distance, HP, 11-way state one-hot, second-nearest distance |
+| **Gohma** | 34 | present, HP fraction, **eye** relative position (x, y, z) and distance, on ceiling, 18-way state one-hot, **red eye**, stunned, time in state, **Gohma facing Link** cos/sin, **Link facing the eye** cos + signed sin (left/right) + **elevation** (aiming up at the ceiling), locked on |
+| **Larvae** | 25 | alive count; nearest larva relative position, distance, HP, 11-way state one-hot, **larva facing Link** cos/sin, **Link facing the larva** cos/sin; second-nearest larva relative position and distance |
 | **Items and memory** | 10 | slingshot in hand, sword in hand, first-person aim, ready to fire, seeds, time since last seed, stuns so far, larva kills so far, **nuts, time since last nut** |
 | Actor table | 16 × 24 | unchanged |
 
@@ -150,8 +150,7 @@ The Gohma and larva blocks are all zeros in rooms without them, so one v5 policy
 ## Warm start from the Deku Baba policy
 
 `--init-from checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt` (global update 150) is widened function-preservingly:
-- the 59 new inputs get zero-initialised weights
-- the 27 new action rows get zero weights and a bias 2 below the mean logit
+- the 27 new action rows get zero weights; the 69 new inputs get zero weights and a bias 2 below the mean logit
 
 Checked: identical logits on the old actions (max difference 4e-7) and identical value. The new actions start with about 3% of the probability.
 
@@ -165,7 +164,7 @@ export DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin
   --init-from checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt --run-name gohma-local
 .venv/bin/python-dbg scripts/play.py runs/gohma-local/checkpoints/latest.pt --slot 2        # watch (Gohma HUD)
 python -m fleet launch --experiment gohma --script train_combat.py --wandb-project zelda-rl-gohma-ppo --run-tag v1 \
-  --num-envs 8 --train-args "--profile gohma --episode-seconds 300 --start-slots 1,2,3,4,5,6,7,8,9 \
+  --num-envs 8 --train-args "--profile gohma --episode-seconds 300 \
   --init-from checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt --fleet-aggregator 4 --total-updates 400"
 ```
 

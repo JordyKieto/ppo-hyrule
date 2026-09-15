@@ -101,6 +101,8 @@ def main():
     slot_files = {k: Path(args.slots_dir) / f"NACE01.s{k:02d}" for k in start_slots}
     slot_states = {k: read_state_file_v2(f) for k, f in slot_files.items()}
     obs_version = args.obs_version or (5 if args.profile == "gohma" else 4)
+    if args.profile == "gohma" and args.episode_seconds == 180.0:     # boss fight: 5-minute episodes unless overridden
+        args.episode_seconds = 300.0
     profile_defaults = GOHMA_DEFAULTS if args.profile == "gohma" else {}
     ccfg = CombatConfig(profile=args.profile, max_seconds=args.episode_seconds,
                         **{**profile_defaults, **(json.loads(args.combat_json) if args.combat_json else {})})
