@@ -45,6 +45,8 @@ def parse_args():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init-from", default=None, help="initialise weights from a checkpoint; a smaller obs/action spec "
                     "(e.g. the obs-v4 Deku Baba policy) is widened function-preservingly (zelda_rl/transfer.py)")
+    ap.add_argument("--transfer-action-margin", type=float, default=2.0, help="when widening a checkpoint: new action "
+                    "logits start this far below the old mean (2.0 ~ 2-3%% total mass, 0.2 ~ 10%%)")
     ap.add_argument("--profile", default="deku_baba", choices=["deku_baba", "gohma"], help="combat task profile")
     ap.add_argument("--obs-version", type=int, default=None, help="4 (Deku Baba v4) | 5 (+boss/larva/item block, "
                     "+slingshot actions); default 4 for deku_baba, 5 for gohma")
@@ -166,9 +168,10 @@ def main():
             from zelda_rl.transfer import transfer_state_dict
             src_model = build_model(src_cfg)
             src_model.load_state_dict(ck["model"])
-            model.load_state_dict(transfer_state_dict(src_model, src_cfg, config))
-            LOGGER.info("transferred weights from %s (obs global %d -> %d, actions %d -> %d)", src,
-                        src_cfg["global_dim"], global_dim, src_cfg["n_actions"], n_actions)
+            model.load_state_dict(transfer_state_dict(src_model, src_cfg, config,
+                                                      new_action_logit_margin=args.transfer_action_margin))
+            LOGGER.info("transferred weights from %s (obs global %d -> %d, actions %d -> %d, new-action margin %.2f)", src,
+                        src_cfg["global_dim"], global_dim, src_cfg["n_actions"], n_actions, args.transfer_action_margin)
 
     rec = bool(getattr(model, "recurrent", False))
     h_buf = np.zeros((T, N, args.gru), np.float32)
