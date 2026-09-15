@@ -398,7 +398,7 @@ def cmd_launch(a) -> None:
             tmp = f.name
         rsync(pod, [tmp], f"{R_REPO}/logs/launch_{run_name}.sh")
         Path(tmp).unlink(missing_ok=True)
-        run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; rm -rf {R_REPO}/runs/instances")
+        run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; rm -rf {R_REPO}/runs/instances {R_REPO}/runs/*/instances")
         pod["run_name"], pod["_envs"] = run_name, envs
         return pod
 
