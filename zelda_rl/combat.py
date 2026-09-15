@@ -69,6 +69,7 @@ DEKU_BABA_STATE = {0x801EDF30: "hidden", 0x801EDFDC: "emerge_retract", 0x801EE44
                    0x801EF950: "dying"}
 # Action-function field per (actor id, category); default = Deku Baba's +0x1B0. Found by scanning 20 Hz fight traces
 # (runs/manual/boss_*.jsonl) for code-pointer fields with few distinct values (docs/ADDING_OBSERVATIONS.md step 2).
+GRASS_ID = 0x0125                     # En_Kusa grass tuft (8 in Gohma's room; cut -> removed, may drop seeds/nuts/hearts)
 GOHMA_ID = 0x0028                     # Boss_Goma (category 9) and its larvae/eggs/debris En_Goma share this id in RAM
 ACTION_FN_OFFSET = {(GOHMA_ID, 9): 0x180, (GOHMA_ID, 5): 0x2A0}
 BABA_STATES = ["hidden", "emerge_retract", "idle", "prepare_lunge", "lunge", "pull_back", "hit", "stunned", "dying", "other"]
@@ -89,6 +90,7 @@ class CombatState:
     held_item: int = 0                  # Player +0x141 held item action (verified: 15 slingshot, 4 sword, 0 none)
     seeds: int = 0                      # slingshot seeds (save ctx ammo slot 6)
     nuts: int = 0                       # Deku nuts (ammo slot 1)
+    grass: int = -1                     # grass tufts (En_Kusa 0x0125, prop list) still standing; -1 = not read
 
     @property
     def dead(self) -> bool:
@@ -122,7 +124,16 @@ def read_combat_state(ram) -> CombatState:
         targeted=_u32(ram, TARGETED_ACTOR), arrow=_u32(ram, ARROW_ACTOR), enemies=enemies,
         held_item=struct.unpack_from(">b", ram, (player + 0x141) & 0x3FFFFF)[0] if ok else 0,
         seeds=int(ram[(SAVE_CTX + 0x8C + 6) & 0x3FFFFF]), nuts=int(ram[(SAVE_CTX + 0x8C + 1) & 0x3FFFFF]),
+        grass=_count_actors(ram, 6, GRASS_ID),
     )
+
+
+def _count_actors(ram, cat: int, actor_id: int) -> int:
+    a, n, guard = _u32(ram, PLAY_STATE + 0x1C24 + 0x10 + cat * 8), 0, 0
+    while 0x80000000 <= a < 0x80400000 and guard < 128:
+        n += _u16(ram, a) == actor_id
+        a, guard = _u32(ram, a + 0x124), guard + 1
+    return n
 
 
 @dataclass
@@ -198,7 +209,12 @@ class CombatConfig:
     g_larva_kill: float = 2.0
     g_larva_damage_sling: float = 0.25 # larvae taken out with the slingshot pay less than the sword
     g_larva_kill_sling: float = 1.0
-    g_link_heal: float = 0.1           # per HP unit healed (recovery hearts)
+    g_link_heal: float = 0.1           # per HP unit healed (recovery hearts: +0.8 per heart picked up)
+    g_grass_cut: float = 0.2           # per grass tuft cut (resource gathering: drops seeds / nuts / hearts)
+    g_grass_cut_cap: float = 2.0
+    g_seed_pickup: float = 0.05        # per seed picked up, x (30 + 5) / (seeds before + 5): worth more when running low
+    g_nut_pickup: float = 0.15         # per nut picked up, x (20 + 4) / (nuts before + 4)
+    g_pickup_cap: float = 6.0
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0
 

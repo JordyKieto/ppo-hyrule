@@ -139,7 +139,7 @@ class GohmaTracker(CombatTracker):
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
-                       nut_misses=0, larva_kills_sling=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
+                       nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
         self._r = {}                              # running totals of capped shaping terms
         self.pending_shots: list[dict] = []
         self._larva_seen = set()
@@ -294,6 +294,21 @@ class GohmaTracker(CombatTracker):
             else:
                 ep["nut_misses"] += 1
                 pay("nut_miss", -c.g_nut_miss * (c.g_nut_scarcity + 4) / (shot["left"] + 4), "shape")
+
+        # ---- resource gathering: grass cut, ammo picked up (hearts are paid by link_heal below)
+        if 0 <= cur.grass < prev.grass and not prev.dead:
+            n = prev.grass - cur.grass
+            ep["grass_cut"] += n
+            ev["grass_cut"] = n
+            self._capped(pay, "grass_cut", c.g_grass_cut * n, c.g_grass_cut_cap)
+        if cur.seeds > prev.seeds and not prev.dead:
+            n = cur.seeds - prev.seeds
+            ep["seeds_picked"] += n
+            self._capped(pay, "resource_pickup", c.g_seed_pickup * n * (c.g_seed_scarcity + 5) / (prev.seeds + 5), c.g_pickup_cap)
+        if cur.nuts > prev.nuts and not prev.dead:
+            n = cur.nuts - prev.nuts
+            ep["nuts_picked"] += n
+            self._capped(pay, "resource_pickup", c.g_nut_pickup * n * (c.g_nut_scarcity + 4) / (prev.nuts + 4), c.g_pickup_cap)
 
         # ---- Link health
         ep["hp_end"] = max(cur.hp, 0)

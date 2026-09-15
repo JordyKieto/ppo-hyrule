@@ -114,7 +114,9 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 | `boss_defeat_speed_bonus` | +60 × 2 × max(0, 1 − minutes/3) | outcome |
 | `success` + `success_time_bonus` | +20, and +30 × fraction of the time limit left | outcome |
 | `larva_damage` / `larva_kill` | sword: +0.5 per HP, +2 per kill. **Slingshot** (`_sling`: a seed resolved as the hit, larva beyond sword range): +0.25 / +1. Uncapped; the 300 s limit bounds it | outcome |
-| `link_damage` / `link_heal` | −0.25 / +0.1 per HP unit (−2 / +0.8 per half heart) | outcome |
+| `link_damage` / `link_heal` | −0.25 / +0.1 per HP unit (−2 per half heart lost, +0.8 per heart picked up) | outcome |
+| `grass_cut` | +0.2 per grass tuft cut (`En_Kusa` 0x0125, 8 in the room; count of standing tufts drops) (cap 2). 🔶 Not in the recordings: check `gohma/grass_cut` on the fleet | shaping |
+| `resource_pickup` | seeds +0.05 × 35 / (seeds before + 5) each, nuts +0.15 × 24 / (nuts before + 4) each: worth more when running low (cap 6) | shaping |
 | `death`, `left_room` | −30 | outcome |
 | `timeout` | −10 if Gohma is alive at the cap | outcome |
 | `lockon`, `lock_hold` | +0.3 per lock on Gohma (cap 8), +0.005/step (cap 1) | shaping |
