@@ -113,14 +113,14 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 | **`boss_defeat`** | **+60** | outcome |
 | `boss_defeat_speed_bonus` | +60 × 2 × max(0, 1 − minutes/3) | outcome |
 | `success` + `success_time_bonus` | +20, and +30 × fraction of the time limit left | outcome |
-| `larva_damage` / `larva_kill` | +0.5 per HP, +2 per kill (**uncapped**; larvae only exist when she lays eggs, and the 300 s limit bounds it) | outcome |
+| `larva_damage` / `larva_kill` | sword: +0.5 per HP, +2 per kill. **Slingshot** (`_sling`: a seed resolved as the hit, larva beyond sword range): +0.25 / +1. Uncapped; the 300 s limit bounds it | outcome |
 | `link_damage` / `link_heal` | −0.25 / +0.1 per HP unit (−2 / +0.8 per half heart) | outcome |
 | `death`, `left_room` | −30 | outcome |
 | `timeout` | −10 if Gohma is alive at the cap | outcome |
 | `lockon`, `lock_hold` | +0.3 per lock on Gohma (cap 8), +0.005/step (cap 1) | shaping |
 | `lock_on_red_eye` | +0.05/step locked on (or facing the eye) while the eye is red (cap 5) | shaping |
 | **`sling_ready`** | +0.08/step holding the slingshot **cocked** while Gohma is **up on the ceiling** (or winding up on the floor), Z-targeting or free-aiming at her (cap 6): the human technique | shaping |
-| `slingshot_on_red_eye` | +0.2/step with the slingshot out, locked on the red eye (cap 6) | shaping |
+| **`slingshot_on_red_eye`** | **+0.3/step** with the slingshot out and **aimed at the red eye (Z-lock or free aim), wherever she is** (cap 8) | shaping |
 | `red_eye_seed` | +1.5 per seed fired while the eye is red, hit or miss (cap 9) | shaping |
 | `elevated_seed` | +0.5 per seed fired at her while she is up and Link is aimed at or locked on her (cap 5) | shaping |
 | **`seed_stun`** | **+15** when she is knocked down ≤ 1 s after a seed fired in a red-eye state (cap 60): **the key skill** | shaping |
@@ -128,17 +128,17 @@ The first set (used for the recordings above) is replaced. Stick input check: sl
 | `stun_hit` | +2 per HP dealt while she is stunned (on top of `boss_damage`) | shaping |
 | `approach_stunned`, `sword_ready_stunned` | close in while she's stunned; sword out within 90 units (cap 1) | shaping |
 | `block` | +1 per attack cycle (`floor_prepare` / `floor_eye_red` / `floor_eye_close`) survived with the shield up, facing her, within 250 (cap 8) | shaping |
-| `seed_cost`, `nut_cost` | −0.03 per seed, −0.1 per nut | shaping |
+| **`seed_miss`**, **`nut_miss`** | per shot that hits nothing (seed: no stun and no larva damage within 1.2 s; nut: no stun within 0.6 s), **scaled by scarcity**: seed −0.15 × 35 / (seeds left + 5), which is −0.15 at 30 seeds and −1.05 at 0; nut −0.3 × 24 / (nuts left + 4), which is −0.3 at 20 nuts and −1.8 at 0. Hits cost nothing | shaping |
 | `time_penalty` | −0.001/step | shaping |
 
 **Validation: recorded fights replayed at 10 Hz** (`scripts/replay_gohma_trace.py`; the reward parts sum exactly to the return):
 
 | Recording | Detected | Return |
 |---|---|---|
-| Win | 2/2 real stuns (2 of 6 seeds), 10 HP damage, defeat, 0.5 ♥ lost. Parts: defeat 60, speed bonus 47, HP progress bonus 44, damage 40, **seed stuns 30**, stun hits 20, success 20 + 19, **slingshot shaping (ready, red-eye aim, red-eye and elevated seeds) 17.5**, other shaping ≈ 7 | **+305** |
-| Death segment | 1 larva kill, 3 ♥ lost, death | −38.6 |
-| Larva segment | 6 larva kills (+12 kills, +6 damage, uncapped), 0 stun credits from 12 non-red-eye seeds | +18.5 |
-| Nut fight (0–258 s) | **6/6 nut stuns** detected (cap reached), 5 HP damage (+20 damage, +20 progress bonus), 6 larva kills, 2.5 ♥ lost, 0 seed stuns from 3 non-red-eye seeds | +87.4 |
+| Win | 2/2 real stuns (2 of 6 seeds), 10 HP damage, defeat, 0.5 ♥ lost. Parts: defeat 60, speed bonus 47, HP progress bonus 44, damage 40, **seed stuns 30**, stun hits 20, success 20 + 19, **slingshot shaping (ready, red-eye aim, red-eye and elevated seeds) 17.5**, other shaping ≈ 7 | **+307** (4 missed seeds −0.65) |
+| Death segment | 1 larva kill, 3 ♥ lost, death | −38.6 (before the miss penalties) |
+| Larva segment | 6 larva kills (1 slingshot, 5 sword), 0 stun credits; 12 seeds with misses −2.1 | +32.0 |
+| Nut fight (0–258 s) | **6/6 nut stuns** detected (cap reached), 5 HP damage (+20 damage, +20 progress bonus), 6 larva kills, 2.5 ♥ lost; **19 nuts with misses −5.1** (grows as nuts ran low) | +84.0 |
 
 ## Observation v5 (552 dims = v4 483 + 69)
 

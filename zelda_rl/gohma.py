@@ -138,8 +138,10 @@ class GohmaTracker(CombatTracker):
         self.ep.update(boss_hp_start=g.hp if g else 0, boss_hp_max=10, nut_stuns=0, nuts_thrown=0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
-                       sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
+                       sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
+                       nut_misses=0, larva_kills_sling=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
         self._r = {}                              # running totals of capped shaping terms
+        self.pending_shots: list[dict] = []
         self._larva_seen = set()
         self.attack_cycle = None
 
@@ -149,6 +151,14 @@ class GohmaTracker(CombatTracker):
             v = min(value, cap - got)
             self._r[name] = got + v
             pay(name, v, kind_)
+
+    def _resolve_shot(self, kind: str) -> bool:
+        """Mark the oldest pending shot of this kind as a hit (no miss penalty). False if none is pending."""
+        for shot in self.pending_shots:
+            if shot["kind"] == kind:
+                self.pending_shots.remove(shot)
+                return True
+        return False
 
     def live_targets(self, s: CombatState) -> list[Enemy]:
         return [s.enemies[p] for p, t in self.tracks.items() if t.target and not t.defeated and p in s.enemies]
@@ -211,14 +221,17 @@ class GohmaTracker(CombatTracker):
                         self.last_kill_t = self.t
                         ev["boss_defeat"] = True
                 else:                                               # uncapped: she only reopens her eye once larvae die
-                    pay("larva_damage", c.g_larva_damage * dmg, "out")
+                    by_sling = math.dist(e.pos, cur.pos) > c.g_sword_range * 1.5 and self._resolve_shot("seed")
+                    tag = "_sling" if by_sling else ""
+                    pay(f"larva_damage{tag}", (c.g_larva_damage_sling if by_sling else c.g_larva_damage) * dmg, "out")
                     ep["larva_damage"] += dmg
                     ev["larva_hit"] = ev.get("larva_hit", 0) + dmg
                     if e.hp == 0:
                         tr.defeated = True
                         ep["larva_kills"] += 1
-                        pay("larva_kill", c.g_larva_kill, "out")
-                        ev["larva_kill"] = True
+                        ep["larva_kills_sling"] += int(by_sling)
+                        pay(f"larva_kill{tag}", c.g_larva_kill_sling if by_sling else c.g_larva_kill, "out")
+                        ev["larva_kill"] = "slingshot" if by_sling else "sword"
             tr.hp = e.hp
         for p in [p for p in self.tracks if p not in cur.enemies]:
             tr = self.tracks.pop(p)
@@ -235,10 +248,12 @@ class GohmaTracker(CombatTracker):
                     recent = self.last_seed_t is not None and self.t - self.last_seed_t <= c.g_seed_window_steps
                     recent_nut = self.last_nut_t is not None and self.t - self.last_nut_t <= c.g_nut_window_steps
                     if recent and self.seed_state in GOHMA_VULNERABLE:   # knocked down right after a red-eye seed = eye hit
+                        self._resolve_shot("seed")
                         ep["seed_stuns"] += 1
                         ev["seed_stun"] = True
                         self._capped(pay, "seed_stun", c.g_seed_stun, c.g_seed_stun_cap, "shape")
                     elif recent_nut:                                     # Deku Nut flash: shorter stun, smaller credit
+                        self._resolve_shot("nut")
                         ep["nut_stuns"] += 1
                         ev["nut_stun"] = True
                         self._capped(pay, "nut_stun", c.g_nut_stun, c.g_nut_stun_cap, "shape")
@@ -262,14 +277,23 @@ class GohmaTracker(CombatTracker):
                 ep["red_eye_seeds"] += 1
                 self._capped(pay, "red_eye_seed", c.g_red_eye_seed * n, c.g_red_eye_seed_cap)
             ev["seed"] = n
-            pay("seed_cost", -c.g_seed_cost * n, "shape")
+            self.pending_shots += [{"kind": "seed", "t": self.t, "left": cur.seeds}] * n
 
         if cur.nuts < prev.nuts and not prev.dead:
             n = prev.nuts - cur.nuts
             ep["nuts_thrown"] += n
             self.last_nut_t = self.t
             ev["nut"] = n
-            pay("nut_cost", -c.g_nut_cost * n, "shape")
+            self.pending_shots += [{"kind": "nut", "t": self.t, "left": cur.nuts}] * n
+        # shots that hit nothing in their window are misses: penalty grows as that ammo runs out
+        for shot in [sh for sh in self.pending_shots if self.t - sh["t"] > (c.g_seed_window_hit_steps if sh["kind"] == "seed" else c.g_nut_window_steps)]:
+            self.pending_shots.remove(shot)
+            if shot["kind"] == "seed":
+                ep["seed_misses"] += 1
+                pay("seed_miss", -c.g_seed_miss * (c.g_seed_scarcity + 5) / (shot["left"] + 5), "shape")
+            else:
+                ep["nut_misses"] += 1
+                pay("nut_miss", -c.g_nut_miss * (c.g_nut_scarcity + 4) / (shot["left"] + 4), "shape")
 
         # ---- Link health
         ep["hp_end"] = max(cur.hp, 0)
@@ -327,7 +351,7 @@ class GohmaTracker(CombatTracker):
             if vulnerable:
                 ep["vulnerable_steps"] += 1
                 aim_h, _ = link_aim(cur, g.focus)
-                if locked or aim_h > 0.9:
+                if locked or aim_h > 0.85:
                     ep["vulnerable_lock_steps"] += 1
                     self._capped(pay, "lock_on_red_eye", c.g_lock_red_eye, c.g_lock_red_eye_cap)
                     if sling:
