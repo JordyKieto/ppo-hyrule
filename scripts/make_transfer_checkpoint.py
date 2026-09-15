@@ -20,6 +20,7 @@ from zelda_rl.policy_io import load_policy  # noqa: E402
 from zelda_rl.transfer import transfer_state_dict  # noqa: E402
 
 src, dst = sys.argv[1], Path(sys.argv[2])
+margin = float(sys.argv[3]) if len(sys.argv) > 3 else 2.0     # 0.3 = the gohma-v4/v5 init (~10% new-action mass)
 model, cfg, ck = load_policy(src)
 global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + BOSS_DIM
 new_cfg = {**cfg, "profile": "gohma", "obs_version": 5, "global_dim": global_dim,
@@ -28,8 +29,9 @@ new_cfg = {**cfg, "profile": "gohma", "obs_version": 5, "global_dim": global_dim
            "start_slots": "1,2,3,4,5,6,7,8,9,10", "max_seconds": 300.0,
            "combat_cfg": asdict(CombatConfig(profile="gohma", max_seconds=300.0, **GOHMA_DEFAULTS)),
            "transferred_from": {"checkpoint": src, "update": ck.get("update")}}
-sd = transfer_state_dict(model, cfg, new_cfg)
+new_cfg["transfer_action_margin"] = margin
+sd = transfer_state_dict(model, cfg, new_cfg, new_action_logit_margin=margin)
 dst.parent.mkdir(parents=True, exist_ok=True)
 torch.save({"model": sd, "optimizer": None, "update": ck.get("update", 0), "global_step": ck.get("global_step", 0),
             "episode_count": 0, "config": new_cfg}, dst)
-print(f"wrote {dst}: obs {new_cfg['obs_dim']} (global {global_dim}), actions {N_COMBAT_ACTIONS_V5}, from {src} update {ck.get('update')}")
+print(f"wrote {dst}: obs {new_cfg['obs_dim']} (global {global_dim}), actions {N_COMBAT_ACTIONS_V5}, margin {margin}, from {src} update {ck.get('update')}")

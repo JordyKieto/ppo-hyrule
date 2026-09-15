@@ -186,8 +186,9 @@ class CombatConfig:
     g_red_eye_seed: float = 1.5        # every seed fired while the eye is red (hit or not): shoot at the right time
     g_red_eye_seed_cap: float = 9.0
     g_sling_ready: float = 0.08        # per step holding the slingshot cocked, Z-targeting or free-aiming at Gohma while
-    g_sling_ready_cap: float = 6.0     #   she is UP on the ceiling (or winding up on the floor): the human technique
-    g_elevated_seed: float = 0.5       # per seed fired at her while she is up and Link is aimed/locked on her
+    g_sling_ready_cap: float = 6.0     #   her eye is about to turn red or is red (not while she just waits / crawls)
+    g_drop_red_eye_shot: float = 1.0   # penalty: slingshot put away (no seed fired) while her eye is red
+    g_elevated_seed: float = 0.5       # per seed fired at her (aimed / locked) right before or during the red eye
     g_elevated_seed_cap: float = 5.0
     g_nut_stun: float = 2.0            # Deku Nut stun: works in any floor state but only ~2 s (weaker than the seed)
     g_nut_stun_cap: float = 10.0

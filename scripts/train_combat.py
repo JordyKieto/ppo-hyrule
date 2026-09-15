@@ -54,6 +54,8 @@ def parse_args():
     ap.add_argument("--total-updates", type=int, default=200)
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--start-slots", default="1,2,3,4,5,6,7,8,9,10")
+    ap.add_argument("--slot-weights", default="", help="curriculum: slot=weight,... (others 1), e.g. '4=2.33,5=2.33,6=2.33' "
+                    "makes half of all episodes start from slots 4-6")
     ap.add_argument("--episode-seconds", type=float, default=180.0)
     ap.add_argument("--vi-per-step", type=int, default=6)
     ap.add_argument("--video-backend", default="Null")
@@ -149,6 +151,10 @@ def main():
             chk = envs[0].input_check(wait_vi=240)
         (usable.append(k) if chk["game_sees_stick"] else LOGGER.warning("slot %d ignores input -> excluded (%s)", k, chk))
     LOGGER.info("usable start slots: %s", usable)
+    wmap = {int(k): float(v) for k, v in (kv.split("=") for kv in args.slot_weights.split(",") if kv)}
+    slot_p = np.array([wmap.get(k, 1.0) for k in usable], np.float64)
+    slot_p /= slot_p.sum()
+    LOGGER.info("start-slot probabilities: %s", {k: round(float(p), 3) for k, p in zip(usable, slot_p)})
 
     torch.manual_seed(1234)
     model = build_model(config)
@@ -195,7 +201,7 @@ def main():
                     acts = Counter()
 
                     def begin(i):
-                        slot_of[i] = int(rng.choice(usable))
+                        slot_of[i] = int(rng.choice(usable, p=slot_p))
                         return envs[i].reset(slot_of[i])
 
                     obs = np.stack([begin(i) for i in range(N)])
@@ -321,7 +327,7 @@ def main():
                     "gohma/boss_attacks": m("boss_attacks"), "gohma/boss_blocks": m("boss_blocks"),
                     "gohma/vulnerable_steps": m("vulnerable_steps"), "gohma/vulnerable_lock_steps": m("vulnerable_lock_steps"),
                     "gohma/sling_aim_steps": m("sling_aim_steps"), "gohma/sling_ready_steps": m("sling_ready_steps"), "gohma/elevated_seeds": m("elevated_seeds"), "gohma/seed_misses": m("seed_misses"), "gohma/nut_misses": m("nut_misses"),
-                    "gohma/larva_kills_sling": m("larva_kills_sling"), "gohma/grass_cut": m("grass_cut"), "gohma/seeds_picked": m("seeds_picked"),
+                    "gohma/larva_kills_sling": m("larva_kills_sling"), "gohma/grass_cut": m("grass_cut"), "gohma/dropped_red_eye_shots": m("dropped_red_eye_shots"), "gohma/seeds_picked": m("seeds_picked"),
                     "gohma/nuts_picked": m("nuts_picked"),
                     "gohma/time_to_defeat_s": float(np.mean([e["time_to_defeat_s"] * args.vi_per_step / 60 for e in eps
                                                             if e["time_to_defeat_s"]])) if any(e["time_to_defeat_s"] for e in eps) else float("nan"),

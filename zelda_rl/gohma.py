@@ -58,7 +58,7 @@ GOHMA_VULNERABLE = {"ceiling_eye_red", "floor_eye_red"}
 GOHMA_STUNNED = {"fall", "land", "stunned", "stunned_hit"}          # knocked down / sword window
 GOHMA_ATTACK = {"floor_prepare", "floor_eye_red", "floor_eye_close"}   # Link took hits from her in these (block credit)
 GOHMA_CEILING = {"ceiling_wait", "ceiling_idle", "ceiling_move", "ceiling_spawn", "ceiling_eye_red"}
-GOHMA_PRE_RED = {"floor_prepare", "floor_eye_opening"}                  # floor wind-up: the eye opens next
+GOHMA_PRE_RED = {"floor_prepare", "floor_eye_opening", "ceiling_spawn"}   # the eye turns red next (seen in every recording)
 
 # Larva (En_Goma) action functions, offset from its update function.
 LARVA_STATE = {
@@ -139,7 +139,7 @@ class GohmaTracker(CombatTracker):
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
-                       nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
+                       nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, dropped_red_eye_shots=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
         self._r = {}                              # running totals of capped shaping terms
         self.pending_shots: list[dict] = []
         self._larva_seen = set()
@@ -269,7 +269,7 @@ class GohmaTracker(CombatTracker):
             ep["seeds_fired"] += n
             self.last_seed_t = self.t
             self.seed_state = gs if g is not None else "other"      # Gohma's state when the seed left the slingshot
-            if g is not None and (gs in GOHMA_CEILING or g.pos[1] > GOHMA_FLOOR_Y + 150) and \
+            if g is not None and gs in (GOHMA_PRE_RED | GOHMA_VULNERABLE) and \
                     (cur.targeted == g.ptr or link_aim(cur, g.focus)[0] > 0.85):
                 ep["elevated_seeds"] += 1
                 self._capped(pay, "elevated_seed", c.g_elevated_seed * n, c.g_elevated_seed_cap)
@@ -294,6 +294,13 @@ class GohmaTracker(CombatTracker):
             else:
                 ep["nut_misses"] += 1
                 pay("nut_miss", -c.g_nut_miss * (c.g_nut_scarcity + 4) / (shot["left"] + 4), "shape")
+
+        # ---- giving up a cocked shot while the eye is red (slingshot put away without firing)
+        if (g is not None and gs in GOHMA_VULNERABLE and prev.held_item == HELD_SLINGSHOT and cur.held_item != HELD_SLINGSHOT
+                and cur.seeds == prev.seeds and not cur.dead):
+            ep["dropped_red_eye_shots"] += 1
+            ev["dropped_shot"] = True
+            pay("dropped_red_eye_shot", -c.g_drop_red_eye_shot, "shape")
 
         # ---- resource gathering: grass cut, ammo picked up (hearts are paid by link_heal below)
         if 0 <= cur.grass < prev.grass and not prev.dead:
@@ -372,8 +379,8 @@ class GohmaTracker(CombatTracker):
                     if sling:
                         ep["sling_aim_steps"] += 1
                         self._capped(pay, "slingshot_on_red_eye", c.g_sling_red_eye, c.g_sling_red_eye_cap)
-            elevated = gs in GOHMA_CEILING or g.pos[1] > GOHMA_FLOOR_Y + 150
-            if sling and (elevated or gs in GOHMA_PRE_RED):         # slingshot cocked at her while she is up (Z or free aim)
+            if sling and gs in (GOHMA_PRE_RED | GOHMA_VULNERABLE):   # cocked at her right before / during the red eye
+
                 aim_h, _ = link_aim(cur, g.focus)
                 if locked or aim_h > 0.85:
                     ep["sling_ready_steps"] += 1
