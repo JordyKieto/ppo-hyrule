@@ -1,0 +1,58 @@
+{
+  "config": {
+    "encoder": "checkpoints/bc/bc-decode-final.pt",
+    "data": "datasets/transitions/deku-baba/20260918-134229",
+    "stride": 5,
+    "hidden": 512,
+    "residual": true,
+    "epochs": 40,
+    "batch": 1024,
+    "lr": 0.001,
+    "patience": 5,
+    "out": "checkpoints/dynamics/simple_res_s5.pt",
+    "torch_threads": 6,
+    "seed": 0
+  },
+  "horizons": [
+    {
+      "steps": 1,
+      "frames": 5,
+      "mse": 0.5830227136611938,
+      "identity_mse": 0.085378497838974,
+      "skill": -5.828683197973211,
+      "row_state": 0.9823489891895193,
+      "link_hp": 0.9915,
+      "row_pos_mae": 5.646268844604492
+    },
+    {
+      "steps": 2,
+      "frames": 10,
+      "mse": 0.4846939146518707,
+      "identity_mse": 0.1087646484375,
+      "skill": -3.4563552736567056,
+      "row_state": 0.7210944665239988,
+      "link_hp": 0.9900833333333333,
+      "row_pos_mae": 6.574208736419678
+    },
+    {
+      "steps": 5,
+      "frames": 25,
+      "mse": 0.753562331199646,
+      "identity_mse": 0.14456206560134888,
+      "skill": -4.21272526139537,
+      "row_state": 0.6856196522219156,
+      "link_hp": 0.982,
+      "row_pos_mae": 6.7490010261535645
+    },
+    {
+      "steps": 10,
+      "frames": 50,
+      "mse": 0.9824802279472351,
+      "identity_mse": 0.16260379552841187,
+      "skill": -5.042172784186737,
+      "row_state": 0.6762623152709359,
+      "link_hp": 0.9619166666666666,
+      "row_pos_mae": 6.955189228057861
+    }
+  ]
+}
