@@ -1,0 +1,214 @@
+{
+  "config": {
+    "model": "/tmp/joint_3e-4.pt",
+    "data": "datasets/transitions/deku-baba/20260918-134229",
+    "transitions": 100000,
+    "envs": 128,
+    "steps": 32,
+    "max_steps": 200,
+    "lr": 0.0003,
+    "hidden": 256,
+    "gamma": 0.99,
+    "lam": 0.95,
+    "clip": 0.2,
+    "ent": 0.01,
+    "out": "checkpoints/dynamics/dream_ppo.pt",
+    "torch_threads": 6,
+    "seed": 0
+  },
+  "history": [
+    {
+      "update": 1,
+      "transitions": 4096,
+      "return": 41.56666819254557,
+      "length": 16.666666666666668,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 2,
+      "transitions": 8192,
+      "return": 43.503464762369795,
+      "length": 39.86666666666667,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 3,
+      "transitions": 12288,
+      "return": 41.66425809552592,
+      "length": 58.32258064516129,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 4,
+      "transitions": 16384,
+      "return": 40.8268112491917,
+      "length": 62.37837837837838,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 5,
+      "transitions": 20480,
+      "return": 39.85981060209728,
+      "length": 72.33333333333333,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 6,
+      "transitions": 24576,
+      "return": 39.98871248033311,
+      "length": 72.95555555555555,
+      "clear_pct": 100.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 7,
+      "transitions": 28672,
+      "return": 13.965250382609401,
+      "length": 157.9787234042553,
+      "clear_pct": 2.0833333333333335,
+      "death_pct": 0.0
+    },
+    {
+      "update": 8,
+      "transitions": 32768,
+      "return": 14.810359873519038,
+      "length": 154.3774834437086,
+      "clear_pct": 70.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 9,
+      "transitions": 36864,
+      "return": 14.604304164648056,
+      "length": 155.1453488372093,
+      "clear_pct": 28.571428571428573,
+      "death_pct": 0.0
+    },
+    {
+      "update": 10,
+      "transitions": 40960,
+      "return": 15.264797415464155,
+      "length": 153.3494623655914,
+      "clear_pct": 64.28571428571429,
+      "death_pct": 0.0
+    },
+    {
+      "update": 11,
+      "transitions": 45056,
+      "return": 15.436333392259371,
+      "length": 153.1761658031088,
+      "clear_pct": 57.142857142857146,
+      "death_pct": 0.0
+    },
+    {
+      "update": 12,
+      "transitions": 49152,
+      "return": 15.734809921546416,
+      "length": 152.94444444444446,
+      "clear_pct": 80.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 13,
+      "transitions": 53248,
+      "return": 8.003802516162395,
+      "length": 178.7,
+      "clear_pct": 7.317073170731708,
+      "death_pct": 0.0
+    },
+    {
+      "update": 14,
+      "transitions": 57344,
+      "return": 9.469322430491447,
+      "length": 172.18,
+      "clear_pct": 53.333333333333336,
+      "death_pct": 0.0
+    },
+    {
+      "update": 15,
+      "transitions": 61440,
+      "return": 11.322982096970081,
+      "length": 166.145,
+      "clear_pct": 39.130434782608695,
+      "death_pct": 0.0
+    },
+    {
+      "update": 16,
+      "transitions": 65536,
+      "return": 12.597621715664864,
+      "length": 160.755,
+      "clear_pct": 39.130434782608695,
+      "death_pct": 0.0
+    },
+    {
+      "update": 17,
+      "transitions": 69632,
+      "return": 11.933901472091675,
+      "length": 164.225,
+      "clear_pct": 44.44444444444444,
+      "death_pct": 0.0
+    },
+    {
+      "update": 18,
+      "transitions": 73728,
+      "return": 12.986881632506847,
+      "length": 161.62,
+      "clear_pct": 63.63636363636363,
+      "death_pct": 0.0
+    },
+    {
+      "update": 19,
+      "transitions": 77824,
+      "return": 9.660861485302448,
+      "length": 170.515,
+      "clear_pct": 9.523809523809524,
+      "death_pct": 0.0
+    },
+    {
+      "update": 20,
+      "transitions": 81920,
+      "return": 10.269201183319092,
+      "length": 168.3,
+      "clear_pct": 21.428571428571427,
+      "death_pct": 0.0
+    },
+    {
+      "update": 21,
+      "transitions": 86016,
+      "return": 11.618700694441795,
+      "length": 164.425,
+      "clear_pct": 23.076923076923077,
+      "death_pct": 0.0
+    },
+    {
+      "update": 22,
+      "transitions": 90112,
+      "return": 12.345240457653999,
+      "length": 161.51,
+      "clear_pct": 40.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 23,
+      "transitions": 94208,
+      "return": 11.199820603430272,
+      "length": 167.305,
+      "clear_pct": 36.0,
+      "death_pct": 0.0
+    },
+    {
+      "update": 24,
+      "transitions": 98304,
+      "return": 11.29474076807499,
+      "length": 166.385,
+      "clear_pct": 42.857142857142854,
+      "death_pct": 0.0
+    }
+  ],
+  "real_baseline": 1.4868648648648883
+}
