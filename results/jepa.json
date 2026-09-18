@@ -1,0 +1,30 @@
+{
+  "config": {
+    "data": "datasets/transitions/deku-baba/20260918-134229",
+    "init_from": "checkpoints/bc/bc-decode-final.pt",
+    "epochs": 30,
+    "batch": 512,
+    "lr": 0.0003,
+    "stride": 5,
+    "unroll": 2,
+    "ema": 0.996,
+    "ema_final": 1.0,
+    "hidden": 512,
+    "layers": 3,
+    "probe_epochs": 8,
+    "out": "checkpoints/dynamics/jepa.pt",
+    "torch_threads": 6,
+    "seed": 0
+  },
+  "collapse": {
+    "mean_std": 0.7209458351135254,
+    "min_std": 0.36749255657196045,
+    "effective_rank": 8.612055662754383
+  },
+  "fields": {
+    "link_hp": 0.980104671746325,
+    "row_hp": 0.9951458245676197,
+    "row_state": 0.9993845625384649
+  },
+  "inverse_top1": 0.046094898134469986
+}
