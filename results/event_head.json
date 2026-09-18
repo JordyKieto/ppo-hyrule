@@ -1,0 +1,36 @@
+{
+  "config": {
+    "model": "/tmp/joint_3e-4.pt",
+    "data": "datasets/transitions/deku-baba/20260918-134229",
+    "epochs": 25,
+    "batch": 1024,
+    "lr": 0.001,
+    "hidden": 512,
+    "patience": 5,
+    "out": "checkpoints/dynamics/event_head.pt",
+    "torch_threads": 6,
+    "seed": 0
+  },
+  "metrics": {
+    "damage": {
+      "ap": 0.938499108994315,
+      "positives": 46
+    },
+    "kill": {
+      "ap": 0.9189373641280807,
+      "positives": 38
+    },
+    "link damage": {
+      "ap": 0.8441180470839387,
+      "positives": 28
+    },
+    "death": {
+      "ap": 0.8333333333333333,
+      "positives": 4
+    },
+    "cleared": {
+      "ap": 0.9388430809386692,
+      "positives": 20
+    }
+  }
+}
