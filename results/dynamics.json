@@ -1,0 +1,99 @@
+{
+  "checkpoint": "checkpoints/dynamics/latent-dynamics.pt",
+  "config": {
+    "encoder": "checkpoints/bc/bc-decode-final.pt",
+    "data": "datasets/transitions/deku-baba/20260918-134229",
+    "epochs": 40,
+    "batch": 1024,
+    "lr": 0.001,
+    "hidden": 512,
+    "layers": 3,
+    "dropout": 0.1,
+    "weight_decay": 0.0001,
+    "patience": 4,
+    "unroll": 1,
+    "out": "checkpoints/dynamics/latent-dynamics.pt",
+    "torch_threads": 6,
+    "seed": 0
+  },
+  "split": {
+    "val_slots": [
+      7,
+      9
+    ],
+    "tune_slots": [
+      4,
+      8
+    ],
+    "train_slots": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      10
+    ]
+  },
+  "horizons": [
+    {
+      "horizon": 1,
+      "latent_mse": 0.06972046196460724,
+      "cosine": 0.9752077460289001,
+      "link_hp": 0.9930833333333333,
+      "row_hp": 0.9057672109233267,
+      "row_state": 0.9948670944087993,
+      "row_pos_mae": 7.371519565582275,
+      "row_present": 0.9973072916666667,
+      "identity_latent_mse": 0.03260274603962898,
+      "identity_row_state": 0.9950198594561565,
+      "identity_link_hp": 0.9931666666666666
+    },
+    {
+      "horizon": 5,
+      "latent_mse": 0.3388594686985016,
+      "cosine": 0.8707478046417236,
+      "link_hp": 0.9891666666666666,
+      "row_hp": 0.9046304609448127,
+      "row_state": 0.9816196709278855,
+      "row_pos_mae": 12.134496688842773,
+      "row_present": 0.9965885416666667,
+      "identity_latent_mse": 0.09069667756557465,
+      "identity_row_state": 0.981680836748425,
+      "identity_link_hp": 0.9911666666666666
+    },
+    {
+      "horizon": 10,
+      "latent_mse": 0.555859386920929,
+      "cosine": 0.7874901294708252,
+      "link_hp": 0.9773333333333334,
+      "row_hp": 0.903067074335945,
+      "row_state": 0.972627066748316,
+      "row_pos_mae": 15.756635665893555,
+      "row_present": 0.996171875,
+      "identity_latent_mse": 0.1194877102971077,
+      "identity_row_state": 0.9727801592161666,
+      "identity_link_hp": 0.9893333333333333
+    },
+    {
+      "horizon": 50,
+      "latent_mse": 1.072662115097046,
+      "cosine": 0.5889850854873657,
+      "link_hp": 0.93225,
+      "row_hp": 0.9917471684745666,
+      "row_state": 0.9650528521680175,
+      "row_pos_mae": 16.625232696533203,
+      "row_present": 0.9926145833333333,
+      "identity_latent_mse": 0.17591461539268494,
+      "identity_row_state": 0.9577182655859965,
+      "identity_link_hp": 0.9756666666666667
+    }
+  ],
+  "upper_bound": {
+    "link_hp": 0.99275,
+    "row_hp": 0.9061777905089278,
+    "row_state": 0.9987473266116712,
+    "row_pos_mae": 6.799666404724121,
+    "row_present": 0.9975885416666667
+  },
+  "identity_mse": 0.0318145751953125
+}
