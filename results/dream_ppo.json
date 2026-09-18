@@ -1,11 +1,12 @@
 {
   "config": {
     "model": "/tmp/joint_3e-4.pt",
+    "event_head": "checkpoints/dynamics/event_head.pt",
     "data": "datasets/transitions/deku-baba/20260918-134229",
     "transitions": 100000,
     "envs": 128,
     "steps": 32,
-    "max_steps": 200,
+    "max_steps": 100,
     "lr": 0.0003,
     "hidden": 256,
     "gamma": 0.99,
@@ -20,195 +21,195 @@
     {
       "update": 1,
       "transitions": 4096,
-      "return": 41.56666819254557,
-      "length": 16.666666666666668,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -17.932956831795828,
+      "length": 21.857142857142858,
+      "clear_pct": 14.285714285714286,
+      "death_pct": 85.71428571428571
     },
     {
       "update": 2,
       "transitions": 8192,
-      "return": 43.503464762369795,
-      "length": 39.86666666666667,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -18.561252854087137,
+      "length": 27.727272727272727,
+      "clear_pct": 50.0,
+      "death_pct": 50.0
     },
     {
       "update": 3,
       "transitions": 12288,
-      "return": 41.66425809552592,
-      "length": 58.32258064516129,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -21.037899925595237,
+      "length": 50.666666666666664,
+      "clear_pct": 20.0,
+      "death_pct": 80.0
     },
     {
       "update": 4,
       "transitions": 16384,
-      "return": 40.8268112491917,
-      "length": 62.37837837837838,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -15.15022909926141,
+      "length": 91.0220588235294,
+      "clear_pct": 0.8695652173913043,
+      "death_pct": 1.7391304347826086
     },
     {
       "update": 5,
       "transitions": 20480,
-      "return": 39.85981060209728,
-      "length": 72.33333333333333,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -15.752132040384698,
+      "length": 90.16438356164383,
+      "clear_pct": 20.0,
+      "death_pct": 20.0
     },
     {
       "update": 6,
       "transitions": 24576,
-      "return": 39.98871248033311,
-      "length": 72.95555555555555,
-      "clear_pct": 100.0,
-      "death_pct": 0.0
+      "return": -16.517596407189515,
+      "length": 89.4969696969697,
+      "clear_pct": 15.789473684210526,
+      "death_pct": 47.36842105263158
     },
     {
       "update": 7,
       "transitions": 28672,
-      "return": 13.965250382609401,
-      "length": 157.9787234042553,
-      "clear_pct": 2.0833333333333335,
-      "death_pct": 0.0
+      "return": -15.51877102226019,
+      "length": 94.57,
+      "clear_pct": 0.0,
+      "death_pct": 6.730769230769231
     },
     {
       "update": 8,
       "transitions": 32768,
-      "return": 14.810359873519038,
-      "length": 154.3774834437086,
-      "clear_pct": 70.0,
-      "death_pct": 0.0
+      "return": -14.827165735512972,
+      "length": 92.915,
+      "clear_pct": 6.666666666666667,
+      "death_pct": 26.666666666666668
     },
     {
       "update": 9,
       "transitions": 36864,
-      "return": 14.604304164648056,
-      "length": 155.1453488372093,
-      "clear_pct": 28.571428571428573,
-      "death_pct": 0.0
+      "return": -14.196747166961432,
+      "length": 92.44,
+      "clear_pct": 10.526315789473685,
+      "death_pct": 10.526315789473685
     },
     {
       "update": 10,
       "transitions": 40960,
-      "return": 15.264797415464155,
-      "length": 153.3494623655914,
-      "clear_pct": 64.28571428571429,
-      "death_pct": 0.0
+      "return": -13.295717979166657,
+      "length": 93.925,
+      "clear_pct": 4.040404040404041,
+      "death_pct": 7.070707070707071
     },
     {
       "update": 11,
       "transitions": 45056,
-      "return": 15.436333392259371,
-      "length": 153.1761658031088,
-      "clear_pct": 57.142857142857146,
-      "death_pct": 0.0
+      "return": -12.961986670736223,
+      "length": 92.63,
+      "clear_pct": 6.25,
+      "death_pct": 18.75
     },
     {
       "update": 12,
       "transitions": 49152,
-      "return": 15.734809921546416,
-      "length": 152.94444444444446,
-      "clear_pct": 80.0,
-      "death_pct": 0.0
+      "return": -13.013939689639956,
+      "length": 92.37,
+      "clear_pct": 16.666666666666668,
+      "death_pct": 11.11111111111111
     },
     {
       "update": 13,
       "transitions": 53248,
-      "return": 8.003802516162395,
-      "length": 178.7,
-      "clear_pct": 7.317073170731708,
-      "death_pct": 0.0
+      "return": -12.725408775005489,
+      "length": 95.9,
+      "clear_pct": 1.098901098901099,
+      "death_pct": 2.197802197802198
     },
     {
       "update": 14,
       "transitions": 57344,
-      "return": 9.469322430491447,
-      "length": 172.18,
-      "clear_pct": 53.333333333333336,
-      "death_pct": 0.0
+      "return": -13.001303113047033,
+      "length": 95.485,
+      "clear_pct": 0.0,
+      "death_pct": 4.545454545454546
     },
     {
       "update": 15,
       "transitions": 61440,
-      "return": 11.322982096970081,
-      "length": 166.145,
-      "clear_pct": 39.130434782608695,
-      "death_pct": 0.0
+      "return": -12.324893471840769,
+      "length": 95.345,
+      "clear_pct": 0.0,
+      "death_pct": 5.555555555555555
     },
     {
       "update": 16,
       "transitions": 65536,
-      "return": 12.597621715664864,
-      "length": 160.755,
-      "clear_pct": 39.130434782608695,
-      "death_pct": 0.0
+      "return": -10.44105506569147,
+      "length": 98.095,
+      "clear_pct": 1.1764705882352942,
+      "death_pct": 5.882352941176471
     },
     {
       "update": 17,
       "transitions": 69632,
-      "return": 11.933901472091675,
-      "length": 164.225,
-      "clear_pct": 44.44444444444444,
-      "death_pct": 0.0
+      "return": -9.752851416766644,
+      "length": 97.255,
+      "clear_pct": 3.8461538461538463,
+      "death_pct": 15.384615384615385
     },
     {
       "update": 18,
       "transitions": 73728,
-      "return": 12.986881632506847,
-      "length": 161.62,
-      "clear_pct": 63.63636363636363,
-      "death_pct": 0.0
+      "return": -10.011492842435837,
+      "length": 96.52,
+      "clear_pct": 10.526315789473685,
+      "death_pct": 10.526315789473685
     },
     {
       "update": 19,
       "transitions": 77824,
-      "return": 9.660861485302448,
-      "length": 170.515,
-      "clear_pct": 9.523809523809524,
-      "death_pct": 0.0
+      "return": -8.652262467443943,
+      "length": 96.93,
+      "clear_pct": 1.1764705882352942,
+      "death_pct": 7.0588235294117645
     },
     {
       "update": 20,
       "transitions": 81920,
-      "return": 10.269201183319092,
-      "length": 168.3,
-      "clear_pct": 21.428571428571427,
-      "death_pct": 0.0
+      "return": -8.727421859502792,
+      "length": 95.035,
+      "clear_pct": 13.333333333333334,
+      "death_pct": 6.666666666666667
     },
     {
       "update": 21,
       "transitions": 86016,
-      "return": 11.618700694441795,
-      "length": 164.425,
-      "clear_pct": 23.076923076923077,
-      "death_pct": 0.0
+      "return": -8.120987830907106,
+      "length": 93.435,
+      "clear_pct": 25.0,
+      "death_pct": 10.0
     },
     {
       "update": 22,
       "transitions": 90112,
-      "return": 12.345240457653999,
-      "length": 161.51,
-      "clear_pct": 40.0,
-      "death_pct": 0.0
+      "return": -7.1372180795669555,
+      "length": 95.085,
+      "clear_pct": 2.5316455696202533,
+      "death_pct": 5.063291139240507
     },
     {
       "update": 23,
       "transitions": 94208,
-      "return": 11.199820603430272,
-      "length": 167.305,
-      "clear_pct": 36.0,
-      "death_pct": 0.0
+      "return": -6.979258162379264,
+      "length": 95.12,
+      "clear_pct": 3.7037037037037037,
+      "death_pct": 7.407407407407407
     },
     {
       "update": 24,
       "transitions": 98304,
-      "return": 11.29474076807499,
-      "length": 166.385,
-      "clear_pct": 42.857142857142854,
+      "return": -6.486272225379944,
+      "length": 95.12,
+      "clear_pct": 0.0,
       "death_pct": 0.0
     }
   ],
-  "real_baseline": 1.4868648648648883
+  "real_baseline": 20.415708333333324
 }
