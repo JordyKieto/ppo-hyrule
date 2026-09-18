@@ -6,6 +6,9 @@ from zelda_rl.fleet_link import heartbeats
 exp, world = sys.argv[1], int(sys.argv[2])
 last_reported, seen_ranks, first = 0, set(), True
 consensus, odd, lag_warned = set(), {}, {}
+logfile = Path(f"runs/fleet/gohma_v10_watch.log")
+logfile.parent.mkdir(parents=True, exist_ok=True)
+
 while True:
     try:
         hbs = heartbeats(exp)
@@ -54,16 +57,10 @@ while True:
                 return sum(vals) / len(vals) if vals else float("nan")
             sps = sum(h.get("env_steps_per_sec", 0) or 0 for h in ranks.values())
             if any("defeat_rate" in h for h in ranks.values()):
-                print(f"fleet update {top_upd} (slowest {upd}): defeat {f('defeat_rate'):.0%} bossDmg {f('boss_damage'):.2f} "
-                      f"hpEnd {f('boss_hp_end'):.1f} seedStuns {f('seed_stuns'):.2f} nutStuns {f('nut_stuns'):.2f} "
-                      f"seeds {f('seeds_fired'):.1f} larvaKills {f('larva_kills'):.2f} death {f('death_rate'):.0%} "
-                      f"hpLost {f('hp_lost_hearts'):.2f} return {f('return'):.1f} | fleet {sps:.0f} env steps/s | hash {hashes}", flush=True)
-                continue
-            if any("defeat_rate" in h for h in ranks.values()):
-                print(f"fleet update {top_upd} (slowest {upd}): defeat {f('defeat_rate'):.0%} bossDmg {f('boss_damage'):.2f} "
-                      f"hpEnd {f('boss_hp_end'):.1f} seedStuns {f('seed_stuns'):.2f} nutStuns {f('nut_stuns'):.2f} "
-                      f"seeds {f('seeds_fired'):.1f} larvaKills {f('larva_kills'):.2f} death {f('death_rate'):.0%} "
-                      f"hpLost {f('hp_lost_hearts'):.2f} return {f('return'):.1f} | fleet {sps:.0f} env steps/s | hash {hashes}", flush=True)
+                line = f"fleet update {top_upd} (slowest {upd}): defeat {f('defeat_rate'):.0%} bossDmg {f('boss_damage'):.2f} hpEnd {f('boss_hp_end'):.1f} seedStuns {f('seed_stuns'):.2f} nutStuns {f('nut_stuns'):.2f} seeds {f('seeds_fired'):.1f} larvaKills {f('larva_kills'):.2f} death {f('death_rate'):.0%} hpLost {f('hp_lost_hearts'):.2f} return {f('return'):.1f} | fleet {sps:.0f} env steps/s | hash {hashes}"
+                with open(logfile, "a") as lf:
+                    lf.write(line + "\n")
+                print(line, flush=True)
                 continue
             if any("kill_frac" in h for h in ranks.values()):
                 print(f"fleet update {top_upd} (slowest {upd}): succ {f('success_rate'):.0%} kills {f('kills'):.2f} kill% {f('kill_frac'):.0%} "

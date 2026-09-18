@@ -1,0 +1,128 @@
+{
+  "checkpoint": "checkpoints/bc/bc-decode-final.pt",
+  "split": {
+    "val_slots": [
+      7,
+      9
+    ],
+    "tune_slots": [
+      4,
+      8
+    ],
+    "train_slots": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      10
+    ]
+  },
+  "events": {
+    "damage": {
+      "HP-drop probability": {
+        "f1": 0.8333333333333334,
+        "precision": 0.78125,
+        "recall": 0.8928571428571429,
+        "tp": 25,
+        "fp": 7,
+        "fn": 3,
+        "ap": 0.8870098758891174,
+        "threshold": 0.9447505474090576,
+        "true_events": 28
+      },
+      "hit-state entry": {
+        "f1": 0.6538461538461539,
+        "precision": 0.7083333333333334,
+        "recall": 0.6071428571428571,
+        "tp": 17,
+        "fp": 7,
+        "fn": 11,
+        "ap": 0.5230865759268488,
+        "threshold": 0.6944295763969421,
+        "true_events": 28
+      },
+      "hit-entry x HP-drop": {
+        "f1": 0.68,
+        "precision": 0.7727272727272727,
+        "recall": 0.6071428571428571,
+        "tp": 17,
+        "fp": 5,
+        "fn": 11,
+        "ap": 0.7134221101046371,
+        "threshold": 0.6933124661445618,
+        "true_events": 28
+      },
+      "hit-entry + HP-drop": {
+        "f1": 0.8620689655172413,
+        "precision": 0.8333333333333334,
+        "recall": 0.8928571428571429,
+        "tp": 25,
+        "fp": 5,
+        "fn": 3,
+        "ap": 0.8278740092517329,
+        "threshold": 0.9995138645172119,
+        "true_events": 28
+      }
+    },
+    "kill": {
+      "HP->0 probability": {
+        "f1": 0.9444444444444444,
+        "precision": 1.0,
+        "recall": 0.8947368421052632,
+        "tp": 17,
+        "fp": 0,
+        "fn": 2,
+        "ap": 0.8947668241090371,
+        "threshold": 0.898364245891571,
+        "true_events": 19
+      },
+      "HP->0 x despawn": {
+        "f1": 0.9444444444444444,
+        "precision": 1.0,
+        "recall": 0.8947368421052632,
+        "tp": 17,
+        "fp": 0,
+        "fn": 2,
+        "ap": 0.8947672061642036,
+        "threshold": 0.2149631530046463,
+        "true_events": 19
+      },
+      "HP->0 x despawn x dying": {
+        "f1": 0.4117647058823529,
+        "precision": 0.4666666666666667,
+        "recall": 0.3684210526315789,
+        "tp": 7,
+        "fp": 8,
+        "fn": 12,
+        "ap": 0.5843005630211838,
+        "threshold": 0.004316556733101606,
+        "true_events": 19
+      }
+    },
+    "link_damage": {
+      "HP-drop probability": {
+        "f1": 0.6285714285714286,
+        "precision": 1.0,
+        "recall": 0.4583333333333333,
+        "tp": 11,
+        "fp": 0,
+        "fn": 13,
+        "ap": 0.8269287645893451,
+        "threshold": 0.9853488802909851,
+        "true_events": 24
+      },
+      "HP-drop x sf1_damaged": {
+        "f1": 0.5,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "tp": 8,
+        "fp": 0,
+        "fn": 16,
+        "ap": 0.6273297497894359,
+        "threshold": 0.9853343367576599,
+        "true_events": 24
+      }
+    }
+  }
+}

@@ -396,6 +396,7 @@ def cmd_launch(a) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
             f.write(script)
             tmp = f.name
+        run(pod, f"mkdir -p {R_REPO}/logs")
         rsync(pod, [tmp], f"{R_REPO}/logs/launch_{run_name}.sh")
         Path(tmp).unlink(missing_ok=True)
         run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; rm -rf {R_REPO}/runs/instances {R_REPO}/runs/*/instances")

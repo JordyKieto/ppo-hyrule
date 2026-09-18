@@ -37,3 +37,6 @@ runpod_fleet/
 recordings/
 *.mp4
 *.mov
+
+# Dolphin per-env scratch dirs from dataset collection (savestate copies; regenerated every run)
+datasets/transitions/**/instances/

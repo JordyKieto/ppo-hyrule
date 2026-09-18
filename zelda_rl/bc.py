@@ -1,0 +1,273 @@
+"""Behaviour cloning over the 335-d structured state, to produce a frozen encoder for a latent world model.
+
+Featuriser: raw state -> (link block, 16 actor rows, actor ids, present mask). Angles become sin/cos, the Link
+state-flags word becomes bits, actor rows get Link-relative geometry and one-hot behaviour state, and lock-on /
+Navi-arrow row indices become per-row flags (so the row ordering carries no information).
+
+Encoder: shared per-row MLP -> masked mean+max pool -> concat Link block -> MLP -> z, mirroring the entity
+encoder of the PPO policy that generated the data (`zelda_rl.ppo.EntityActorCritic._features`).
+
+`encode()` is a pure function of the current state and is the artefact the latent world model consumes:
+z_t = E(s_t), then z_{t+1} = M(z_t, a_t). The demonstrator policies were recurrent, so an optional GRUCell
+sits *after* the encoder in the action head only (h_t = GRU(z_t, h_{t-1}) -> logits); the auxiliary heads
+(reward / terminal / Link HP / live targets) hang off z_t so they stay decodable from a predicted latent.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+LINK_DIM, N_ROWS, ROW_DIM, N_ACTIONS = 15, 16, 20, 63
+N_BABA_STATES = 10
+SF1_BITS = 32
+BABA_ID = 0x0055
+TURNS = 65536.0  # OoT binary angle unit
+
+LINK_F = ["scene", "room", "hp", "hp_cap", "sf1", "pos_x", "pos_y", "pos_z", "yaw", "targeted_row", "arrow_row",
+          "held_item", "seeds", "nuts", "grass"]
+ROW_F = ["present", "id", "hp", "pos_x", "pos_y", "pos_z", "fn_rel", "state_idx", "shape_yaw", "yaw_to_player",
+         "timer", "cat", "params", "yaw", "vel_x", "vel_y", "vel_z", "focus_x", "focus_y", "focus_z"]
+LI = {k: i for i, k in enumerate(LINK_F)}
+RI = {k: i for i, k in enumerate(ROW_F)}
+
+LINK_FEAT_NAMES = (["hp", "hp_frac", "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "held_item", "nuts",
+                    "has_lockon", "has_arrow", "n_present", "n_baba"] + [f"sf1_bit{i}" for i in range(SF1_BITS)])
+ROW_FEAT_NAMES = (["present", "hp", "dx", "dy", "dz", "dist", "log_dist", "bearing_sin", "bearing_cos",
+                   "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "shape_yaw_sin", "shape_yaw_cos",
+                   "yaw_to_player_sin", "yaw_to_player_cos", "timer", "cat", "params", "fn_rel",
+                   "vel_x", "vel_y", "vel_z", "speed", "focus_dx", "focus_dy", "focus_dz",
+                   "is_baba", "is_targeted", "is_arrow"] + [f"state_{i}" for i in range(N_BABA_STATES)])
+LINK_FEAT_DIM, ROW_FEAT_DIM = len(LINK_FEAT_NAMES), len(ROW_FEAT_NAMES)
+
+
+def _sincos(units):
+    a = units.astype(np.float32) * (2.0 * np.pi / TURNS)
+    return np.sin(a), np.cos(a)
+
+
+def featurise(state: np.ndarray) -> dict[str, np.ndarray]:
+    """state: (N, 335) float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16)."""
+    state = np.asarray(state, dtype=np.float32)
+    n = len(state)
+    lk, rows = state[:, :LINK_DIM], state[:, LINK_DIM:].reshape(n, N_ROWS, ROW_DIM)
+    present = (rows[:, :, RI["present"]] > 0.5).astype(np.float32)
+    ids = rows[:, :, RI["id"]].astype(np.int64)
+    is_baba = ((ids == BABA_ID) & (present > 0)).astype(np.float32)
+
+    lpos = lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]]
+    ys, yc = _sincos(lk[:, LI["yaw"]])
+    sf1 = lk[:, LI["sf1"]].astype(np.int64)
+    bits = np.stack([((sf1 >> i) & 1).astype(np.float32) for i in range(SF1_BITS)], 1)
+    link = np.concatenate([
+        lk[:, [LI["hp"]]],
+        (lk[:, [LI["hp"]]] / np.maximum(lk[:, [LI["hp_cap"]]], 1.0)),
+        lpos, ys[:, None], yc[:, None],
+        lk[:, [LI["held_item"], LI["nuts"]]],
+        (lk[:, [LI["targeted_row"]]] >= 0).astype(np.float32),
+        (lk[:, [LI["arrow_row"]]] >= 0).astype(np.float32),
+        present.sum(1, keepdims=True), is_baba.sum(1, keepdims=True),
+        bits,
+    ], 1).astype(np.float32)
+
+    rpos = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
+    d = rpos - lpos[:, None, :]
+    dist = np.linalg.norm(d, axis=2)
+    bs, bc = _sincos(np.arctan2(d[:, :, 0], d[:, :, 2]) * (TURNS / (2 * np.pi)))
+    yws, ywc = _sincos(rows[:, :, RI["yaw"]])
+    sys_, syc = _sincos(rows[:, :, RI["shape_yaw"]])
+    tps, tpc = _sincos(rows[:, :, RI["yaw_to_player"]])
+    vel = rows[:, :, [RI["vel_x"], RI["vel_y"], RI["vel_z"]]]
+    focus = rows[:, :, [RI["focus_x"], RI["focus_y"], RI["focus_z"]]] - rpos
+    idx = np.arange(N_ROWS)[None, :]
+    targeted = (lk[:, [LI["targeted_row"]]] == idx).astype(np.float32)
+    arrow = (lk[:, [LI["arrow_row"]]] == idx).astype(np.float32)
+    sidx = np.clip(rows[:, :, RI["state_idx"]].astype(np.int64), 0, N_BABA_STATES - 1)
+    onehot = np.eye(N_BABA_STATES, dtype=np.float32)[sidx]
+    row_feat = np.concatenate([
+        present[:, :, None], rows[:, :, [RI["hp"]]], d, dist[:, :, None], np.log1p(dist)[:, :, None],
+        bs[:, :, None], bc[:, :, None], rpos,
+        yws[:, :, None], ywc[:, :, None], sys_[:, :, None], syc[:, :, None], tps[:, :, None], tpc[:, :, None],
+        rows[:, :, [RI["timer"], RI["cat"], RI["params"]]], rows[:, :, [RI["fn_rel"]]] * 1e-6,
+        vel, np.linalg.norm(vel, axis=2)[:, :, None], focus,
+        is_baba[:, :, None], targeted[:, :, None], arrow[:, :, None], onehot,
+    ], 2).astype(np.float32)
+    row_feat *= present[:, :, None]  # absent rows carry no stale geometry
+    return {"link": link, "rows": row_feat, "ids": ids * present.astype(np.int64), "mask": present}
+
+
+@dataclass
+class Norm:
+    """Per-field standardisation. Row stats are computed over present rows only."""
+    link_mean: np.ndarray
+    link_std: np.ndarray
+    row_mean: np.ndarray
+    row_std: np.ndarray
+    dead_link: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    dead_row: np.ndarray = field(default_factory=lambda: np.zeros(0))
+
+    @staticmethod
+    def fit(f: dict[str, np.ndarray], eps: float = 1e-6) -> "Norm":
+        lm, ls = f["link"].mean(0), f["link"].std(0)
+        m = f["mask"].reshape(-1) > 0
+        r = f["rows"].reshape(-1, f["rows"].shape[-1])[m]
+        rm, rs = r.mean(0), r.std(0)
+        return Norm(lm, np.where(ls < eps, 1.0, ls).astype(np.float32), rm,
+                    np.where(rs < eps, 1.0, rs).astype(np.float32), (ls < eps), (rs < eps))
+
+    def apply(self, f: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        link = (f["link"] - self.link_mean) / self.link_std
+        rows = ((f["rows"] - self.row_mean) / self.row_std) * f["mask"][:, :, None]
+        return {"link": link.astype(np.float32), "rows": rows.astype(np.float32), "ids": f["ids"], "mask": f["mask"]}
+
+    def state_dict(self):
+        return {k: np.asarray(v) for k, v in self.__dict__.items()}
+
+    @staticmethod
+    def load(d):
+        return Norm(**{k: np.asarray(v) for k, v in d.items()})
+
+
+def _layer(i, o, std=np.sqrt(2)):
+    l = nn.Linear(i, o)
+    nn.init.orthogonal_(l.weight, std)
+    nn.init.zeros_(l.bias)
+    return l
+
+
+class BCNet(nn.Module):
+    """Structured-state encoder + BC action head (optionally recurrent) + auxiliary heads.
+
+    `encode()` is the artefact that matters and never sees the hidden state. `gru=0` gives the feedforward
+    ablation; `gru>0` puts a GRUCell between z and the action logits, as the demonstrator had.
+    """
+
+    AUX = ("reward", "terminal", "hp", "targets")
+
+    def __init__(self, link_dim: int = LINK_FEAT_DIM, row_dim: int = ROW_FEAT_DIM, n_actions: int = N_ACTIONS,
+                 latent: int = 128, hidden: int = 256, row_hidden: int = 96, id_vocab: int = 256, id_emb: int = 8,
+                 layernorm: bool = True, dropout: float = 0.0, gru: int = 0):
+        super().__init__()
+        self.latent = latent
+        self.id_vocab = id_vocab
+        self.hidden_size = gru
+        self.id_embedding = nn.Embedding(id_vocab, id_emb)
+        self.row_enc = nn.Sequential(_layer(row_dim + id_emb, row_hidden), nn.ReLU(),
+                                     _layer(row_hidden, row_hidden), nn.ReLU())
+        self.trunk = nn.Sequential(_layer(link_dim + 2 * row_hidden, hidden), nn.ReLU(), nn.Dropout(dropout),
+                                   _layer(hidden, hidden), nn.ReLU(), nn.Dropout(dropout), _layer(hidden, latent))
+        self.ln = nn.LayerNorm(latent) if layernorm else nn.Identity()
+        self.gru = nn.GRUCell(latent, gru) if gru else None
+        self.action = _layer(gru or latent, n_actions, 0.01)
+        self.aux = nn.ModuleDict({k: _layer(latent, 1, 0.1) for k in self.AUX})
+
+    def encode(self, link, rows, ids, mask):
+        """z_t = E(s_t). Pure function of the current state; no recurrence, no hidden state."""
+        e = self.id_embedding(ids.clamp(0, self.id_vocab - 1))
+        m = mask.unsqueeze(-1)
+        h = self.row_enc(torch.cat([rows, e], -1)) * m
+        n = m.sum(-2).clamp(min=1.0)
+        mean = h.sum(-2) / n
+        mx = (h - (1 - m) * 1e4).max(-2).values * (m.sum(-2) > 0)
+        return self.ln(self.trunk(torch.cat([link, mean, mx], -1)))
+
+    def heads(self, z):
+        return {k: self.aux[k](z).squeeze(-1) for k in self.AUX}
+
+    def init_hidden(self, n: int) -> torch.Tensor:
+        return torch.zeros(n, self.hidden_size)
+
+    def step(self, z, h=None, first=None):
+        """Action logits from a latent. With a GRU head, h is carried and zeroed where `first` = 1."""
+        if self.gru is None:
+            return self.action(z), None
+        if h is None:
+            h = self.init_hidden(z.shape[0])
+        if first is not None:
+            h = h * (1.0 - first.unsqueeze(-1))
+        h = self.gru(z, h)
+        return self.action(h), h
+
+    def forward(self, link, rows, ids, mask, h=None, first=None):
+        """-> (z, action logits, aux dict, next hidden state or None)."""
+        z = self.encode(link, rows, ids, mask)
+        logits, h = self.step(z, h, first)
+        return z, logits, self.heads(z), h
+
+
+# ---------------------------------------------------------------- state decoder
+# The reward is not regressed: it is COMPUTED by CombatTracker.step() from raw state. So the decoder's job is
+# to make exactly the fields that function reads readable from z. Everything below is one of its inputs:
+#   Link      hp, pos (approach / room radius / fall), yaw (facing for shield+block), sf1 bits 7/22/26
+#             (dead / shielding / damaged), targeted row (lock-on)
+#   per row   present (despawn != kill), is_baba (is it a target), hp (damage / kills), pos (distances),
+#             state_idx (stunned|hit -> stun bonus; lunge|pull_back -> block/dodge cycles)
+SF1_DEAD, SF1_SHIELD, SF1_DAMAGED = 7, 22, 26
+DECODE_CONT = ("link_pos", "link_yaw", "row_pos")   # HP is classified, not regressed
+
+
+def decode_targets(state: np.ndarray) -> dict[str, np.ndarray]:
+    """Raw 335-d state -> the fields CombatTracker.step() reads. Continuous fields stay in raw units."""
+    state = np.asarray(state, np.float32)
+    n = len(state)
+    lk, rows = state[:, :LINK_DIM], state[:, LINK_DIM:].reshape(n, N_ROWS, ROW_DIM)
+    sf1 = lk[:, LI["sf1"]].astype(np.int64)
+    ys, yc = _sincos(lk[:, LI["yaw"]])
+    tr = lk[:, LI["targeted_row"]].astype(np.int64)
+    present = (rows[:, :, RI["present"]] > 0.5).astype(np.float32)
+    return {
+        "link_hp": lk[:, [LI["hp"]]],
+        "link_pos": lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]],
+        "link_yaw": np.stack([ys, yc], 1),
+        "link_bits": np.stack([((sf1 >> b) & 1).astype(np.float32)
+                               for b in (SF1_DEAD, SF1_SHIELD, SF1_DAMAGED)], 1),
+        "targeted": np.where((tr >= 0) & (tr < N_ROWS), tr, N_ROWS),          # N_ROWS = "no lock-on"
+        "row_present": present,
+        "row_is_baba": ((rows[:, :, RI["id"]].astype(np.int64) == BABA_ID) & (present > 0)).astype(np.float32),
+        "row_hp": rows[:, :, RI["hp"]],
+        "row_pos": rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]],
+        "row_state": np.clip(rows[:, :, RI["state_idx"]].astype(np.int64), 0, N_BABA_STATES - 1),
+    }
+
+
+LINK_HP_VALUES = (0.0, 8.0, 16.0, 24.0, 32.0, 40.0, 48.0)   # half-heart steps; 48 = 3 full hearts
+ROW_HP_VALUES = (0.0, 1.0, 2.0)                             # Deku Baba has 2 HP
+
+
+def hp_class(v: np.ndarray, values) -> np.ndarray:
+    """Nearest-value class index. HP is discrete, so it is decoded by classification, never regression:
+    a regressed HP rounded to an integer turns numeric jitter into fabricated damage events."""
+    return np.abs(np.asarray(v, np.float32)[..., None] - np.asarray(values, np.float32)).argmin(-1)
+
+
+class StateDecoder(nn.Module):
+    """z -> the raw state variables the reward function reads.
+
+    HP (Link and per row) is CLASSIFIED over its discrete value set; everything continuous stays regression.
+    Per-row fields are decoded through a shared head off a learned per-row query, which is the part of this
+    that can fail: `encode()` pools rows with masked mean+max, so row identity must have survived the pool.
+    """
+
+    def __init__(self, latent: int = 128, hidden: int = 256, row_hidden: int = 96, n_rows: int = N_ROWS,
+                 n_states: int = N_BABA_STATES):
+        super().__init__()
+        self.n_rows, self.n_states, self.row_hidden = n_rows, n_states, row_hidden
+        self.n_link_hp, self.n_row_hp = len(LINK_HP_VALUES), len(ROW_HP_VALUES)
+        self.link = nn.Sequential(_layer(latent, hidden), nn.ReLU(), _layer(hidden, hidden), nn.ReLU())
+        self.link_out = _layer(hidden, self.n_link_hp + 3 + 2 + 3, 0.1)   # hp logits, pos, yaw sin/cos, sf1 bits
+        self.targeted = _layer(latent, n_rows + 1, 0.1)
+        self.row_expand = _layer(latent, n_rows * row_hidden)
+        self.row_mlp = nn.Sequential(nn.ReLU(), _layer(row_hidden, row_hidden), nn.ReLU())
+        self.row_out = _layer(row_hidden, 1 + 1 + self.n_row_hp + 3 + n_states, 0.1)
+
+    def forward(self, z):
+        lo = self.link_out(self.link(z))
+        k = self.n_link_hp
+        r = self.row_out(self.row_mlp(self.row_expand(z).reshape(-1, self.n_rows, self.row_hidden)))
+        j = 2 + self.n_row_hp
+        return {"link_hp": lo[:, :k], "link_pos": lo[:, k:k + 3], "link_yaw": lo[:, k + 3:k + 5],
+                "link_bits": lo[:, k + 5:k + 8], "targeted": self.targeted(z),
+                "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
+                "row_pos": r[..., j:j + 3], "row_state": r[..., j + 3:]}

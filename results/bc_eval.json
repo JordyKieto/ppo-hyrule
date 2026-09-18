@@ -1,0 +1,284 @@
+{
+  "bc-all-gru.pt": {
+    "checkpoint": "checkpoints/bc/bc-all-gru.pt",
+    "latent": 128,
+    "val_slots": [
+      7,
+      9
+    ],
+    "train_metrics": {
+      "top1": 0.05691119283437729,
+      "top3": 0.12765631079673767
+    },
+    "all": {
+      "episodes": 10,
+      "success": 0.7,
+      "death": 0.1,
+      "timeout": 0.2,
+      "kill_frac": 0.6956521739130435,
+      "mean_steps": 626.6,
+      "mean_return": 38.423
+    },
+    "train_slots": {
+      "episodes": 8,
+      "success": 0.875,
+      "death": 0.0,
+      "timeout": 0.125,
+      "kill_frac": 0.8421052631578947,
+      "mean_steps": 551.125,
+      "mean_return": 52.24375
+    },
+    "held_out_slots": {
+      "episodes": 2,
+      "success": 0.0,
+      "death": 0.5,
+      "timeout": 0.5,
+      "kill_frac": 0.0,
+      "mean_steps": 928.5,
+      "mean_return": -16.86
+    },
+    "episodes": [
+      {
+        "slot": 5,
+        "end": "success",
+        "defeated": 1,
+        "targets": 1,
+        "steps": 109,
+        "hp_lost": 16,
+        "ret": 45.71,
+        "held_out": false
+      },
+      {
+        "slot": 3,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 176,
+        "hp_lost": 0,
+        "ret": 84.16,
+        "held_out": false
+      },
+      {
+        "slot": 4,
+        "end": "success",
+        "defeated": 1,
+        "targets": 1,
+        "steps": 217,
+        "hp_lost": 0,
+        "ret": 48.04,
+        "held_out": false
+      },
+      {
+        "slot": 2,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 459,
+        "hp_lost": 8,
+        "ret": 70.1,
+        "held_out": false
+      },
+      {
+        "slot": 8,
+        "end": "success",
+        "defeated": 2,
+        "targets": 2,
+        "steps": 296,
+        "hp_lost": 32,
+        "ret": 55.33,
+        "held_out": false
+      },
+      {
+        "slot": 9,
+        "end": "death",
+        "defeated": 0,
+        "targets": 1,
+        "steps": 57,
+        "hp_lost": 24,
+        "ret": -23.92,
+        "held_out": true
+      },
+      {
+        "slot": 1,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 814,
+        "hp_lost": 8,
+        "ret": 61.67,
+        "held_out": false
+      },
+      {
+        "slot": 10,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 538,
+        "hp_lost": 24,
+        "ret": 63.74,
+        "held_out": false
+      },
+      {
+        "slot": 6,
+        "end": "timeout",
+        "defeated": 0,
+        "targets": 3,
+        "steps": 1800,
+        "hp_lost": 0,
+        "ret": -10.8,
+        "held_out": false
+      },
+      {
+        "slot": 7,
+        "end": "timeout",
+        "defeated": 0,
+        "targets": 3,
+        "steps": 1800,
+        "hp_lost": 0,
+        "ret": -9.8,
+        "held_out": true
+      }
+    ]
+  },
+  "bc-success-ff.pt": {
+    "checkpoint": "checkpoints/bc/bc-success-ff.pt",
+    "latent": 128,
+    "val_slots": [
+      7,
+      9
+    ],
+    "train_metrics": {
+      "top1": 0.057333897799253464,
+      "top3": 0.12423625588417053
+    },
+    "all": {
+      "episodes": 10,
+      "success": 0.7,
+      "death": 0.1,
+      "timeout": 0.2,
+      "kill_frac": 0.7391304347826086,
+      "mean_steps": 590.0,
+      "mean_return": 43.894999999999996
+    },
+    "train_slots": {
+      "episodes": 8,
+      "success": 0.625,
+      "death": 0.125,
+      "timeout": 0.25,
+      "kill_frac": 0.6842105263157895,
+      "mean_steps": 708.75,
+      "mean_return": 39.011250000000004
+    },
+    "held_out_slots": {
+      "episodes": 2,
+      "success": 1.0,
+      "death": 0.0,
+      "timeout": 0.0,
+      "kill_frac": 1.0,
+      "mean_steps": 115.0,
+      "mean_return": 63.43
+    },
+    "episodes": [
+      {
+        "slot": 5,
+        "end": "success",
+        "defeated": 1,
+        "targets": 1,
+        "steps": 235,
+        "hp_lost": 0,
+        "ret": 46.15,
+        "held_out": false
+      },
+      {
+        "slot": 2,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 239,
+        "hp_lost": 0,
+        "ret": 84.03,
+        "held_out": false
+      },
+      {
+        "slot": 3,
+        "end": "death",
+        "defeated": 0,
+        "targets": 3,
+        "steps": 354,
+        "hp_lost": 48,
+        "ret": -27.83,
+        "held_out": false
+      },
+      {
+        "slot": 7,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 225,
+        "hp_lost": 24,
+        "ret": 75.61,
+        "held_out": true
+      },
+      {
+        "slot": 9,
+        "end": "success",
+        "defeated": 1,
+        "targets": 1,
+        "steps": 5,
+        "hp_lost": 0,
+        "ret": 51.25,
+        "held_out": true
+      },
+      {
+        "slot": 1,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 495,
+        "hp_lost": 16,
+        "ret": 70.7,
+        "held_out": false
+      },
+      {
+        "slot": 8,
+        "end": "success",
+        "defeated": 2,
+        "targets": 2,
+        "steps": 353,
+        "hp_lost": 0,
+        "ret": 60.6,
+        "held_out": false
+      },
+      {
+        "slot": 10,
+        "end": "success",
+        "defeated": 3,
+        "targets": 3,
+        "steps": 394,
+        "hp_lost": 8,
+        "ret": 72.9,
+        "held_out": false
+      },
+      {
+        "slot": 4,
+        "end": "timeout",
+        "defeated": 0,
+        "targets": 1,
+        "steps": 1800,
+        "hp_lost": 0,
+        "ret": -4.8,
+        "held_out": false
+      },
+      {
+        "slot": 6,
+        "end": "timeout",
+        "defeated": 1,
+        "targets": 3,
+        "steps": 1800,
+        "hp_lost": 0,
+        "ret": 10.34,
+        "held_out": false
+      }
+    ]
+  }
+}
