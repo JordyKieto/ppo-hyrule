@@ -68,6 +68,9 @@ def main():
     ap.add_argument("--w-decode", type=float, default=1.0)
     ap.add_argument("--w-action", type=float, default=1.0)
     ap.add_argument("--w-hp", type=float, default=3.0, help="weight on the two HP classification losses")
+    ap.add_argument("--w-pos", type=float, default=3.0,
+                    help="weight on Link/actor position regression. Positions need finer resolution than "
+                         "action selection ever required, so BC alone under-determines them.")
     ap.add_argument("--w-transition", type=float, default=20.0, help="extra weight on HP-transition frames")
     ap.add_argument("--class-weight-pow", type=float, default=0.5, help="class weight ~ freq^-p (0 = off)")
     ap.add_argument("--oversample", type=float, default=0.15,
@@ -140,12 +143,12 @@ def main():
         rh = (F.cross_entropy(p["row_hp"].reshape(-1, p["row_hp"].shape[-1]), Yt["row_hp_c"][i].reshape(-1),
                               weight=CW["row_hp"], reduction="none").reshape(m.shape) * m * W["row"][i])
         hp_r = rh.sum() / (m * W["row"][i]).sum().clamp(min=1)
-        L = (F.mse_loss(p["link_pos"], Yt["link_pos"][i]) + F.mse_loss(p["link_yaw"], Yt["link_yaw"][i])
+        L = (a.w_pos * F.mse_loss(p["link_pos"], Yt["link_pos"][i]) + F.mse_loss(p["link_yaw"], Yt["link_yaw"][i])
              + F.binary_cross_entropy_with_logits(p["link_bits"], Yt["link_bits"][i])
              + F.cross_entropy(p["targeted"], Yt["targeted"][i])
              + F.binary_cross_entropy_with_logits(p["row_present"], m)
              + F.binary_cross_entropy_with_logits(p["row_is_baba"], mb))
-        L = L + (((p["row_pos"] - Yt["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
+        L = L + a.w_pos * (((p["row_pos"] - Yt["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
         ce = F.cross_entropy(p["row_state"].reshape(-1, p["row_state"].shape[-1]),
                              Yt["row_state"][i].reshape(-1), reduction="none").reshape(m.shape)
         L = L + (ce * mb).sum() / mb.sum().clamp(min=1) + a.w_hp * (hp_l + hp_r)
@@ -221,6 +224,11 @@ def main():
     out.append({"field": "row_pos (present)", "metric": "MAE", "unit": "world units",
                 "model": float(np.abs(rp - tp).mean()),
                 "baseline": float(np.abs(tp - Y["row_pos"][tr][pres_m[tr]].mean(0)).mean())})
+    for nm, e in [("link_pos", np.linalg.norm(raw("link_pos") - yv["link_pos"], axis=-1)),
+                  ("row_pos (present)", np.linalg.norm(rp - tp, axis=-1))]:
+        for q in (50, 90):
+            out.append({"field": f"{nm} p{q}", "metric": "euclidean err", "unit": "world units",
+                        "model": float(np.percentile(e, q)), "baseline": float("nan")})
     mb = yv["row_is_baba"] > 0.5
     tb = Y["row_state"][tr][Y["row_is_baba"][tr] > 0.5]
     out.append({"field": "row_state (Baba)", "metric": "accuracy", "unit": "majority",
