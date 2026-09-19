@@ -617,3 +617,86 @@ aggregate.** Added to the probe as a standing check.
 3. **Scripted sustained-approach data.** `suicide` walks at the nearest Baba but dies in ~70 steps, so there
    are few long approach trajectories. A shielded-approach scenario (walk in with the shield up, survive) would
    give the sustained closing that room exit got from scripted walkouts.
+
+## 16. Fixing approach and combat: an action-conditioned transition head, and the camera
+
+### The combat audit, alongside the approach audit of §15
+
+Same constant-action sweep, all 63 actions, 120 steps, all 10 start states:
+
+| | max across all actions | available |
+|---|---|---|
+| kills | **0.00** | 3 |
+| damage dealt | **0.70** | 6 (3 Babas × 2 HP) |
+| hearts lost | 1.25 | 3 |
+
+And the damage that appeared came from **Shield** actions (`W+Shield` 0.70), which cannot deal damage in the
+real game. `r_edmg` was paying up to **+0.70 for decode noise**. `r_kill` was 0.00 everywhere. Damage taken
+peaked on actions that also diverged +5819 world units, so it was coupled to garbage rather than to lunges.
+
+Root cause, shared with approach: the reward reads HP and position out of a decoded state whose predictor ties
+the identity. Nothing changes, so the only changes are decode noise — and noise gets billed as combat.
+
+### An aggregate metric was hiding the magnitude error
+
+§14 reported displacement at "1.93× of true". Disaggregated, that mixes two *opposite* errors:
+
+| | dream | real | |
+|---|---|---|---|
+| all frames | 1.76 | 0.93 | 1.93× too **much** (the gate fires when Link should be still) |
+| truly-moving frames | **1.19** | **11.03** | **9.3× too little** (the magnitude is shrunk) |
+
+Same class of mistake as the pooled inverse-dynamics number in §10. Conditional metrics are now standing
+checks in the probe.
+
+### Fix: `TransitionHead(z_t, a_t)`
+
+Two changes, both patterns that already worked here:
+
+- **Condition on the action directly** rather than decoding motion and damage out of `z_{t+1}`. Displacement
+  direction is close to a function of stick and camera; a sword hit is a function of swinging near and facing a
+  Baba. But the action barely survives into the latent (inverse dynamics 0.089 against a 0.220 ceiling), so
+  reading these from `z_{t+1}` routes the quantities that *need* the action through the weakest channel. This
+  is the event-head pattern already in the repo.
+- **Classify, do not regress.** 9.3×-too-small is regression to the conditional mean under uncertainty — the
+  failure that made HP unusable until it was classified (damage F1 0.286 → 0.906). 16 direction sectors
+  (aligned with the 9 stick directions), 8 magnitude bins, a 17-way "which row took damage", and a Link-hit bit.
+
+| | regressed | transition head |
+|---|---|---|
+| step magnitude on moving frames | **0.11×** | **1.02×** (10.92 vs 10.68 units) |
+| direction top-1 | — | 0.532 (chance 0.062) |
+| magnitude top-1 | — | 0.538 (chance 0.125) |
+| **enemy-hit AP** | n/a | **0.4411** vs base 0.0004 = **1103× base** |
+| **Link-hit AP** | n/a | **0.7488** vs base 0.0014 = **535× base** |
+| which row, on hit frames | n/a | 0.882 |
+
+**Reward parity is preserved.** `apply_transition` edits the *state*; `CombatTracker` still computes all 18
+terms from states exactly as the emulator run does. Nothing in the head computes reward.
+
+### `approach` scenario
+
+Close on the nearest Baba with the shield up, then back off and re-close, so trajectories are long. 70
+episodes, 20,627 transitions, 55 deaths. `suicide` also walks in but dies in ~70 steps, which is why the
+dataset had few sustained closing trajectories.
+
+### State v3: the camera, and why approach still failed without it
+
+With magnitude fixed at 1.02× and damage events predictable, the re-audit still showed approach failing —
+best distance closed −18.4 units. The reason is structural, and checking it found a real hole:
+
+- **Camera yaw was in no recorded state**, v1 or v2.
+- **It was never an encoder input** — it existed only as a *decode target*, read from the stored 483-d obs.
+- **The three scripted collections never stored obs at all**, so 122k of 230k frames had no camera. That is
+  the "obs available on 46.6% of frames" line in the training log.
+
+A stick direction in OoT moves Link **relative to the camera**. Without camera yaw the encoder cannot know
+which world direction a held stick produces, which caps direction accuracy at roughly the camera's own
+uncertainty — and camera yaw was itself decoding at 20–36°, right where direction top-1 stalled (0.532 over
+22.5° sectors).
+
+State v3 (363-d) adds `cam_yaw`, `cam_pitch`, `cam_eye` and, in the encoder, **heading relative to the
+camera** — the quantity a held stick direction actually controls. `camera_yaw_sin_cos` was in the original
+PPO's observation, so this **restores parity rather than adding to it**. All four datasets are being
+re-collected as v3; every version only appends, so v1/v2 indices stay valid and the encoder width is a
+constant 132 with zero-filled blocks for older states.
