@@ -1245,3 +1245,53 @@ Current best-known operating points, all at latent 128:
 | trajectory | `w_pos 200`, oversample 50 | damage dead (0%) |
 | a compromise | `w_pos 60` | walking 1.20x, damage 25% |
 | events with position read-only | `w_pos 200` + `--detach-pos` | walking 2.36x, worst trajectory |
+
+## 25. Seed variance is larger than most of the effects reported above
+
+40 training runs varying `--oversample` {10,50,150}, `--w-dpos` {0.5,2,8} and `--w-trans` {0.5,2,8} one lever at
+a time from the baseline (oversample 50, w_dpos 2, w_trans 2), each evaluated on event-rich windows.
+
+**Null result: none of the three levers beats the baseline.** Across 32 exact rank tests the smallest p is
+0.036 at n=3, which is what 32 tests produce by chance.
+
+### The number that matters is the baseline against itself
+
+Re-running the **identical** baseline config at six seeds:
+
+| metric | range across 6 seeds of the SAME config |
+|---|---|
+| damage detection | **0.25 – 0.55** |
+| Baba HP removed | **0.50 – 1.15** |
+| walk trajectory ratio | **1.38x – 3.43x** |
+
+Every alternative setting's mean lands inside that band.
+
+### Consequences for results reported earlier in this document
+
+1. **The section 23 oversampling figures are the lucky seed.** "detection 55%, HP removed 1.15, walk 1.38x" is
+   seed 0, and seed 0 is the best of six seeds on all three metrics simultaneously. The typical `--w-pos 6`
+   model is detection ~0.50, HP ~0.9, **walk ~2.2x**. The oversampling effect itself (0 -> 50) is probably real,
+   because it was far larger than this spread, but the specific numbers should not be quoted.
+2. **The section 24 Pareto frontier needs re-basing.** The headline was `w_pos 200` giving walk 1.06x against
+   `w_pos 6` giving 1.38x. If the typical `w_pos 6` is 2.2x, then either the gap is larger than reported or the
+   `w_pos 200` figure is itself a lucky draw -- both single-seed. The *direction* of the trade-off was
+   reproduced at three w_pos levels and by the detach test, so the trade-off stands; its magnitude does not.
+3. **Single-seed results here actively mislead.** At seed 0, every lever looked like it worked: `w_dpos 8` gave
+   detection 0.80 vs 0.55, `oversample 10` looked like it wrecked trajectory, `oversample 150` looked like it
+   killed detection. All vanished at n=5-6. The sharpest case: `OS150 + WD8` looked at three seeds like the one
+   real win (baseline detection, walk 1.47x, best HP calibration) and at six seeds was detection 0.35, walk
+   1.96x, p=0.24.
+
+### One actionable failure mode
+
+3 of 40 runs produced **exactly** 0.00 detection -- a dead event head, not a weak one -- and two of those three
+were `--w-dpos 0.5`. Do not lower `w_dpos`. Recorded as a failure mode rather than a rate, since 2 of 3 is not
+an established frequency.
+
+### What this means for method
+
+The harness cannot resolve anything smaller than a ~0.30 detection swing at 4 epochs / 20 windows / 1 seed. The
+two levers that did move it (oversampling 0 -> 50, and `w_pos`) had effects far bigger than the spread, which is
+exactly why they were visible at one seed. Further sampling or weighting work is not worth running until
+variance is reduced -- more epochs, seed averaging, or more eval windows per kind -- because no untested lever
+appears to have an effect that large.
