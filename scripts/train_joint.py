@@ -36,7 +36,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, decode_targets,  # noqa: E402
+from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, ROW_HP_VALUES, BCNet, Norm,  # noqa: E402
+                         StateDecoder, decode_targets,
                          featurise, hp_class)
 from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
 
@@ -54,6 +55,17 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--latent", type=int, default=128)
     ap.add_argument("--stride", type=int, default=1)
+    ap.add_argument("--unroll", type=int, default=1,
+                    help="steps to roll the predictor on its OWN output during training. Single-step "
+                         "training is teacher forcing: every input is a real encoder output, so the model "
+                         "is never penalised for error it feeds itself, and it collapses past ~10 steps.")
+    ap.add_argument("--unroll-detach", type=int, default=8,
+                    help="cut the gradient every N unroll steps: the model still consumes its own output "
+                         "for the full length, but backprop depth stays bounded")
+    ap.add_argument("--unroll-decay", type=float, default=0.97,
+                    help="weight step j by decay^j, so late steps inform without dominating")
+    ap.add_argument("--unroll-batch", type=int, default=96,
+                    help="how many of each batch to unroll; cost is linear in unroll length")
     ap.add_argument("--w-decode", type=float, default=1.0)
     ap.add_argument("--w-pred", type=float, default=1.0)
     ap.add_argument("--w-hp", type=float, default=3.0)
@@ -75,10 +87,10 @@ def main():
 
     ref = torch.load(a.ref, weights_only=False, map_location="cpu")
     norm, split = Norm.load(ref["norm"]), ref["split"]
-    meta, state, action, slot, epid = load_many([a.data, *a.extra_data])
+    meta, state, action, slot, epid, obs, has_obs = load_many([a.data, *a.extra_data])
     if a.extra_data:
         print(f"data: {a.data} + {len(a.extra_data)} extra run(s) -> {len(state):,} frames")
-    Y = decode_targets(state)
+    Y = decode_targets(state, obs)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
     Fn = norm.apply(featurise(state))
@@ -105,6 +117,9 @@ def main():
     tr_all = np.where(tr_mask)[0]
     tr = starts(tr_mask, K)
     has_next = np.zeros(len(slot), bool); has_next[tr] = True
+    deep = starts(tr_mask, K * a.unroll)            # frames with the whole unroll window inside an episode
+    print(f"unroll {a.unroll} (detach every {a.unroll_detach}, decay {a.unroll_decay}): "
+          f"{len(deep):,} usable starts")
     tu = starts(np.isin(slot, list(tune)), K)
     te = starts(np.isin(slot, list(test)), 10 * K)
     print(f"stride {K} ({K*100} ms) | train {len(tr):,} tune {len(tu):,} test {len(te):,} | "
@@ -120,13 +135,24 @@ def main():
     params = list(enc.parameters()) + list(dec.parameters()) + list(pred.parameters())
     opt = torch.optim.Adam(params, lr=a.lr)
 
+    from zelda_rl.combat import BABA_STATES
+    HIDDEN = BABA_STATES.index("hidden")
+    VIS = torch.from_numpy((Y["row_state"] != HIDDEN).astype(np.float32))
+    OBM = torch.from_numpy(has_obs.astype(np.float32))      # exit runs were saved without obs
+    V2M = torch.from_numpy(Y["v2_mask"].astype(np.float32))  # v1 episodes carry no Link body/collision state
+    MELEE = torch.from_numpy(Y["link_melee"].astype(np.int64))
+    print(f"obs available on {has_obs.mean():.1%} of frames (camera yaw + Link velocity come from it)")
+    pos = Y["link_sf1"][tr_all].mean(0)
+    SF1_PW = torch.from_numpy(((1 - pos) / np.maximum(pos, 1e-4)).clip(1, 50).astype(np.float32))
     pres_m = Y["row_present"] > 0.5
     def cw(y, n, mask=None):
         c = np.bincount(y[tr_all].ravel() if mask is None else y[tr_all][mask[tr_all]].ravel(),
                         minlength=n).astype(float)
         w = (c.sum() / np.maximum(c, 1)) ** 0.5
         return torch.tensor((w / w.mean()).astype(np.float32))
-    CW = {"link_hp": cw(Y["link_hp_c"], 7), "row_hp": cw(Y["row_hp_c"], 3, pres_m)}
+    CW = {"link_hp": cw(Y["link_hp_c"], 7), "row_hp": cw(Y["row_hp_c"], 3, pres_m),
+          # a swing is live in a small minority of frames, so weight the melee classes by frequency
+          "link_melee": cw(Y["link_melee"], len(MELEE_STATE_VALUES), Y["v2_mask"] > 0)}
     # Leaving the room is a scene change and it is the rarest label in the data -- 27 frames in 154,805.
     # Unweighted it is simply never predicted, and the -20 terminal can never fire inside a dream.
     n_sc = np.bincount(Y["scene"][tr_all], minlength=2).astype(float)
@@ -159,6 +185,32 @@ def main():
         # live-Baba count as one head: the timeout penalty and the clear condition both read it, and a
         # single 4-way choice is far steadier than counting 16 independent per-row predictions.
         L = L + F.cross_entropy(p["baba_count"], Yt["baba_count"][i])
+        # Orientation and timing -- the lunge telegraph. The facing angle is only defined while the Baba
+        # is OUT of the ground: 64.7% of Baba frames are `hidden`, where shape_yaw is arbitrary and the
+        # angle is near-uniform (R=0.12). Fitting it there is fitting noise, and it swamped the 35% that
+        # carries signal (R=0.84-0.99 in every visible state).
+        vis = mb * VIS[i]
+        for k, w in (("row_facing_link", 1.0), ("link_facing_target", 1.0)):
+            L = L + w * (((p[k] - Yt[k][i]) ** 2).mean(-1) * vis).sum() / vis.sum().clamp(min=1)
+        for k, w in (("row_timer", 1.0), ("row_vel", 0.3)):
+            L = L + w * (((p[k] - Yt[k][i]) ** 2).mean(-1) * mb).sum() / mb.sum().clamp(min=1)
+        L = L + F.binary_cross_entropy_with_logits(p["link_sf1"], Yt["link_sf1"][i], pos_weight=SF1_PW)
+        om = OBM[i]                                          # camera / velocity only where obs exists
+        for k in ("cam_yaw", "link_vel"):
+            L = L + (((p[k] - Yt[k][i]) ** 2).mean(-1) * om).sum() / om.sum().clamp(min=1)
+        # v2: what Link is DOING and TOUCHING. Masked to v2 episodes, so a v1 episode contributes nothing
+        # to these heads rather than teaching them zeros.
+        vm = V2M[i]
+        if float(vm.sum()) > 0:
+            den = vm.sum().clamp(min=1)
+            for k, w in (("link_speed", 1.0), ("link_wall_yaw", 1.0), ("link_floor_dy", 0.5),
+                         ("link_shape_yaw", 1.0), ("link_parallel_yaw", 0.5), ("link_fall", 0.3)):
+                L = L + w * (((p[k] - Yt[k][i]) ** 2).mean(-1) * vm).sum() / den
+            for k in ("link_bg", "link_ztarget", "link_airborne"):
+                bce = F.binary_cross_entropy_with_logits(p[k], Yt[k][i], reduction="none")
+                L = L + (bce.mean(-1) * vm).sum() / den
+            ce_m = F.cross_entropy(p["link_melee"], MELEE[i], weight=CW["link_melee"], reduction="none")
+            L = L + (ce_m * vm).sum() / den
         L = L + a.w_scene * F.cross_entropy(p["scene"], Yt["scene"][i], weight=CW["scene"])
         L = L + 0.1 * F.cross_entropy(p["room"], Yt["room"][i])
         L = L + a.w_hp * (hp_l + rh.sum() / (m * wr[i]).sum().clamp(min=1))
@@ -176,19 +228,29 @@ def main():
             i = torch.from_numpy(perm[s:s + a.batch])
             z = E(i)
             ld = decode_loss(dec(z), i)                          # every frame, exit frames included
-            nx = torch.from_numpy(has_next[i.numpy()])           # predictor: only frames with a successor
-            if nx.any():
-                zi = i[nx]
-                zp = z[nx]
-                with torch.no_grad():
-                    zt = E(zi + K)                               # stop-gradient: no smoothing the target
-                zh = pred(torch.cat([zp, A[zi]], -1))
-                if a.whiten and mu is not None:
-                    lp = F.mse_loss((zh - mu) / sd, (zt - mu) / sd)
-                else:
-                    lp = F.mse_loss(zh, zt)
+            if a.unroll > 1:
+                zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)), replace=False))
+                zz, lp, wsum = E(zi), torch.zeros(()), 0.0
+                for j in range(a.unroll):
+                    zz = pred(torch.cat([zz, A[zi + j * K]], -1))
+                    with torch.no_grad():
+                        zt = E(zi + (j + 1) * K)                 # stop-gradient target, as in JEPA
+                    w = a.unroll_decay ** j
+                    lp = lp + w * F.mse_loss(zz, zt)
+                    wsum += w
+                    if a.unroll_detach and (j + 1) % a.unroll_detach == 0:
+                        zz = zz.detach()                         # bound backprop depth, keep the exposure
+                lp = lp / max(wsum, 1e-9)
             else:
-                lp = torch.zeros((), requires_grad=True)
+                nx = torch.from_numpy(has_next[i.numpy()])
+                if nx.any():
+                    zi, zp = i[nx], z[nx]
+                    with torch.no_grad():
+                        zt = E(zi + K)
+                    zh = pred(torch.cat([zp, A[zi]], -1))
+                    lp = F.mse_loss(zh, zt)
+                else:
+                    lp = torch.zeros((), requires_grad=True)
             loss = a.w_decode * ld + a.w_pred * lp
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(params, 1.0)
@@ -229,6 +291,13 @@ def main():
     with torch.no_grad():
         p_ho = dec(E(torch.from_numpy(ho)))
     sc_ho = p_ho["scene"].argmax(-1).numpy(); sc_ho_true = Y["scene"][ho]
+    mbt = Y["row_is_baba"][te] > 0.5
+    ang = lambda a_, b_: float(np.degrees(np.abs(np.arctan2(a_[..., 0], a_[..., 1])
+                                                 - np.arctan2(b_[..., 0], b_[..., 1]))).clip(0, 360).mean())
+    vist = mbt & (Y["row_state"][te] != HIDDEN)
+    face_err = ang(p["row_facing_link"].numpy()[vist], Y["row_facing_link"][te][vist])
+    lface_err = ang(p["link_facing_target"].numpy()[vist], Y["link_facing_target"][te][vist])
+    timer_mae = float(np.abs(p["row_timer"].numpy()[mbt] - Y["row_timer"][te][mbt]).mean() * 100)
     sc_pred = p["scene"].argmax(-1).numpy(); sc_true = Y["scene"][te]
     fields = {"scene_recall": float((sc_pred[sc_true != 0] != 0).mean()) if (sc_true != 0).any() else float("nan"),
               "scene_acc": float((sc_pred == sc_true).mean()),
@@ -246,6 +315,24 @@ def main():
     print(f"decode: LEFT-ROOM on {len(exit_eval_ep)} held-out exit episodes -> "
           f"recall {ho_rec:.3f} on {int((sc_ho_true != 0).sum())} exit frames, "
           f"false-positive rate {ho_fp:.5f} on the {int((sc_ho_true == 0).sum()):,} in-room frames")
+    from zelda_rl.bc import SF1_NAMED
+    from zelda_rl.obs import SF1_BITS
+    nm = {b: n for n, b in SF1_BITS}
+    sp = (p["link_sf1"].numpy() > 0); stt = Y["link_sf1"][te] > 0.5
+    parts = [f"{nm.get(b, b)} {float((sp[:, j] == stt[:, j]).mean()):.3f}"
+             f"/{float(sp[stt[:, j], j].mean()) if stt[:, j].any() else float('nan'):.2f}"
+             for j, b in enumerate(SF1_NAMED) if stt[:, j].mean() > 0.001]
+    ov = has_obs[te]
+    if ov.any():
+        cy = p["cam_yaw"].numpy()[ov]; cyt = Y["cam_yaw"][te][ov]
+        _d = np.degrees(np.abs(np.arctan2(cy[:, 0], cy[:, 1]) - np.arctan2(cyt[:, 0], cyt[:, 1])))
+        cerr = float(np.minimum(_d, 360 - _d).mean())        # wrap: an angular error is at most 180 deg
+        verr = float(np.abs(p["link_vel"].numpy()[ov] - Y["link_vel"][te][ov]).mean())
+        print(f"        CAMERA/MOTION: camera yaw err {cerr:.1f} deg | Link velocity MAE {verr:.3f} "
+              f"(obs units, |v| up to 4)")
+    print(f"        LINK STATE (acc/recall): {'  '.join(parts)}")
+    print(f"        TELEGRAPH (visible Babas only, {int(vist.sum()):,} frames): baba-faces-Link "
+          f"{face_err:.1f} deg | Link-faces-baba {lface_err:.1f} deg | timer MAE {timer_mae:.1f}")
     print(f"        baba_count {fields['baba_count']:.4f} (majority {bc_major:.4f})  "
           f"link_hp {fields['link_hp']:.4f}  row_hp {fields['row_hp']:.4f}  "
           f"row_state {fields['row_state']:.4f}  link_pos MAE {fields['link_pos_mae']:.2f}")

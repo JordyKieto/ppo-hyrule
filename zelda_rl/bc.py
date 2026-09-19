@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from zelda_rl.combat import BG_BITS, BG_WALL
+from zelda_rl.combat import BG_BITS, BG_GROUND, BG_WALL
 from zelda_rl.state_layout import (ENEMY_FIELDS as ROW_F, LINK_FIELDS_V1, LINK_FIELDS_V2, N_ROWS, ROW_DIM,
                                   link_dim)
 
@@ -329,7 +329,46 @@ def decode_targets(state: np.ndarray, obs: np.ndarray | None = None) -> dict[str
     if obs is not None:
         out["cam_yaw"] = np.asarray(obs[:, OBS_CAM_YAW], np.float32)
         out["link_vel"] = np.asarray(obs[:, OBS_LINK_VEL], np.float32)
+    out.update(_v2_targets(lk, v2, n))
     return out
+
+
+def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
+    """v2 decoder targets: what Link is doing and what he is touching.
+
+    Emitted for v1 states too, zero-filled, alongside `v2_mask`. The trainer multiplies these losses by the
+    mask the same way it already does for the obs-only camera and velocity heads, so a v1 episode
+    contributes nothing to them instead of teaching zeros.
+    """
+    if not v2:
+        z = lambda *s: np.zeros((n, *s), np.float32)                        # noqa: E731
+        return {"v2_mask": z(), "link_bg": z(len(BG_BITS)),
+                "link_melee": np.zeros(n, np.int64) + MELEE_STATE_VALUES.index(0),
+                "link_speed": z(1), "link_wall_yaw": z(2), "link_floor_dy": z(1), "link_shape_yaw": z(2),
+                "link_parallel_yaw": z(2), "link_fall": z(1), "link_ztarget": z(1), "link_airborne": z(1)}
+    col = lambda k: lk[:, LI[k]]                                            # noqa: E731
+    bg = col("bg_flags").astype(np.int64)
+    wall = ((bg >> BG_WALL) & 1).astype(np.float32)
+    wys, wyc = _sincos(col("wall_yaw"))
+    sys_, syc = _sincos(col("shape_yaw"))
+    pys, pyc = _sincos(col("parallel_yaw"))
+    ms = np.abs(col("melee_state").astype(np.int64)[:, None]
+                - np.asarray(MELEE_STATE_VALUES)).argmin(-1)
+    return {
+        "v2_mask": np.ones(n, np.float32),
+        "link_bg": np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),
+        "link_melee": ms.astype(np.int64),
+        "link_speed": (col("speed") / 10.0)[:, None],
+        # masked by contact: with no wall touched the field is stale, which is the mistake that put the
+        # Baba-facing head at 103 degrees until the same masking took it to 5.
+        "link_wall_yaw": np.stack([wys * wall, wyc * wall], 1),
+        "link_floor_dy": ((col("floor_height") - col("pos_y")) / 100.0)[:, None],
+        "link_shape_yaw": np.stack([sys_, syc], 1),
+        "link_parallel_yaw": np.stack([pys, pyc], 1),
+        "link_fall": (np.clip(col("fall_distance"), -100, 2000) / 100.0)[:, None],
+        "link_ztarget": (col("ztarget_timer") != 0).astype(np.float32)[:, None],
+        "link_airborne": (1.0 - ((bg >> BG_GROUND) & 1)).astype(np.float32)[:, None],
+    }
 
 
 LINK_HP_VALUES = (0.0, 8.0, 16.0, 24.0, 32.0, 40.0, 48.0)   # half-heart steps; 48 = 3 full hearts
@@ -339,6 +378,12 @@ N_BABA_COUNT = 4                                            # 0..3 live Babas
 # state; only 3 were ever decoded, so jumping / freefall / z_targeting were never checked to survive z.
 SF1_NAMED = [6, 7, 10, 11, 13, 14, 15, 16, 18, 19, 21, 26, 27, 29]
 MAX_ROOM = 8                                                # room ids seen in this scene
+MELEE_STATE_VALUES = (-1, 0, 1)                             # meleeWeaponState seen live; 0 = no swing
+N_MELEE_STATES = len(MELEE_STATE_VALUES)
+# The v2 body head is one linear layer split into named pieces, so adding a field is one entry here.
+V2_BODY = ("link_speed", "link_wall_yaw", "link_floor_dy", "link_shape_yaw", "link_parallel_yaw",
+           "link_fall", "link_ztarget", "link_airborne")
+V2_BODY_SPLIT = (1, 2, 1, 2, 2, 1, 1, 1)
 
 
 def hp_class(v: np.ndarray, values) -> np.ndarray:
@@ -369,6 +414,12 @@ class StateDecoder(nn.Module):
         self.link_sf1 = _layer(latent, len(SF1_NAMED), 0.1)
         self.cam_yaw = _layer(latent, 2, 0.1)          # camera yaw sin/cos: Z-target recentres it
         self.link_vel = _layer(latent, 3, 0.1)         # Link's momentum, which a jump attack depends on
+        # --- v2: what Link is DOING and what he is TOUCHING. Without these the dream cannot tell a jump
+        # from a roll from a whiffed swing, which is why an action left almost no trace in the latent.
+        self.link_bg = _layer(latent, len(BG_BITS), 0.1)        # ground / wall / ceiling / water / crushed
+        self.link_melee = _layer(latent, N_MELEE_STATES, 0.1)   # a sword swing is live
+        self.link_body = _layer(latent, 11, 0.1)   # speed, wall_yaw(2), floor_dy, shape_yaw(2),
+        #                                            parallel_yaw(2), fall_distance, ztarget, airborne
         self.row_expand = _layer(latent, n_rows * row_hidden)
         self.row_mlp = nn.Sequential(nn.ReLU(), _layer(row_hidden, row_hidden), nn.ReLU())
         # present, is_baba, hp, pos(3), state, facing-link sin/cos, timer, vel(3), link-facing sin/cos
@@ -383,6 +434,8 @@ class StateDecoder(nn.Module):
                 "link_bits": lo[:, k + 5:k + 8], "targeted": self.targeted(z),
                 "scene": self.scene(z), "room": self.room(z), "baba_count": self.baba_count(z),
                 "link_sf1": self.link_sf1(z), "cam_yaw": self.cam_yaw(z), "link_vel": self.link_vel(z),
+                "link_bg": self.link_bg(z), "link_melee": self.link_melee(z),
+                **dict(zip(V2_BODY, self.link_body(z).split(V2_BODY_SPLIT, dim=-1))),
                 "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
                 "row_pos": r[..., j:j + 3],
                 "row_state": r[..., j + 3:j + 3 + self.n_states],
