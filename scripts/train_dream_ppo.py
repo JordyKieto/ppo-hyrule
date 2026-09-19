@@ -37,7 +37,8 @@ from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
 from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
 from zelda_rl.bc import StateDecoder  # noqa: E402
 from zelda_rl.combat import CombatConfig, CombatTracker  # noqa: E402
-from zelda_rl.dream_state import MEM_DIM, DreamPolicy, decoded_to_states, memory_features  # noqa: E402
+from zelda_rl.dream_state import (MEM_DIM, DreamPolicy, DreamTracker, build_seeds,  # noqa: E402
+                                  decoded_states_from_raw, decoded_to_states, memory_features)
 from zelda_rl.runlog import RunLogger  # noqa: E402
 
 
@@ -50,37 +51,52 @@ class Dream:
     punish stalling and escaping.
     """
 
-    def __init__(self, pred, dec, scale, starts, n_actions, max_steps, combat_cfg):
-        self.pred, self.dec, self.scale, self.starts = pred, dec, scale, starts
+    def __init__(self, pred, dec, scale, seed_z, seed_trk, n_actions, max_steps, combat_cfg,
+                 exit_persist=3):
+        self.pred, self.dec, self.scale = pred, dec, scale
+        self.seed_z, self.seed_trk = seed_z, seed_trk       # latent + the tracker replayed to that frame
         self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
+        self.exit_persist = exit_persist
 
     @torch.no_grad()
     def _states(self, z):
         return decoded_to_states(self.dec(z), self.scale)
 
+    def _pick(self, n, rng):
+        """A seed is a real frame plus the real tracker replayed up to it -- kills already made, lock-ons
+        already spent, time since the last hit. Without that, a mid-fight seed would tell the policy the
+        fight had not started and pay again for progress already made."""
+        j = rng.integers(0, len(self.seed_z), n)
+        return self.seed_z[torch.from_numpy(j)].clone(), [self.seed_trk[k].fresh(self.max_steps) for k in j]
+
     @torch.no_grad()
     def reset(self, n, rng):
-        self.z = self.starts[torch.from_numpy(rng.integers(0, len(self.starts), n))].clone()
+        self.z, self.trk = self._pick(n, rng)
+        self.out_run = np.zeros(n, np.int32)
         self.cur = self._states(self.z)
-        self.trk = [CombatTracker(self.ccfg) for _ in range(n)]
-        for i, t in enumerate(self.trk):
-            t.reset(self.cur[i], self.max_steps)
         return self.z
 
     @torch.no_grad()
     def reset_at(self, k, rng):
-        self.z[k] = self.starts[torch.from_numpy(rng.integers(0, len(self.starts), len(k)))]
-        fresh = self._states(self.z[k])
+        zz, tt = self._pick(len(k), rng)
+        self.z[k] = zz
+        st = self._states(zz)
+        self.out_run[k.numpy()] = 0
         for n, i in enumerate(k.tolist()):
-            self.cur[i] = fresh[n]
-            self.trk[i] = CombatTracker(self.ccfg)
-            self.trk[i].reset(fresh[n], self.max_steps)
+            self.cur[i], self.trk[i] = st[n], tt[n]
 
     @torch.no_grad()
     def step(self, a):
         self.z = self.pred(torch.cat([self.z, F.one_hot(a, self.NA).float()], -1))
         nxt = self._states(self.z)
         n = len(nxt)
+        # Leaving the room is permanent, so require the scene flag to persist. The head's per-frame
+        # false-positive rate is 0.0055, which over an ~85-step episode compounds to a ~38% chance of at
+        # least one spurious -20 exit; three consecutive frames drops that to ~1e-5.
+        for i, st_ in enumerate(nxt):
+            self.out_run[i] = self.out_run[i] + 1 if st_.scene != 0 else 0
+            if st_.scene != 0 and self.out_run[i] < self.exit_persist:
+                st_.scene = 0
         r = torch.zeros(n); done = torch.zeros(n, dtype=torch.bool)
         dead = torch.zeros(n, dtype=torch.bool); cleared = torch.zeros(n, dtype=torch.bool)
         left = torch.zeros(n, dtype=torch.bool); kills = torch.zeros(n)
@@ -114,7 +130,10 @@ def main():
     ap.add_argument("--transitions", type=int, default=100_000)
     ap.add_argument("--envs", type=int, default=128)
     ap.add_argument("--steps", type=int, default=120, help="rollout length; must be >= chunk")
-    ap.add_argument("--max-steps", type=int, default=100, help="dream episode cap")
+    ap.add_argument("--max-steps", type=int, default=1800,
+                    help="dream episode cap, in steps. The real env uses 1800 (180 s at 10 Hz); 72%% of "
+                         "real successful episodes take more than 100, and the documented mean clear is "
+                         "132, so a shorter cap cannot contain a fight.")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--hidden", type=int, default=256)
     ap.add_argument("--gru", type=int, default=256)
@@ -126,6 +145,15 @@ def main():
     ap.add_argument("--clip", type=float, default=0.2)
     ap.add_argument("--ent", type=float, default=0.01)
     ap.add_argument("--out", default="checkpoints/dynamics/dream_ppo.pt")
+    ap.add_argument("--resume", default=None,
+                    help="snapshot to continue from: restores weights, optimizer and update counter, and "
+                         "reattaches the same wandb run")
+    ap.add_argument("--seed-mode", choices=["frames", "slots"], default="frames",
+                    help="'slots': seed only from the 10 savestates the model-free run started from, which "
+                         "is exactly its start distribution. 'frames': every training frame, with the "
+                         "tracker replayed to it.")
+    ap.add_argument("--exit-persist", type=int, default=3,
+                    help="consecutive decoded out-of-room frames before the -20 exit terminal fires")
     ap.add_argument("--log-every", type=int, default=10, help="updates between table rows / wandb points")
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--wandb-project", default="zelda-rl-combat-ppo")
@@ -151,6 +179,10 @@ def main():
     for p in list(enc.parameters()) + list(pred.parameters()) + list(dec.parameters()):
         p.requires_grad_(False)
 
+    def epid_of(frm_):
+        """Episode id per frame: frames are contiguous per episode, so a break in `frm` starts a new one."""
+        return np.cumsum(np.r_[0, np.diff(frm_) != 1])
+
     meta, state, frm, action, slot = load_with_terminal(Path(a.data))
     Y = decode_targets(state)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
@@ -165,33 +197,75 @@ def main():
                                   torch.from_numpy(Fn["mask"][s:s + 8192]))
                        for s in range(0, len(state), 8192)])
 
-    first = np.r_[True, np.diff(frm) != 1]                       # first transition of each episode
-    held = list(set(ck["split"]["val_slots"]) | set(ck["split"]["tune_slots"]))
-    ep_start = frm[first][~np.isin(slot[first], held)]
-    starts = Z[torch.from_numpy(ep_start)]
+    # Seed from EVERY training frame, each paired with the real tracker replayed up to it. The real run's
+    # ten start slots are themselves varied fight states -- three Babas untouched in slot 1, one left in
+    # slots 4/5/9 -- and it averaged return over all of them, so a mixture of fight states is what the
+    # reference number already measures.
+    held = np.isin(slot, list(set(ck["split"]["val_slots"]) | set(ck["split"]["tune_slots"])))
+    keep = ~held
+    t_seed = time.time()
+    epi = epid_of(frm)
+    if a.seed_mode == "slots":
+        # The model-free run started every episode from one of ten savestates. Seeding from the same ten
+        # makes the start distribution identical to the reference, so the returns are comparable.
+        # The tracker is fresh at an episode start, so no replay is needed.
+        first = np.r_[True, np.diff(epi) != 0]
+        seed_idx, seen = [], set()
+        for j in np.where(first)[0]:
+            if slot[j] not in seen:
+                seen.add(int(slot[j])); seed_idx.append(int(j))
+        seed_idx = np.array(sorted(seed_idx))
+        seed_trk = []
+        for j in seed_idx:
+            t = CombatTracker(CombatConfig())
+            t.reset(decoded_states_from_raw(state[j:j + 1])[0], a.max_steps)
+            seed_trk.append(t)
+        print(f"seeds: {len(seed_idx)} savestate start states, slots {sorted(seen)} "
+              f"-- the model-free run's own start distribution")
+    else:
+        seeds = build_seeds(state, epi, keep, CombatConfig(), a.max_steps)
+        seed_idx = np.array([i for i, _ in seeds])
+        seed_trk = [t for _, t in seeds]
+        print(f"seeds: {len(seeds):,} training frames, each with the tracker replayed to it "
+              f"({time.time() - t_seed:.0f}s)")
+    starts = Z[torch.from_numpy(seed_idx)]
 
     # real-data control: the returns the SAME tracker produced on real held-out episodes (from the manifest)
     man = [json.loads(l) for l in (Path(a.data) / "manifest.jsonl").read_text().splitlines() if l.strip()]
     tev = set(ck["split"]["val_slots"])
     base = float(np.mean([m["return"] for m in man if m["slot"] in tev]))
 
-    run_name = a.run_name or f"dream-{Path(a.model).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
+    resume_ck = torch.load(a.resume, weights_only=False, map_location="cpu") if a.resume else None
+    run_name = (a.run_name or (resume_ck or {}).get("run_name")
+                or f"dream-{Path(a.model).stem}-{time.strftime('%Y%m%d-%H%M%S')}")
     run_dir = Path("runs") / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
     log = RunLogger(run_dir, vars(a) | {"encoder": a.model, "real_reference_return": 55.5,
                                         "real_reference_env_steps": 40_700_000},
                     use_wandb=a.wandb, project=a.wandb_project, entity=a.wandb_entity,
-                    run_name=run_name, resume=False, tags=["dream", "latent-wm", "deku-baba"],
+                    run_name=run_name, resume=bool(a.resume), tags=["dream", "latent-wm", "deku-baba"],
                     group="dream-deku-baba")
 
-    env = Dream(pred, dec, ck["decode_scale"], starts, NA, a.max_steps, CombatConfig())
+    env = Dream(pred, dec, ck["decode_scale"], starts, seed_trk, NA, a.max_steps, CombatConfig(),
+                exit_persist=a.exit_persist)
     OBS = LAT + MEM_DIM
     model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy
     opt = torch.optim.Adam(model.parameters(), lr=a.lr, eps=1e-5)
+    start_update, hist_prev = 1, []
+    if resume_ck is not None:
+        model.load_state_dict(resume_ck["model"])
+        if "optimizer" in resume_ck:
+            opt.load_state_dict(resume_ck["optimizer"])
+        else:
+            print("  ! snapshot predates optimizer saving: weights restored, Adam state reset")
+        start_update = resume_ck.get("update", 0) + 1
+        hist_prev = resume_ck.get("history", [])
+        print(f"resumed {run_name} from update {start_update - 1} "
+              f"({(start_update - 1) * a.envs * a.steps:,} transitions)")
     N, T = a.envs, a.steps
     updates = max(a.transitions // (N * T), 1)
     print(f"dreaming {updates} updates x {N} envs x {T} steps = {updates*N*T:,} transitions")
-    print(f"start states: {len(starts)} real episode starts (training slots only)")
+    print(f"start states: {len(starts):,} ({a.seed_mode})")
     print(f"policy: DreamPolicy (RecurrentEntityActorCritic + GRU {a.gru}); obs = {LAT} latent + "
           f"{MEM_DIM} episode-memory")
     print(f"PPO (parity with train_combat.py): gamma {a.gamma} lam {a.lam} clip {a.clip} chunk {a.chunk} "
@@ -209,9 +283,9 @@ def main():
     ep_r, ep_l = torch.zeros(N), torch.zeros(N)
     done_ret, done_len, ncl, nde, nlf, neps, nkill = [], [], 0, 0, 0, 0, 0.0
     ndmg = nhp = nlock = nblk = 0.0
-    hist = []
+    hist = list(hist_prev)
     t0 = time.time()
-    for u in range(1, updates + 1):
+    for u in range(start_update, updates + 1):
         O = torch.zeros(T, N, OBS); A_ = torch.zeros(T, N, dtype=torch.long)
         LP = torch.zeros(T, N); V = torch.zeros(T, N); R = torch.zeros(T, N); D = torch.zeros(T, N)
         FI = torch.zeros(T, N); H = torch.zeros(T, N, a.gru)
@@ -246,7 +320,7 @@ def main():
                              chunks_per_mb=max(1, (N * (T // a.chunk)) // a.minibatches),
                              clip=a.clip, ent_coef=a.ent, vf_coef=0.5, max_grad_norm=0.5,
                              target_kl=a.target_kl)
-        if u % a.log_every == 0 or u == 1:
+        if u % a.log_every == 0 or u == start_update:
             mr = float(np.mean(done_ret[-200:])) if done_ret else float("nan")
             ml = float(np.mean(done_len[-200:])) if done_len else float("nan")
             e = max(neps, 1)
@@ -270,8 +344,10 @@ def main():
         if a.snapshot_every and u % a.snapshot_every == 0:
             snap = Path(str(a.out).replace(".pt", f".upd{u:05d}.pt"))
             snap.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({"model": model.state_dict(), "config": vars(a), "history": hist,
-                        "baseline": base}, snap)
+            # optimizer state and the update counter too: without them a snapshot can only be evaluated
+            # or warm-started, not resumed -- Adam's moments and the schedule position would be lost.
+            torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "update": u,
+                        "run_name": run_name, "config": vars(a), "history": hist, "baseline": base}, snap)
     el = time.time() - t0
     print(f"\n{updates*N*T:,} dream transitions in {el:.0f}s ({updates*N*T/el:,.0f}/s), 0 emulator steps")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

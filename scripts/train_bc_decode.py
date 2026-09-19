@@ -34,9 +34,15 @@ CONT = ("link_pos", "link_yaw", "row_pos")
 
 
 def load_many(dirs):
-    """Concatenate several collection runs, keeping episode ids unique. Only the first needs dataset.json."""
+    """Concatenate several collection runs, keeping episode ids unique. Only the first needs dataset.json.
+
+    Also returns the 483-d observation the demonstrator saw, where it was stored. Camera yaw and Link's
+    velocity exist only there -- the 335-d state came from CombatState, which has neither. The room-exit
+    runs were saved without `obs`, so a validity mask says which frames carry it.
+    """
     meta = json.loads((Path(dirs[0]) / "dataset.json").read_text())
-    S, A, SL, EP = [], [], [], []
+    OD = meta["obs_dim"]
+    S, A, SL, EP, OB, HAS = [], [], [], [], [], []
     off = 0
     for d in dirs:
         d = Path(d)
@@ -48,8 +54,17 @@ def load_many(dirs):
             S.append(st[:n])
             A.append(np.r_[a_[:n - 1], a_[n - 2]] if n > 1 else a_[:1])
             SL.append(np.full(n, r["slot"], np.int64)); EP.append(np.full(n, off + i, np.int64))
+            if "obs" in arr:
+                o = arr["obs"]
+                pad = np.zeros((n, OD), np.float32)
+                k = min(n, len(o))
+                pad[:k] = o[:k]
+                OB.append(pad); HAS.append(np.r_[np.ones(k, bool), np.zeros(n - k, bool)])
+            else:
+                OB.append(np.zeros((n, OD), np.float32)); HAS.append(np.zeros(n, bool))
         off += len(rows)
-    return meta, np.concatenate(S), np.concatenate(A), np.concatenate(SL), np.concatenate(EP)
+    return (meta, np.concatenate(S), np.concatenate(A), np.concatenate(SL), np.concatenate(EP),
+            np.concatenate(OB), np.concatenate(HAS))
 
 
 def episode_targets(data_dir: Path, kind: str):

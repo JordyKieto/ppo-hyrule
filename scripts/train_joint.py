@@ -36,7 +36,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, ROW_HP_VALUES, BCNet, Norm,  # noqa: E402
+from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, N_LINK_ACTIONS, ROW_HP_VALUES,  # noqa: E402
+                         BCNet, Norm,
                          StateDecoder, decode_targets,
                          featurise, hp_class)
 from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
@@ -93,8 +94,7 @@ def main():
     Y = decode_targets(state, obs)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
-    Fn = norm.apply(featurise(state))
-    T = {k: torch.from_numpy(v) for k, v in Fn.items()}
+    Fraw = featurise(state)
     act = torch.from_numpy(action)
     sc = {k: (Y[k].mean(0, keepdims=True), Y[k].std(0, keepdims=True) + 1e-6) for k in CONT}
     Yt = {k: torch.from_numpy(((Y[k] - sc[k][0]) / sc[k][1]).astype(np.float32)) if k in CONT
@@ -115,6 +115,15 @@ def main():
     exit_eval_ep = exit_ep[::4]
     tr_mask = ~np.isin(slot, list(test | tune)) & ~np.isin(epid, exit_eval_ep)
     tr_all = np.where(tr_mask)[0]
+
+    # The reference checkpoint's Norm was fitted on the v1 feature width. v2 adds Link's body/collision
+    # block, so refit -- on the TRAINING frames only, or test statistics leak into the standardisation.
+    if norm.link_mean.shape[0] != Fraw["link"].shape[1]:
+        print(f"  refitting Norm: ref has {norm.link_mean.shape[0]} link features, data has "
+              f"{Fraw['link'].shape[1]} (v2 block added); fitted on {len(tr_all):,} training frames")
+        norm = Norm.fit({k: v[tr_all] for k, v in Fraw.items()})
+    T = {k: torch.from_numpy(v) for k, v in norm.apply(Fraw).items()}
+
     tr = starts(tr_mask, K)
     has_next = np.zeros(len(slot), bool); has_next[tr] = True
     deep = starts(tr_mask, K * a.unroll)            # frames with the whole unroll window inside an episode
@@ -141,6 +150,7 @@ def main():
     OBM = torch.from_numpy(has_obs.astype(np.float32))      # exit runs were saved without obs
     V2M = torch.from_numpy(Y["v2_mask"].astype(np.float32))  # v1 episodes carry no Link body/collision state
     MELEE = torch.from_numpy(Y["link_melee"].astype(np.int64))
+    LACT = torch.from_numpy(Y["link_action"].astype(np.int64))
     print(f"obs available on {has_obs.mean():.1%} of frames (camera yaw + Link velocity come from it)")
     pos = Y["link_sf1"][tr_all].mean(0)
     SF1_PW = torch.from_numpy(((1 - pos) / np.maximum(pos, 1e-4)).clip(1, 50).astype(np.float32))
@@ -152,7 +162,9 @@ def main():
         return torch.tensor((w / w.mean()).astype(np.float32))
     CW = {"link_hp": cw(Y["link_hp_c"], 7), "row_hp": cw(Y["row_hp_c"], 3, pres_m),
           # a swing is live in a small minority of frames, so weight the melee classes by frequency
-          "link_melee": cw(Y["link_melee"], len(MELEE_STATE_VALUES), Y["v2_mask"] > 0)}
+          "link_melee": cw(Y["link_melee"], len(MELEE_STATE_VALUES), Y["v2_mask"] > 0),
+          # jump_attack, hurt and knocked_air are each under 5% of frames but are what the dream needs
+          "link_action": cw(Y["link_action"], N_LINK_ACTIONS, Y["v2_mask"] > 0)}
     # Leaving the room is a scene change and it is the rarest label in the data -- 27 frames in 154,805.
     # Unweighted it is simply never predicted, and the -20 terminal can never fire inside a dream.
     n_sc = np.bincount(Y["scene"][tr_all], minlength=2).astype(float)
@@ -211,6 +223,8 @@ def main():
                 L = L + (bce.mean(-1) * vm).sum() / den
             ce_m = F.cross_entropy(p["link_melee"], MELEE[i], weight=CW["link_melee"], reduction="none")
             L = L + (ce_m * vm).sum() / den
+            ce_a = F.cross_entropy(p["link_action"], LACT[i], weight=CW["link_action"], reduction="none")
+            L = L + (ce_a * vm).sum() / den
         L = L + a.w_scene * F.cross_entropy(p["scene"], Yt["scene"][i], weight=CW["scene"])
         L = L + 0.1 * F.cross_entropy(p["room"], Yt["room"][i])
         L = L + a.w_hp * (hp_l + rh.sum() / (m * wr[i]).sum().clamp(min=1))
@@ -336,6 +350,55 @@ def main():
     print(f"        baba_count {fields['baba_count']:.4f} (majority {bc_major:.4f})  "
           f"link_hp {fields['link_hp']:.4f}  row_hp {fields['row_hp']:.4f}  "
           f"row_state {fields['row_state']:.4f}  link_pos MAE {fields['link_pos_mae']:.2f}")
+
+    # --- v2: what Link is DOING and TOUCHING. Every head is reported against the majority-class baseline,
+    # because most of these are rare: airborne is 10% of frames, a live swing 14%, knocked-airborne 0.1%.
+    vmask = Y["v2_mask"][te] > 0
+    if vmask.any():
+        from zelda_rl.bc import BG_BITS, LINK_ACTION_NAMES
+        bgn = ("ground", "grnd_touch", "grnd_leave", "wall", "ceiling", "water", "grnd_strict",
+               "crushed", "player_wall")
+        bgp = (p["link_bg"].numpy() > 0)[vmask]; bgt = (Y["link_bg"][te] > 0.5)[vmask]
+        bits = [f"{bgn[j]} {float((bgp[:, j] == bgt[:, j]).mean()):.3f}/"
+                f"{float(bgp[bgt[:, j], j].mean()) if bgt[:, j].any() else float('nan'):.2f}"
+                for j in range(len(BG_BITS)) if bgt[:, j].mean() > 0.0005]
+        print(f"        COLLISION (acc/recall): {'  '.join(bits)}")
+
+        def acc(key, tgt):
+            pr = p[key].numpy().argmax(-1)[vmask]; tt = tgt[te][vmask]
+            maj = float(np.bincount(tt, minlength=p[key].shape[-1]).max() / max(len(tt), 1))
+            return float((pr == tt).mean()), maj, pr, tt
+        a_acc, a_maj, apr, att = acc("link_action", Y["link_action"])
+        m_acc, m_maj, _, _ = acc("link_melee", Y["link_melee"])
+        print(f"        ACTION STATE: link_action {a_acc:.4f} (majority {a_maj:.4f}, "
+              f"{len(set(att.tolist()))} classes present)  melee {m_acc:.4f} (majority {m_maj:.4f})")
+        # per-class recall on the states the dream was blind to
+        WATCH = ("jump", "jump_attack", "attack", "hurt", "knocked_air", "wall_push")
+        rec = []
+        for name in WATCH:
+            k = LINK_ACTION_NAMES.index(name)
+            if (att == k).any():
+                rec.append(f"{name} {float((apr[att == k] == k).mean()):.2f} (n={int((att == k).sum()):,})")
+        print("          recall: " + "  ".join(rec))
+        for key, lbl, unit in (("link_speed", "speed", "x10 world u/step"), ("link_floor_dy", "floor_dy", "x100"),
+                               ("link_fall", "fall_dist", "x100")):
+            e = float(np.abs(p[key].numpy()[vmask] - Y[key][te][vmask]).mean())
+            print(f"          {lbl} MAE {e:.4f} ({unit})")
+        for key, lbl, m in (("link_shape_yaw", "shape yaw", None),
+                            ("link_wall_yaw", "wall yaw", (Y["link_bg"][te][:, 3] > 0.5)),
+                            ("link_parallel_yaw", "parallel yaw", None)):
+            sel = vmask if m is None else (vmask & m)     # wall yaw only means anything while touching one
+            if not sel.any():
+                continue
+            q, qt = p[key].numpy()[sel], Y[key][te][sel]
+            _d = np.degrees(np.abs(np.arctan2(q[:, 0], q[:, 1]) - np.arctan2(qt[:, 0], qt[:, 1])))
+            print(f"          {lbl} median err {float(np.median(np.minimum(_d, 360 - _d))):.1f} deg "
+                  f"(n={int(sel.sum()):,})")
+        zp = (p["link_ztarget"].numpy()[:, 0] > 0)[vmask]; zt_ = (Y["link_ztarget"][te][:, 0] > 0.5)[vmask]
+        ap_ = (p["link_airborne"].numpy()[:, 0] > 0)[vmask]; at_ = (Y["link_airborne"][te][:, 0] > 0.5)[vmask]
+        print(f"          z_target acc {float((zp == zt_).mean()):.4f} recall {float(zp[zt_].mean()):.3f} | "
+              f"airborne acc {float((ap_ == at_).mean()):.4f} recall {float(ap_[at_].mean()):.3f} "
+              f"(base rate {float(at_.mean()):.3f})")
     print(f"  (BC encoder: 0.9839 / 0.9073 / 0.9992 / 4.22)")
     zc = Zte - Zte.mean(0, keepdim=True)
     ev = torch.linalg.svdvals(zc.double()) ** 2; ev = ev / ev.sum()
@@ -366,7 +429,10 @@ def main():
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"encoder": enc.state_dict(), "decoder": dec.state_dict(), "pred": pred.state_dict(),
-                "norm": ref["norm"], "split": split, "latent": a.latent, "link_dim": T["link"].shape[1],
+                # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
+                # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
+                # (train_dream_ppo, play_dream_policy, the probes).
+                "norm": norm.state_dict(), "split": split, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)

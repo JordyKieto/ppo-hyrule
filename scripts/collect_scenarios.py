@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 from collections import Counter
+from itertools import zip_longest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -102,7 +103,8 @@ SCENARIOS = {"walkout": act_walkout, "suicide": act_suicide, "wall": act_wall, "
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenarios", default="walkout,suicide,wall,flail")
-    ap.add_argument("--episodes", type=int, default=40, help="episodes PER scenario")
+    ap.add_argument("--episodes", default="40", help="episodes per scenario: one int for all, or a "
+                    "comma list matching --scenarios (e.g. 60,60,40,30)")
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--slots", default="1,2,3,4,5,6,7,8,9,10")
     ap.add_argument("--slots-dir", default=DEKU_STATES_DIR)
@@ -116,6 +118,12 @@ def main():
     names = [s for s in args.scenarios.split(",") if s]
     if bad := [s for s in names if s not in SCENARIOS]:
         raise SystemExit(f"unknown scenarios {bad}; have {list(SCENARIOS)}")
+    eps = [int(x) for x in str(args.episodes).split(",")]
+    if len(eps) == 1:
+        eps *= len(names)
+    if len(eps) != len(names):
+        raise SystemExit(f"--episodes has {len(eps)} values but --scenarios has {len(names)}")
+    per = dict(zip(names, eps))
     slots = [int(s) for s in args.slots.split(",")]
     babas = check_slots(args.slots_dir, slots)
     if bad := [k for k, n in babas.items() if n == 0]:
@@ -124,10 +132,10 @@ def main():
     _, cfg, _ = load_policy(resolve_checkpoint(ENV_REF))
     out = Path(args.out or f"datasets/transitions/deku-baba-scenarios/{time.strftime('%Y%m%d-%H%M%S')}")
     (out / "episodes").mkdir(parents=True, exist_ok=True)
-    N = min(args.workers, args.episodes * len(names))
-    print(f"▶ {len(names)} scenarios x {args.episodes} eps | {N} headless envs | slots {slots} -> {out}")
+    N = min(args.workers, sum(eps))
+    print(f"▶ {sum(eps)} episodes over {len(names)} scenarios | {N} headless envs | slots {slots} -> {out}")
     for s in names:
-        print(f"    {s:<9} cap {SECONDS[s]:>5.0f}s")
+        print(f"    {s:<9} {per[s]:>3} eps  cap {SECONDS[s]:>5.0f}s")
 
     # One env per worker, but the episode cap differs per scenario, so the cap is applied per episode by
     # bounding the step loop rather than by rebuilding the env.
@@ -143,7 +151,10 @@ def main():
         envs = list(pool.map(build, range(N)))
     print(f"  {N} envs up in {time.perf_counter() - t0:.0f}s", flush=True)
 
-    jobs = [(s, slots[i % len(slots)]) for s in names for i in range(args.episodes)]
+    # Round-robin the scenarios so a crash partway through still leaves every scenario represented, and so
+    # the 10 workers are never all running the same scenario (which would bunch all the long flails together).
+    byname = {s: [(s, slots[i % len(slots)]) for i in range(per[s])] for s in names}
+    jobs = [j for grp in zip_longest(*byname.values()) for j in grp if j is not None]
     it, lock, tally, idx = iter(jobs), threading.Lock(), Counter(), [0]
     manifest = (out / "manifest.jsonl").open("w")
     n_trans = [0]

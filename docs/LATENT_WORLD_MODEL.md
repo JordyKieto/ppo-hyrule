@@ -187,3 +187,96 @@ DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
   .venv/bin/python-dbg scripts/play_dream_policy.py \
     --policy checkpoints/dynamics/dream_v3_41M.pt --model checkpoints/dynamics/joint_v3.pt --slot 1
 ```
+
+## 9. State v2: Link's body, collision and action state
+
+The dream was blind to what an action *does*. The v1 state carried Link's position, yaw and three
+`stateFlags1` bits, so a jump, a roll, a sword swing and a Z-press with no target were nearly
+indistinguishable in it.
+
+Offsets were taken from the **OoT decompilation** rather than recall — `include/actor.h` and
+`include/player.h` in [zeldaret/oot](https://github.com/zeldaret/oot). Two corrections were needed. A
+recalled `Actor` layout had dropped `Vec3f scale` at `0x50`, putting the whole collision block 0xC too low;
+and the decomp prints offsets for a `DEBUG_FEATURES` build whose `Actor` ends with `char dbgPad[0x10]`
+(size 0x14C), while retail NTSC 1.2 has no pad, so `Actor` is 0x13C and every `Player` field sits at
+**decomp offset − 0x10**. Two offsets already in `zelda_rl/combat.py` confirm the shift independently
+(`stateFlags1` 0x67C−0x10 = 0x66C, `heldItemAction` 0x151−0x10 = 0x141). Procedure: `docs/ADDING_OBSERVATIONS.md` §0.
+
+Earlier guesses had been *rejected for the wrong reason*: `+0x84` and `+0x88` were called "constants across
+savestates" when `+0x84` is `depthInWater` (−32000, above water) and `+0x88` **is** `bgCheckFlags`
+(`0x81` = `GROUND|GROUND_STRICT`). They were correct; they looked constant because Link is grounded and dry
+in every start savestate.
+
+23 fields added, state 335 → 358 (`zelda_rl/state_layout.py`, now the single definition shared by the
+collector and the model). Verified live by `scripts/verify_link_fields.py`, 2,510 frames, 16/16 checks; the
+decisive one is a redundant pair: `BGCHECKFLAG_WALL` == (`wallPoly` != 0) at **1.0000 agreement, 0
+disagreements**.
+
+### Data
+
+| run | episodes | transitions | note |
+|---|---|---|---|
+| standard (7 checkpoints × 10 slots) | 120 | 107,296 | 0 room exits, 2 deaths |
+| scripted scenarios | 190 | 79,505 | **33 room exits, 47 deaths** |
+
+`scripts/collect_scenarios.py` adds four scripted scenarios, overlapping on purpose: `walkout` (away from
+the nearest Baba), `suicide` (into it, never shielding — dies in exactly 6 hits), `wall` (each compass
+direction into the geometry), `flail` (uniform over all 63 actions).
+
+### Decode, test slots (`joint_v6_state2`)
+
+| head | result | baseline |
+|---|---|---|
+| `link_action` (21-way action state machine) | **0.9308** | majority 0.5822 |
+| ↳ recall: jump / jump_attack / attack | 1.00 / 1.00 / 0.97 | n = 1354 / 273 / 985 |
+| ↳ recall: knocked_air / wall_push / hurt | 1.00 / 1.00 / 0.85 | n = 40 / 16 / 34 |
+| collision WALL (acc / recall) | 1.000 / 1.00 | |
+| airborne (acc / recall) | 1.0000 / 1.000 | base rate 0.047 |
+| z_target incl. no-target | 1.0000 / 1.000 | 27.8% of frames Z-held with no lock-on |
+| wall yaw / shape yaw / parallel yaw | 1.4° / 1.9° / 3.5° | |
+| baba_count / link_hp / row_state | 0.9999 / 0.9960 / 0.9875 | |
+| link_pos MAE | 12.04 | |
+| left-room recall (9 held-out exit episodes) | 1.000, FP 0.00074 | |
+
+The `actionFunc` values were labelled from what co-occurs with each, not from guessed names: `3159404` is
+airborne 100% (jump), `3161932` airborne + Z 90% + melee 9% (the timed Z+A kill move), `3157388` damaged
+100% (hurt), `3166492` wall 44% at speed 4.8 (pushing a wall). `3156912` is airborne + damaged — knockback,
+which matters because `knockback_type` itself reads 0.00%: it is a one-frame flag, invisible at 10 Hz.
+
+### One-step prediction
+
+Best tune skill **−0.711**, against −1.14 for `joint_v3` — the best recorded, still worse than predicting
+no change.
+
+### Action recoverability went DOWN, and the measurement had to be fixed twice
+
+`scripts/probe_action_effect.py`. Two measurement errors were corrected before the number could be read:
+
+1. **A pooled number across sources is meaningless.** `flail` draws actions uniformly, so its ceiling is
+   near 1/63, while a scripted leg is near-deterministic. Pooling mixes ceilings.
+2. **A random frame split leaks.** Neighbouring frames of one episode landed in both halves; since a
+   scripted leg holds one direction for ~45 steps that is near-total leakage. It scored `suicide` 0.96 →
+   0.96 only after splitting **by episode** did the rest of the table become readable.
+
+| source | n | probe top-1 | most-common-action baseline |
+|---|---|---|---|
+| `policy` (comparable to v1's 0.139) | 22,240 | **0.0690** | 0.0612 |
+| `flail` (uniform: chance 0.0159) | 7,220 | **0.0554 = 3.5× chance** | 0.0184 |
+| `suicide` | 2,643 | 0.9576 | 0.6871 |
+| `walkout` | 2,043 | 0.6632 | 0.2956 |
+| `wall` | 2,896 | 0.6544 | 0.2227 |
+
+On the comparable `policy` population this is **0.069, down from `joint_v3`'s 0.139** — recorded as a
+regression, not explained away. Decode quality rose across every head over the same change, and the latent
+spread widened (top PC 47.2% / 49 PCs for 99%, against the BC encoder's 61.5% / 63), which is consistent
+with a 128-d latent now spending capacity on the richer state. That is a hypothesis, not a finding.
+
+The `flail` row is the first clean measurement of action-effect visibility in this project: its actions are
+independent of state, so no state prior can contribute and anything above 1/63 is the transition itself
+carrying the action. 3.5× chance is what the latent actually reveals.
+
+### Bug found: the saved normaliser was the wrong one
+
+`train_joint.py` wrote `ref["norm"]` — the *reference* checkpoint's normaliser — instead of the one used for
+training. Harmless while the widths matched; with the v2 feature block it would have silently
+mis-normalised every consumer of the checkpoint (`train_dream_ppo.py`, `play_dream_policy.py`, the probes).

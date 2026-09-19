@@ -344,6 +344,7 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
         z = lambda *s: np.zeros((n, *s), np.float32)                        # noqa: E731
         return {"v2_mask": z(), "link_bg": z(len(BG_BITS)),
                 "link_melee": np.zeros(n, np.int64) + MELEE_STATE_VALUES.index(0),
+                "link_action": np.full(n, N_LINK_ACTIONS - 1, np.int64),
                 "link_speed": z(1), "link_wall_yaw": z(2), "link_floor_dy": z(1), "link_shape_yaw": z(2),
                 "link_parallel_yaw": z(2), "link_fall": z(1), "link_ztarget": z(1), "link_airborne": z(1)}
     col = lambda k: lk[:, LI[k]]                                            # noqa: E731
@@ -358,6 +359,8 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
         "v2_mask": np.ones(n, np.float32),
         "link_bg": np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),
         "link_melee": ms.astype(np.int64),
+        "link_action": np.array([_ACTION_INDEX.get(int(v), N_LINK_ACTIONS - 1)
+                                 for v in col("action_fn_rel")], np.int64),
         "link_speed": (col("speed") / 10.0)[:, None],
         # masked by contact: with no wall touched the field is stale, which is the mistake that put the
         # Baba-facing head at 103 degrees until the same masking took it to 5.
@@ -378,6 +381,39 @@ N_BABA_COUNT = 4                                            # 0..3 live Babas
 # state; only 3 were ever decoded, so jumping / freefall / z_targeting were never checked to survive z.
 SF1_NAMED = [6, 7, 10, 11, 13, 14, 15, 16, 18, 19, 21, 26, 27, 29]
 MAX_ROOM = 8                                                # room ids seen in this scene
+# Link's action state machine (Player actionFunc, stored relative to his update fn so it survives a
+# different load address). These 20 values cover 99.8% of 187,111 recorded frames. Labels are behavioural,
+# read off what co-occurs with each value rather than guessed from a name -- see docs/COMBAT_TASK.md.
+#                  value      share  evidence in the collected data
+LINK_ACTION_VALUES = (
+    3208332,   # 19.7%  melee live 68%, grounded            -> sword attack
+    3151228,   # 19.0%  wall 37%, speed 2.4, Z-target 6%    -> free walk (the one that meets walls)
+    3143728,   # 15.5%  Z 100%, speed 0.2                   -> locked-on idle
+    3149108,   #  8.7%  Z 100%, speed 0.6                   -> locked-on step
+    3160928,   #  7.4%  speed 3.8                           -> run
+    3159404,   #  5.4%  AIRBORNE 100%, speed 3.9            -> jump
+    3144620,   #  5.3%  Z 99%, speed 0.2                    -> locked-on idle (2nd routine)
+    3145640,   #  5.0%  speed 1.1, Z 9%                     -> idle
+    3161932,   #  4.5%  AIRBORNE 100%, melee 9%, Z 90%      -> jump attack (the timed Z+A kill move)
+    3155380,   #  2.5%  speed 1.2, Z 6%                     -> slow walk / turn
+    3201864,   #  2.2%  speed 0, Z 0                        -> standing
+    3189068,   #  1.3%  speed 0                             -> standing (2nd routine)
+    3157388,   #  1.0%  DAMAGED 100%, Z 99%                 -> hurt
+    3162828,   #  0.9%  Z 97%, speed 0                      -> locked-on standing
+    3151488,   #  0.6%  Z 100%, speed 1.3                   -> locked-on walk
+    3157620,   #  0.3%  DAMAGED 100%, speed 0               -> hurt, recovering
+    3166492,   #  0.2%  WALL 44%, speed 4.8                 -> pushing into a wall
+    3156912,   #  0.1%  AIRBORNE + DAMAGED 100%             -> knocked airborne
+    3148004,   #  0.1%  Z 100%                              -> locked-on, rare routine
+    3191624,   #  0.1%  airborne 90%, speed 0               -> falling
+)
+LINK_ACTION_NAMES = ("attack", "walk", "z_idle", "z_step", "run", "jump", "z_idle2", "idle", "jump_attack",
+                     "slow_walk", "stand", "stand2", "hurt", "z_stand", "z_walk", "hurt_recover",
+                     "wall_push", "knocked_air", "z_rare", "falling", "other")
+N_LINK_ACTIONS = len(LINK_ACTION_VALUES) + 1                # + "other"
+assert len(LINK_ACTION_NAMES) == N_LINK_ACTIONS
+_ACTION_INDEX = {v: i for i, v in enumerate(LINK_ACTION_VALUES)}
+
 MELEE_STATE_VALUES = (-1, 0, 1)                             # meleeWeaponState seen live; 0 = no swing
 N_MELEE_STATES = len(MELEE_STATE_VALUES)
 # The v2 body head is one linear layer split into named pieces, so adding a field is one entry here.
@@ -418,6 +454,7 @@ class StateDecoder(nn.Module):
         # from a roll from a whiffed swing, which is why an action left almost no trace in the latent.
         self.link_bg = _layer(latent, len(BG_BITS), 0.1)        # ground / wall / ceiling / water / crushed
         self.link_melee = _layer(latent, N_MELEE_STATES, 0.1)   # a sword swing is live
+        self.link_action = _layer(latent, N_LINK_ACTIONS, 0.1)  # Link's action state machine
         self.link_body = _layer(latent, 11, 0.1)   # speed, wall_yaw(2), floor_dy, shape_yaw(2),
         #                                            parallel_yaw(2), fall_distance, ztarget, airborne
         self.row_expand = _layer(latent, n_rows * row_hidden)
@@ -435,6 +472,7 @@ class StateDecoder(nn.Module):
                 "scene": self.scene(z), "room": self.room(z), "baba_count": self.baba_count(z),
                 "link_sf1": self.link_sf1(z), "cam_yaw": self.cam_yaw(z), "link_vel": self.link_vel(z),
                 "link_bg": self.link_bg(z), "link_melee": self.link_melee(z),
+                "link_action": self.link_action(z),
                 **dict(zip(V2_BODY, self.link_body(z).split(V2_BODY_SPLIT, dim=-1))),
                 "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
                 "row_pos": r[..., j:j + 3],

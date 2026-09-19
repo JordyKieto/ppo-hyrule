@@ -23,7 +23,7 @@ import torch.nn as nn
 from zelda_rl.ppo import RecurrentEntityActorCritic, _layer
 from zelda_rl.bc import LINK_HP_VALUES, N_BABA_STATES, ROW_HP_VALUES
 from zelda_rl.combat import (BABA_STATES, DEKU_BABA, DEKU_BABA_STATE, SF1_DAMAGED, SF1_DEAD, SF1_SHIELD,
-                             CombatState, Enemy)
+                             CombatState, CombatTracker, Enemy)
 
 # BABA_STATES index -> a representative action-routine pointer, so Enemy.state decodes back to the name.
 _FN_FOR_STATE = {}
@@ -110,3 +110,112 @@ class DreamPolicy(RecurrentEntityActorCritic):
         h = h * (1.0 - first.unsqueeze(-1))
         h = self.gru(self.proj(x), h)
         return self.pi(h), self.v(h).squeeze(-1), h
+
+
+class DreamTracker(CombatTracker):
+    """CombatTracker with a monotone HP memory, for use on DECODED states only.
+
+    On real states HP never rises -- a Deku Baba's HP increases in 0 of 891,459 recorded row-steps -- so
+    the base class can safely sync its record to whatever it observes:
+
+        if e.hp < tr.hp: pay(enemy_damage, tr.hp - e.hp)
+        tr.hp = e.hp                      # also runs when HP ROSE
+
+    A decoded HP can wobble. The sync then resets the payment counter, so 2 -> 1 -> 2 -> 1 bills the same
+    enemy twice, and a policy can farm one Baba indefinitely by steering into a region where the decode
+    oscillates. Measured: 8.94 damage per dream episode against a physical maximum of 5.58, with kills
+    flat at 0.22 -- more damage than the enemies have HP, and nothing dying.
+
+    Clamping the *record* rather than the state is the narrow fix. A spurious drop still pays once, which
+    is unavoidable, but it cannot be re-billed. Clamping the decoded state instead was tried earlier and
+    is worse: it makes a spurious drop permanent, so drift toward the dataset mean hands out free kills.
+
+    On real states every clamp here is a no-op, so reward parity with the emulator is preserved exactly.
+    """
+
+    def step(self, prev: CombatState, cur: CombatState):
+        for p, e in cur.enemies.items():
+            t = self.tracks.get(p)
+            if t is not None and e.hp > t.hp:
+                e.hp = t.hp                        # never let a decoded rise reset the counter
+        if cur.hp > prev.hp:
+            cur.hp = prev.hp                       # same for Link: no healing in a dream (no drops modelled)
+        return super().step(prev, cur)
+
+
+def build_seeds(state, epid, keep, ccfg, dream_max_steps, pool_idx=None):
+    """Replay the REAL CombatTracker over real episodes and snapshot it at each wanted frame.
+
+    Tracker state -- kills so far, lock-ons spent against the cap of 6, blocks against 8, time since the
+    last kill, damage dealt, open lunge cycles -- is nowhere in the 335-number game state. It is the reward
+    function's own bookkeeping, accumulated over an episode, so no decoder reading a single frame can
+    recover it. Replaying the real episode up to that frame gives it exactly.
+
+    Without this, seeding a dream mid-fight tells the policy "0 kills, no lock-ons used, full time left"
+    while the state shows a half-finished fight, and the reward pays again for progress already made.
+
+    Time is rebased: `t` is reset to 0 so the dream gets a full horizon from the seed, while
+    `last_*_t` are shifted to preserve *steps since* each event, which is what the memory block reports.
+    """
+    import copy
+
+    from zelda_rl.combat import CombatState
+    seeds = []
+    want = None if pool_idx is None else set(pool_idx.tolist())
+    order = np.argsort(epid, kind="stable")
+    for e in np.unique(epid):
+        idx = order[np.searchsorted(epid[order], e):np.searchsorted(epid[order], e, "right")]
+        if not keep[idx[0]]:
+            continue
+        states = decoded_states_from_raw(state[idx])
+        trk = CombatTracker(ccfg)
+        trk.reset(states[0], dream_max_steps)
+        if want is None or int(idx[0]) in want:
+            seeds.append((int(idx[0]), copy.deepcopy(trk)))
+        for t in range(1, len(states)):
+            trk.step(states[t - 1], states[t])
+            if want is None or int(idx[t]) in want:
+                s = copy.deepcopy(trk)
+                shift = s.t
+                s.t = 0
+                for f in ("last_kill_t", "last_hit_t", "last_damage_t"):
+                    v = getattr(s, f)
+                    if v is not None:
+                        setattr(s, f, v - shift)
+                s.ep["length"] = 0
+                seeds.append((int(idx[t]), s))
+    return seeds
+
+
+def decoded_states_from_raw(raw):
+    """Real 335-d states -> CombatState objects, for replaying the tracker on ground truth."""
+    from zelda_rl.bc import decode_targets
+    import torch as _t
+    Y = decode_targets(raw)
+    n = len(raw)
+    p = {"link_hp": _t.nn.functional.one_hot(_t.from_numpy(
+             np.abs(Y["link_hp"][:, 0:1] - np.asarray(LINK_HP_VALUES)).argmin(-1)), len(LINK_HP_VALUES)).float(),
+         "link_pos": _t.from_numpy(Y["link_pos"]), "link_yaw": _t.from_numpy(Y["link_yaw"]),
+         "link_bits": _t.from_numpy(Y["link_bits"] * 2 - 1),
+         "targeted": _t.nn.functional.one_hot(_t.from_numpy(Y["targeted"]), 17).float(),
+         "scene": _t.nn.functional.one_hot(_t.from_numpy(Y["scene"]), 2).float(),
+         "room": _t.nn.functional.one_hot(_t.from_numpy(Y["room"]), 8).float(),
+         "row_present": _t.from_numpy(Y["row_present"] * 2 - 1),
+         "row_is_baba": _t.from_numpy(Y["row_is_baba"] * 2 - 1),
+         "row_hp": _t.nn.functional.one_hot(_t.from_numpy(
+             np.abs(Y["row_hp"][..., None] - np.asarray(ROW_HP_VALUES)).argmin(-1)), len(ROW_HP_VALUES)).float(),
+         "row_pos": _t.from_numpy(Y["row_pos"]),
+         "row_state": _t.nn.functional.one_hot(_t.from_numpy(Y["row_state"]), N_BABA_STATES).float()}
+    return decoded_to_states(p, {"link_pos": (0.0, 1.0), "row_pos": (0.0, 1.0)})
+
+
+def _fresh(self, max_steps):
+    """A DreamTracker copy of this replayed tracker, ready to continue for `max_steps` more."""
+    import copy
+    t = copy.deepcopy(self)
+    t.__class__ = DreamTracker
+    t.max_steps = max_steps
+    return t
+
+
+CombatTracker.fresh = _fresh
