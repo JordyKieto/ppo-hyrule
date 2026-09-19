@@ -101,6 +101,7 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
     pys, pyc = _sincos(col("parallel_yaw"))
     fps, fpc = _sincos(col("floor_pitch"))
     zt = col("ztarget_timer")
+    zact = (zt != 0).astype(np.float32)          # parallelYaw is the aim yaw only while Z is held
     diw = col("dist_interact_wall")
     sf2 = col("sf2").astype(np.int64)
     sf3 = col("sf3").astype(np.int64)
@@ -113,7 +114,7 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
         (col("action_fn_rel") * 1e-4)[:, None],
         (col("melee_state") != 0).astype(np.float32)[:, None], (col("melee_anim") / 10.0)[:, None],
         (zt != 0).astype(np.float32)[:, None], (np.clip(zt, 0, 10) / 10.0)[:, None],
-        pys[:, None], pyc[:, None],
+        (pys * zact)[:, None], (pyc * zact)[:, None],
         (np.clip(col("fall_distance"), -100, 2000) / 100.0)[:, None], fps[:, None], fpc[:, None],
         (diw > 0).astype(np.float32)[:, None], (np.clip(diw, 0, 200) / 100.0)[:, None],
         (np.clip(col("y_dist_to_ledge"), -200, 200) / 100.0)[:, None],
@@ -370,6 +371,7 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
     wys, wyc = _sincos(col("wall_yaw"))
     sys_, syc = _sincos(col("shape_yaw"))
     pys, pyc = _sincos(col("parallel_yaw"))
+    zact = (col("ztarget_timer") != 0).astype(np.float32)
     ms = np.abs(col("melee_state").astype(np.int64)[:, None]
                 - np.asarray(MELEE_STATE_VALUES)).argmin(-1)
     return {
@@ -384,7 +386,9 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
         "link_wall_yaw": np.stack([wys * wall, wyc * wall], 1),
         "link_floor_dy": ((col("floor_height") - col("pos_y")) / 100.0)[:, None],
         "link_shape_yaw": np.stack([sys_, syc], 1),
-        "link_parallel_yaw": np.stack([pys, pyc], 1),
+        # masked like wall_yaw: parallelYaw holds a stale value when Z is not held, and scoring a head on
+        # stale targets is what kept the Baba-facing head at 103 degrees until masking took it to 5.
+        "link_parallel_yaw": np.stack([pys * zact, pyc * zact], 1),
         "link_fall": (np.clip(col("fall_distance"), -100, 2000) / 100.0)[:, None],
         "link_ztarget": (col("ztarget_timer") != 0).astype(np.float32)[:, None],
         "link_airborne": (1.0 - ((bg >> BG_GROUND) & 1)).astype(np.float32)[:, None],
@@ -398,38 +402,69 @@ N_BABA_COUNT = 4                                            # 0..3 live Babas
 # state; only 3 were ever decoded, so jumping / freefall / z_targeting were never checked to survive z.
 SF1_NAMED = [6, 7, 10, 11, 13, 14, 15, 16, 18, 19, 21, 26, 27, 29]
 MAX_ROOM = 8                                                # room ids seen in this scene
-# Link's action state machine (Player actionFunc, stored relative to his update fn so it survives a
-# different load address). These 20 values cover 99.8% of 187,111 recorded frames. Labels are behavioural,
-# read off what co-occurs with each value rather than guessed from a name -- see docs/COMBAT_TASK.md.
-#                  value      share  evidence in the collected data
+# Link's action state machine (Player actionFunc, relative to his update fn so it survives relocation).
+# ALL 34 values observed across the three collections are listed, so no real state collapses into
+# "other" -- an earlier top-20 cut silently truncated a sidehop transition state into it.
+#
+# NAMES ARE FROM DRIVING THE INPUT (scripts/probe_move_states.py, and the `moves` scenario whose cycle phase
+# is known from t), or from a flag that is definitive (damaged 100%, airborne 100%). An earlier attempt named
+# them from marginal co-occurrence and got several wrong: the roll state was called "wall_push" because
+# rolling into walls is common in `flail`, and the shield state was called "slow_walk".
+#
+# Decomp function names could NOT be recovered: zeldaret/oot supports ntsc-1.2 but ships only checksums and
+# segment maps, and per-function symbol addresses come from building it. Rank-aligning our 31 observed
+# addresses against the 89 Player_Action_* definitions fails because the gaps span unobserved functions.
+#
+# Finding worth keeping: rolls, backflips and sidehops are NOT separate action functions. Backflip and both
+# sidehops all produce 3159404 at 100% airborne -- in OoT they ARE jumps. What separates them is velocity
+# direction relative to facing, which the v2 state carries (vel, speed, shape_yaw, turn_sin/cos).
 LINK_ACTION_VALUES = (
-    3208332,   # 19.7%  melee live 68%, grounded            -> sword attack
-    3151228,   # 19.0%  wall 37%, speed 2.4, Z-target 6%    -> free walk (the one that meets walls)
-    3143728,   # 15.5%  Z 100%, speed 0.2                   -> locked-on idle
-    3149108,   #  8.7%  Z 100%, speed 0.6                   -> locked-on step
-    3160928,   #  7.4%  speed 3.8                           -> run
-    3159404,   #  5.4%  AIRBORNE 100%, speed 3.9            -> jump
-    3144620,   #  5.3%  Z 99%, speed 0.2                    -> locked-on idle (2nd routine)
-    3145640,   #  5.0%  speed 1.1, Z 9%                     -> idle
-    3161932,   #  4.5%  AIRBORNE 100%, melee 9%, Z 90%      -> jump attack (the timed Z+A kill move)
-    3155380,   #  2.5%  speed 1.2, Z 6%                     -> slow walk / turn
-    3201864,   #  2.2%  speed 0, Z 0                        -> standing
-    3189068,   #  1.3%  speed 0                             -> standing (2nd routine)
-    3157388,   #  1.0%  DAMAGED 100%, Z 99%                 -> hurt
-    3162828,   #  0.9%  Z 97%, speed 0                      -> locked-on standing
-    3151488,   #  0.6%  Z 100%, speed 1.3                   -> locked-on walk
-    3157620,   #  0.3%  DAMAGED 100%, speed 0               -> hurt, recovering
-    3166492,   #  0.2%  WALL 44%, speed 4.8                 -> pushing into a wall
-    3156912,   #  0.1%  AIRBORNE + DAMAGED 100%             -> knocked airborne
-    3148004,   #  0.1%  Z 100%                              -> locked-on, rare routine
-    3191624,   #  0.1%  airborne 90%, speed 0               -> falling
+      3151228,  # 18.675%  locomotion     DRIVEN: constant through run; dominant in roll_run/swing_move
+      3208332,  # 18.303%  attack         melee live 68%; dominant in the swing phases
+      3143728,  # 15.562%  fn_3143728     unverified
+      3149108,  #  9.665%  fn_3149108     unverified
+      3160928,  #  6.900%  fn_3160928     unverified
+      3144620,  #  5.977%  fn_3144620     unverified
+      3159404,  #  5.682%  airborne       airborne 100%; produced by backflip AND both sidehops AND jump
+      3145640,  #  4.853%  fn_3145640     unverified
+      3161932,  #  4.121%  airborne_z     airborne 100%, Z 90%, melee 9%
+      3155380,  #  3.138%  shield         DRIVEN: 20-37% of the two shield phases, speed 0
+      3201864,  #  1.982%  fn_3201864     unverified
+      3162828,  #  1.331%  fn_3162828     unverified
+      3189068,  #  1.148%  fn_3189068     unverified
+      3157388,  #  0.897%  hurt           damaged flag 100%
+      3151488,  #  0.538%  fn_3151488     unverified
+      3166492,  #  0.389%  roll           DRIVEN: constant through the roll leg, speed 5.6
+      3157620,  #  0.239%  hurt_still     damaged flag 100%, speed 0
+      3146184,  #  0.132%  airborne_x     DRIVEN: appears only in sidehop legs; brief transition
+      3156912,  #  0.107%  hurt_airborne  damaged + airborne 100%
+      3148004,  #  0.089%  fn_3148004     unverified
+      3191624,  #  0.070%  falling        airborne 90%, speed 0
+            0,  #  0.043%  no_player      player pointer invalid
+      3165496,  #  0.037%  fn_3165496     unverified
+      3168412,  #  0.026%  fn_3168412     unverified
+      3156796,  #  0.023%  fn_3156796     unverified
+      3148788,  #  0.021%  fn_3148788     unverified
+      3148548,  #  0.013%  fn_3148548     unverified
+      3156464,  #  0.011%  fn_3156464     unverified
+      3158316,  #  0.011%  fn_3158316     unverified
+      3193384,  #  0.008%  fn_3193384     unverified
+      3191336,  #  0.005%  fn_3191336     unverified
+      3164012,  #  0.001%  fn_3164012     unverified
+      3163236,  #  0.000%  fn_3163236     unverified
+      3149720,  #  0.000%  fn_3149720     unverified
 )
-LINK_ACTION_NAMES = ("attack", "walk", "z_idle", "z_step", "run", "jump", "z_idle2", "idle", "jump_attack",
-                     "slow_walk", "stand", "stand2", "hurt", "z_stand", "z_walk", "hurt_recover",
-                     "wall_push", "knocked_air", "z_rare", "falling", "other")
+LINK_ACTION_NAMES = ("locomotion", "attack", "fn_3143728", "fn_3149108", "fn_3160928", "fn_3144620", "airborne", "fn_3145640", "airborne_z", "shield", "fn_3201864", "fn_3162828", "fn_3189068", "hurt", "fn_3151488", "roll", "hurt_still", "airborne_x", "hurt_airborne", "fn_3148004", "falling", "no_player", "fn_3165496", "fn_3168412", "fn_3156796", "fn_3148788", "fn_3148548", "fn_3156464", "fn_3158316", "fn_3193384", "fn_3191336", "fn_3164012", "fn_3163236", "fn_3149720", "other")
 N_LINK_ACTIONS = len(LINK_ACTION_VALUES) + 1                # + "other"
 assert len(LINK_ACTION_NAMES) == N_LINK_ACTIONS
+# Merge routine values that are ONE semantic state, per docs/ADDING_OBSERVATIONS.md step 2: "Some
+# behaviours have two routine values (e.g. two idle, two dying). Merge them into one semantic state."
+# 3146184 is a 1-2 frame transition inside a sidehop -- it is airborne like 3159404, and as its own class it
+# scored recall 0.12 on 32 test frames even after the `moves` scenario raised its density 30x.
+LINK_ACTION_MERGE = {3146184: 3159404}
 _ACTION_INDEX = {v: i for i, v in enumerate(LINK_ACTION_VALUES)}
+_ACTION_INDEX.update({src: _ACTION_INDEX[dst] for src, dst in LINK_ACTION_MERGE.items()
+                      if dst in _ACTION_INDEX})
 
 MELEE_STATE_VALUES = (-1, 0, 1)                             # meleeWeaponState seen live; 0 = no swing
 N_MELEE_STATES = len(MELEE_STATE_VALUES)

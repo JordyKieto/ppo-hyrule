@@ -20,7 +20,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.collect_transitions import DEKU_STATES_DIR, EnemyRows, check_slots, encode_state  # noqa: E402
-from zelda_rl.bc import BCNet, Norm, featurise  # noqa: E402
+from zelda_rl.bc import BCNet, Norm, featurise, wants_v2  # noqa: E402
 from zelda_rl.env import action_name  # noqa: E402
 from zelda_rl.policy_io import load_policy, make_env, resolve_checkpoint  # noqa: E402
 from zelda_rl.dream_state import MEM_DIM, DreamPolicy, memory_features  # noqa: E402
@@ -73,7 +73,7 @@ def main():
     @torch.no_grad()
     def act(state335, trk, h, first):
         """Memory block comes from the REAL tracker here, the same quantities the dream computed."""
-        f = norm.apply(featurise(state335[None]))
+        f = norm.apply(featurise(state335[None], link_v2=wants_v2(mk["link_dim"])))
         z = enc.encode(torch.from_numpy(f["link"]), torch.from_numpy(f["rows"]),
                        torch.from_numpy(f["ids"]), torch.from_numpy(f["mask"]))
         tl = max(0.0, 1.0 - trk.t / DREAM_CAP)

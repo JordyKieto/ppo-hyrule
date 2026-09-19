@@ -14,7 +14,8 @@ into a Baba without shielding yields Link damage, enemy contact and eventually d
   walkout   hold a direction AWAY from the nearest Baba          -> left_room terminal, scene 0 -> 85
   suicide   walk INTO the nearest Baba, never shield, never hit  -> Link damage, contact, death terminal
   wall      hold each compass direction into the geometry        -> bgCheckFlags WALL, wallYaw, speed -> 0
-  flail     uniform random actions                               -> jumps, rolls, whiffed swings, Z with no target
+  flail     uniform random actions                               -> jumps, whiffed swings, Z with no target
+  moves     cycle roll / backflip / sidehop / jump-attack / swing -> the rare ACTION STATES, on purpose
 
 Output is the same .npz + manifest format as scripts/collect_transitions.py, so all of it concatenates with
 the standard collection. States are v2 (zelda_rl/state_layout.py), so the collision and action fields are
@@ -44,10 +45,10 @@ from zelda_rl.policy_io import load_policy, make_env, resolve_checkpoint  # noqa
 
 ENV_REF = "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt"
 N_DIRS, N_BTN = 9, 7          # 63 combat actions = 9 stick directions x 7 button combos
-BTN_NONE, BTN_A, BTN_B, BTN_Z, BTN_SHIELD = 0, 1, 2, 3, 4
+BTN_NONE, BTN_A, BTN_B, BTN_Z, BTN_SHIELD, BTN_ZB, BTN_ZA = range(7)
 
 # Per-scenario episode cap. A walkout takes a few seconds; the 180 s default would waste minutes per episode.
-SECONDS = {"walkout": 25.0, "suicide": 90.0, "wall": 40.0, "flail": 180.0}
+SECONDS = {"walkout": 25.0, "suicide": 90.0, "wall": 40.0, "flail": 180.0, "moves": 120.0}
 
 
 def _nearest(c):
@@ -92,12 +93,42 @@ def act_wall(env, c, rng, t, st):
     return (((t // leg) % 8) + 1) * N_BTN + BTN_NONE
 
 
+# Deliberate move cycle. The action-state decoder failed on exactly the states nothing in the dataset
+# produced often: the sidehop state appeared in 58 of 187,111 frames and its test-set recall was 0.00 with
+# n=4. Rather than reweight a class that has almost no examples, generate the examples -- the same move that
+# fixed the room-exit head, which had 0 examples until scripted walkouts were collected.
+#
+# Each entry is (direction, button) held for `--move-hold` steps. Buttons: 1=A, 2=B, 3=Z, 4=shield, 6=Z+A.
+MOVE_CYCLE = [
+    (3, BTN_NONE), (3, BTN_A),            # run then A -> roll
+    (0, BTN_Z), (7, BTN_ZA),              # Z held, stick back, A -> backflip
+    (0, BTN_Z), (1, BTN_ZA),              # Z held, stick left, A -> sidehop
+    (0, BTN_Z), (5, BTN_ZA),              # Z held, stick right, A -> sidehop
+    (0, BTN_Z), (3, BTN_ZA),              # Z held, stick toward target, A -> jump attack
+    (0, BTN_SHIELD), (3, BTN_SHIELD),     # shield, and shield while pushing forward
+    (3, BTN_B), (0, BTN_B),               # sword swings, moving and standing
+    (0, BTN_NONE),                        # release, so the recovery states are recorded too
+]
+
+
+def act_moves(env, c, rng, t, st):
+    """Cycle deliberately through roll / backflip / sidehop / jump-attack / shield / swing.
+
+    This is the only scenario that produces the rare action states in quantity. `flail` presses A at random
+    so it makes them occasionally; here every move is performed on purpose, repeatedly.
+    """
+    hold = st["move_hold"]
+    d, b = MOVE_CYCLE[(t // hold) % len(MOVE_CYCLE)]
+    return d * N_BTN + b
+
+
 def act_flail(env, c, rng, t, st):
     """Uniform over all 63 actions: the only scenario that produces jumps, rolls and whiffed swings."""
     return int(rng.integers(0, N_DIRS * N_BTN))
 
 
-SCENARIOS = {"walkout": act_walkout, "suicide": act_suicide, "wall": act_wall, "flail": act_flail}
+SCENARIOS = {"walkout": act_walkout, "suicide": act_suicide, "wall": act_wall, "flail": act_flail,
+             "moves": act_moves}
 
 
 def main():
@@ -110,6 +141,9 @@ def main():
     ap.add_argument("--slots-dir", default=DEKU_STATES_DIR)
     ap.add_argument("--warmup-max", type=int, default=25, help="random steps before a scripted walkout")
     ap.add_argument("--leg", type=int, default=45, help="wall scenario: steps held per compass direction")
+    ap.add_argument("--move-hold", type=int, default=6,
+                    help="moves scenario: steps per move. Short, because a roll or sidehop is ~10 frames "
+                         "and holding longer just records the walk that follows it.")
     ap.add_argument("--out", default=None)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -173,7 +207,8 @@ def main():
                 env.reset(slot)
                 # env was built with the LONGEST scenario's cap; scale it down for the shorter ones
                 cap = max(1, round(env.cfg.max_steps * SECONDS[name] / max(SECONDS[n] for n in names)))
-                st = {"warm": int(rng.integers(3, args.warmup_max)), "dir": None, "leg": args.leg}
+                st = {"warm": int(rng.integers(3, args.warmup_max)), "dir": None, "leg": args.leg,
+                      "move_hold": args.move_hold}
                 S, A, R = [encode_state(env.cstate, rows)], [], []
                 ep, n_wall, n_hit = None, 0, 0
                 hp0 = env.cstate.hp

@@ -376,9 +376,13 @@ def main():
         print(f"        ACTION STATE: link_action {a_acc:.4f} (majority {a_maj:.4f}, "
               f"{len(set(att.tolist()))} classes present)  melee {m_acc:.4f} (majority {m_maj:.4f})")
         # per-class recall on the states the dream was blind to
-        WATCH = ("jump", "jump_attack", "attack", "hurt", "knocked_air", "wall_push")
+        # the input-verified states; the dream was blind to all of these before state v2
+        WATCH = ("attack", "roll", "shield", "airborne", "airborne_z", "hurt",
+                 "hurt_still", "hurt_airborne", "falling", "locomotion")
         rec = []
         for name in WATCH:
+            if name not in LINK_ACTION_NAMES:
+                continue
             k = LINK_ACTION_NAMES.index(name)
             if (att == k).any():
                 rec.append(f"{name} {float((apr[att == k] == k).mean()):.2f} (n={int((att == k).sum()):,})")
@@ -389,7 +393,7 @@ def main():
             print(f"          {lbl} MAE {e:.4f} ({unit})")
         for key, lbl, m in (("link_shape_yaw", "shape yaw", None),
                             ("link_wall_yaw", "wall yaw", (Y["link_bg"][te][:, 3] > 0.5)),
-                            ("link_parallel_yaw", "parallel yaw", None)):
+                            ("link_parallel_yaw", "parallel yaw", (Y["link_ztarget"][te][:, 0] > 0.5))):
             sel = vmask if m is None else (vmask & m)     # wall yaw only means anything while touching one
             if not sel.any():
                 continue

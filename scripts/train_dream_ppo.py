@@ -31,7 +31,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, decode_targets, featurise,  # noqa: E402
-                         hp_class)
+                         hp_class, wants_v2)
 from zelda_rl.ppo import gae, ppo_update_recurrent  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
 from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
@@ -189,7 +189,7 @@ def main():
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
     L = labels(Y, frm, action)
     norm = Norm.load(ck["norm"])
-    Fn = norm.apply(featurise(state))
+    Fn = norm.apply(featurise(state, link_v2=wants_v2(ck["link_dim"])))
     with torch.no_grad():
         Z = torch.cat([enc.encode(torch.from_numpy(Fn["link"][s:s + 8192]),
                                   torch.from_numpy(Fn["rows"][s:s + 8192]),
@@ -272,7 +272,10 @@ def main():
           f"minibatches {a.minibatches} target_kl {a.target_kl} ent {a.ent}")
     print(f"reward: the real CombatTracker on decoded states -- all 18 terms, no re-implementation")
     print(f"real-data control, same tracker on real held-out episodes: {base:.2f}\n")
-    print(f"{'upd':>4} {'transitions':>12} {'return':>8} {'len':>5} {'clear%':>7} {'death%':>7} "
+    # `eps` is the number of episodes that FINISHED, which every rate below divides by. With an 1800-step
+    # cap and a 120-step rollout window, early updates finish only a handful -- and those are the
+    # anomalously short ones, so a "100% clear" over 3 episodes means nothing. Read eps before the rates.
+    print(f"{'upd':>4} {'transitions':>12} {'eps':>5} {'return':>8} {'len':>5} {'clear%':>7} {'death%':>7} "
           f"{'left%':>6} {'kills':>6} {'dmg':>5} {'hpLost':>7} {'lock':>5} {'blk':>5} {'sps':>6}")
     print("-" * 100)
 
@@ -324,10 +327,10 @@ def main():
             mr = float(np.mean(done_ret[-200:])) if done_ret else float("nan")
             ml = float(np.mean(done_len[-200:])) if done_len else float("nan")
             e = max(neps, 1)
-            print(f"{u:>4} {u*N*T:>12,} {mr:>8.2f} {ml:>5.0f} {100*ncl/e:>6.1f}% {100*nde/e:>6.1f}% "
+            print(f"{u:>4} {u*N*T:>12,} {neps:>5} {mr:>8.2f} {ml:>5.0f} {100*ncl/e:>6.1f}% {100*nde/e:>6.1f}% "
                   f"{100*nlf/e:>5.1f}% {nkill/e:>6.2f} {ndmg/e:>5.2f} {nhp/e/16:>7.2f} {nlock/e:>5.2f} "
                   f"{nblk/e:>5.2f} {u*N*T/(time.time()-t0):>6,.0f}", flush=True)
-            row = {"update": u, "transitions": u * N * T, "return": mr, "length": ml,
+            row = {"update": u, "transitions": u * N * T, "episodes": neps, "return": mr, "length": ml,
                    "clear_pct": 100 * ncl / e, "death_pct": 100 * nde / e, "left_pct": 100 * nlf / e,
                    "kills": nkill / e, "damage": ndmg / e, "hearts_lost": nhp / e / 16,
                    "lockons": nlock / e, "blocks_dodges": nblk / e}

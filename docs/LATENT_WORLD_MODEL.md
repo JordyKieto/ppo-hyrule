@@ -341,3 +341,87 @@ Choosing on single-step decode would have selected it. Latent 128 is used for th
 Recorded without softening: **both models remain worse than identity** on behaviour, live-Baba count and
 Link HP at every horizon ≥ 10. The predictor still has not learned dynamics that beat assuming nothing
 changes. What state v2 changed is what the model can *represent* (§9), not yet what it can *predict*.
+
+## 12. Action states: named by driving the input, not by correlation
+
+The first `LINK_ACTION_VALUES` table took the 20 most frequent `actionFunc` values and named each from what
+co-occurred with it. **Several names were wrong**, found by driving the inputs
+(`scripts/probe_move_states.py`):
+
+| move driven | actual state | first (wrong) name |
+|---|---|---|
+| roll (run, then A) | `3166492` throughout | "wall_push" — it correlated with walls because `flail` rolls into them |
+| shield (R held) | `3155380` throughout | "slow_walk" |
+| sidehop (Z + side + A) | `3146184` | **absent from the table** → decoded as `other` |
+
+`3146184` was in the data all along (58 of 187,111 frames); the top-20 cut truncated it. The table now
+covers **all 34 observed values** across the three collections.
+
+**Decomp function names could not be recovered.** zeldaret/oot does support `ntsc-1.2`, but `baseroms/ntsc-1.2/`
+ships only checksums and a segment map — per-function symbol addresses come from building it. Rank-aligning
+our 31 observed addresses against the 89 `Player_Action_*` definitions in source order fails, because the
+address gaps (e.g. `0x8039D6CC → 0x803A277C`, 20 KB) span functions we never observe; the alignment put the
+most frequent state, which is melee-heavy, on `WaitForPutAway`. A constant retail−debug offset does not exist
+either (the builds have different function sizes). So names come from driven input or a definitive flag, and
+everything else keeps the neutral name `fn_<value>` — 22 of 34.
+
+### Rolls, backflips and sidehops are not separate action functions
+
+Driving them and reading the state back: backflip, sidehop-left and sidehop-right **all** produce `3159404`
+at **100% airborne**. In OoT they are jumps. What separates them is velocity direction relative to facing,
+which state v2 carries (`vel`, `speed`, `shape_yaw`, and the shape-vs-world turn offset).
+
+### Two documented techniques applied, both worked
+
+1. **Masking a stale field.** `parallelYaw` is the aim yaw only while Z is held; unmasked it holds a stale
+   value. Masking it by Z-active, in features, targets and the probe, took the head from **18.4° → 1.0°** —
+   the same fix that took Baba-facing from 103° to 5°.
+2. **Merging two routines that are one semantic state.** `3146184` is a 1–2 frame transition inside a
+   sidehop. As its own class it scored recall **0.12** even after the `moves` scenario raised its density 30×.
+   Merged into `airborne` (`LINK_ACTION_MERGE`), which then scores 0.98 on n=1,483.
+
+### Generating the missing examples
+
+`scripts/collect_scenarios.py` gained a `moves` scenario that cycles roll / backflip / sidehop / jump-attack /
+shield / swing deliberately, phase known from `t`. 48 episodes, 22,364 transitions. Sidehop density went from
+0.03% to **0.97%**; roll 1.87%. This is the same move that fixed the room-exit head, which had 0 examples
+until scripted walkouts were collected.
+
+### Result (`joint_v8_acts`, 209,523 frames, test slots)
+
+| head | recall | n |
+|---|---|---|
+| roll | **1.00** | 29 |
+| shield | **0.99** | 309 |
+| airborne | **0.98** | 1,483 |
+| airborne_z | **1.00** | 301 |
+| hurt_airborne | **1.00** | 40 |
+| hurt_still | **0.95** | 86 |
+| locomotion | 0.92 | 2,897 |
+| attack | 0.85 | 1,013 |
+| **hurt** | **0.71** | 34 |
+
+`link_action` 0.8787 over 25 present classes (majority 0.5744). `link_pos` MAE 9.43, `wall_yaw` 1.8°,
+`row_state` 0.9961, `baba_count` 0.9998. Inverse dynamics **0.0878**, the best recorded.
+
+### Still failing — flagged, not fixed
+
+- **`bgCheckFlags` GROUND_TOUCH, recall 0.02.** Structural: the decomp comments it "only active for 1 frame",
+  and the env samples at 10 Hz, so it is mostly invisible. Same class as `knockback_type`, which reads 0.00%
+  across 282 damage events. Knockback is still represented, via the `hurt_airborne` state.
+- **`hurt`, recall 0.71 on n=34.** Rare, and the `moves` scenario produces no damage (0 hits). The fix is a
+  scenario that takes hits deliberately while recording — `suicide` does this but ends the episode quickly.
+- **`attack` 0.85 / `locomotion` 0.92** are the two largest classes and both fell slightly as class count grew
+  from 21 to 35.
+- **Run-to-run variance is not negligible**: `shape_yaw` moved 0.7° → 5.3° and `speed` MAE 0.058 → 0.067
+  between two runs differing only by the merge. Single-run differences of that size should not be read as
+  effects.
+
+### What this does not fix
+
+The prediction problem is untouched. Decode answers "what is Link doing"; the dream needs "what happens
+AFTER the action", and at h=1 `link_pos` MAE is 10.4 against identity's 12.3. Measured consequence: rolling
+the trained policy inside the dream moves Link **250 world units in 100 steps**, while the same policy in the
+emulator covers enough ground to leave the room in **21–91 steps**. So the dream never puts Link near the
+door, `left%` stays 0.0% through training, and the −20 exit terminal is unreachable — while in the emulator
+the policy leaves 3/3 times with the value function still reading V≈3.2 one step before the −20.
