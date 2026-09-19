@@ -723,3 +723,50 @@ already recorded.
 The residual 76° is not explained by facing either; the likely remainder is turn/acceleration dynamics,
 since Link rotates toward a new stick direction over several frames rather than snapping to it. Recorded as
 the next thing to measure, not as something the camera was expected to fix.
+
+### How much of the direction error is the model's, and how much is the task's
+
+Before treating direction top-1 0.532 as a model failure, the achievable ceiling was estimated the same way
+the 0.220 action-recoverability ceiling was: bucket the data by what the model is given and take the
+most-frequent outcome per bucket. 12,862 moving steps, 16 sectors (chance 0.062):
+
+| Bayes-optimal top-1 for the displacement sector, given | ceiling |
+|---|---|
+| nothing (predict the global mode) | 0.092 |
+| stick direction alone | **0.113** |
+| stick + camera sector | 0.352 |
+| velocity sector alone | **0.466** |
+| stick + velocity | 0.468 |
+| **stick + camera + velocity — what the head sees** | **0.584** |
+| *transition head, measured on held-out slots* | **0.532** |
+
+The head is at **91% of the ceiling**, and since that ceiling is estimated over 1,602 buckets from 12,862
+samples it is optimistic, so the head is closer still. **Per-step direction prediction is not the remaining
+problem.** Two side findings: the stick *alone* is worth almost nothing (0.113 against a 0.092 global mode),
+and velocity is the single strongest signal (0.466), stronger than the camera.
+
+Why one step is intrinsically noisy: at 10 Hz a policy step spans 6 game frames, and Link rotates toward a new
+stick direction over several of them, so a single step mixes turning with translating. Camera-relative spread
+falls monotonically with how long the direction has been held — 79.3° (just changed) → 69.5° → 59.0° → 60.0°
+(6+ steps) — and only **2.3%** of moving steps in the demonstrator data hold a direction 6+ steps, because the
+policies re-sample almost every step. Displacement aligns best of all with Link's **current velocity** (58.2°).
+
+### The remaining blocker for approach is momentum, not direction
+
+Real walking is autocorrelated: Link keeps going the same way, and velocity is what carries that across steps.
+In the dream, velocity comes from the decoded state, whose predictor ties the identity — so it goes stale,
+each step's direction is drawn from a degraded `z_t`, and the path wanders (tortuosity 3.3×) even though every
+individual prediction is near-optimal.
+
+Note the architectural catch, recorded because it bounds the obvious fix: edits made by `apply_transition` go
+into the **state**, while the head reads **`z`**, and `z` evolves only through the predictor. So writing a
+corrected velocity into the state does not reach the next step's head. Two options, neither yet applied:
+
+1. **Re-encode each step**: `z_{t+1} = E(edited state)` instead of `z_{t+1} = M(z_t, a_t)`. Edits then feed
+   back, and the rollout stays on the data manifold because every `z` comes from a real encoder call on a
+   valid state. The policy still consumes `z`, so the latent-RL premise survives; what changes is that the
+   learned latent *transition* is no longer in the loop.
+2. Give the head state-derived inputs (velocity) alongside `z`, so momentum reaches it without re-encoding.
+
+Option 1 is the larger change and would make the dream a decoded-state model with a latent observation, which
+is a different experiment from the one stated in §1. Not taken unilaterally.
