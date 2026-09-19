@@ -29,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, decode_targets,  # noqa: E402
                          featurise, hp_class, wants_v2)
 from zelda_rl.combat import BABA_STATES, CombatConfig, DEKU_BABA  # noqa: E402
-from zelda_rl.dream_state import DreamTracker, decoded_states_from_raw, decoded_to_states  # noqa: E402
+from zelda_rl.dream_state import (DreamTracker, apply_transition, decoded_states_from_raw,  # noqa: E402
+                                  decoded_to_states)
 
 
 def main():
@@ -56,11 +57,17 @@ def main():
     enc.load_state_dict(ck["encoder"]); enc.eval()
     dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
     # same construction and call convention as scripts/train_dream_ppo.py
-    from zelda_rl.dynamics import load_predictor
+    from zelda_rl.dynamics import TransitionHead, load_predictor
     pred = load_predictor(ck, LAT, NA)
+    thead = None
+    if ck.get("thead") is not None:
+        thead = TransitionHead(LAT, NA)
+        thead.load_state_dict(ck["thead"]); thead.eval()
+        print("using the action-conditioned transition head for motion and damage")
     norm = Norm.load(ck["norm"])
     scale = ck["decode_scale"]
     MT = ck.get("moved_thresh", 0.0)
+    MC = tuple(ck.get("moved_calib", (1.0, 0.0)))
 
     # first frame of each episode = a real savestate start state
     S, EP = [], []
@@ -111,7 +118,7 @@ def main():
                 obs = torch.cat([zz, torch.from_numpy(m)], -1)
                 act, _, _, _, h = pol.act(obs, h, torch.full((n,), 1.0 if t == 0 else 0.0))
                 zz = pred(torch.cat([zz, torch.nn.functional.one_hot(act, NA).float()], -1))
-                nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_thresh=MT)
+                nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_calib=MC)
                 for i, tr in enumerate(trs):
                     tr.step(cur[i], nxt[i])
                 cur = nxt
@@ -147,7 +154,7 @@ def main():
                 for _ in range(a.steps):
                     oh = torch.nn.functional.one_hot(torch.full((len(zz),), act_id), NA).float()
                     zz = pred(torch.cat([zz, oh], -1))
-                    nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_thresh=MT)
+                    nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_calib=MC)
                     for i, t in enumerate(trs):
                         t.step(cur[i], nxt[i])
                     cur = nxt
@@ -165,19 +172,38 @@ def main():
             lock = float(np.mean([t.ep["lockons"] for t in trs]))
             lockr = float(np.mean([t.ep["r_parts"].get("lockon", 0.0)
                                    + t.ep["r_parts"].get("lock_hold", 0.0) for t in trs]))
-            rows.append((k, cl, lf, ret, act_id, dd, appr, lock, lockr))
-        rows.sort(key=lambda r: r[5])          # most distance CLOSED first
-        print(f"{'action':<14} {'d_end-d0':>9} {'r_approach':>11} {'lockons':>8} {'r_lock':>7} "
-              f"{'kills':>6} {'left%':>6} {'return':>9}")
-        for r in rows[:14]:
-            k, cl, lf, ret, act_id, dd, appr, lock, lockr = r
-            print(f"{action_name(act_id, 'combat'):<14} {dd:>+9.1f} {appr:>11.2f} {lock:>8.2f} "
-                  f"{lockr:>7.2f} {k:>6.2f} {lf:>6.0%} {ret:>9.2f}")
-        print("  ...")
-        for r in rows[-3:]:
-            k, cl, lf, ret, act_id, dd, appr, lock, lockr = r
-            print(f"{action_name(act_id, 'combat'):<14} {dd:>+9.1f} {appr:>11.2f} {lock:>8.2f} "
-                  f"{lockr:>7.2f} {k:>6.2f} {lf:>6.0%} {ret:>9.2f}")
+            # COMBAT audit: can the dream represent dealing damage and taking it? Same question as
+            # approach -- the reward pays enemy_damage / kill / link_damage / block / dodge, and none of
+            # those can fire unless the predictor moves decoded HP.
+            dmg = float(np.mean([t.ep["damage_dealt"] for t in trs]))
+            hpl = float(np.mean([t.ep["hp_lost"] for t in trs]))
+            rp = lambda key: float(np.mean([t.ep["r_parts"].get(key, 0.0) for t in trs]))
+            rows.append((k, cl, lf, ret, act_id, dd, appr, lock, lockr,
+                         dmg, hpl, rp("enemy_damage"), rp("kill"), rp("link_damage"),
+                         rp("block") + rp("dodge")))
+        hdr = (f"{'action':<14} {'d_end-d0':>9} {'r_appr':>7} {'lockons':>8} | {'dmg':>5} {'kills':>6} "
+               f"{'hpLost':>7} | {'r_edmg':>7} {'r_kill':>7} {'r_ldmg':>7} {'r_blk':>6} | {'left%':>6} {'ret':>8}")
+        line = lambda r: (f"{action_name(r[4], 'combat'):<14} {r[5]:>+9.1f} {r[6]:>7.2f} {r[7]:>8.2f} | "
+                          f"{r[9]:>5.2f} {r[0]:>6.2f} {r[10] / 16:>7.2f} | {r[11]:>7.2f} {r[12]:>7.2f} "
+                          f"{r[13]:>7.2f} {r[14]:>6.2f} | {r[2]:>6.0%} {r[3]:>8.2f}")
+        print("\n--- ranked by distance CLOSED (approach) ---")
+        print(hdr)
+        rows.sort(key=lambda r: r[5])
+        for r in rows[:8]:
+            print(line(r))
+        print("\n--- ranked by DAMAGE DEALT (combat) ---")
+        print(hdr)
+        for r in sorted(rows, key=lambda r: -r[9])[:8]:
+            print(line(r))
+        print("\n--- ranked by Link HP LOST (taking damage) ---")
+        print(hdr)
+        for r in sorted(rows, key=lambda r: -r[10])[:5]:
+            print(line(r))
+        print(f"\nAcross all {len(rows)} actions: max damage dealt "
+              f"{max(r[9] for r in rows):.2f} (a Baba has 2 HP, 3 in the room = 6 available), "
+              f"max kills {max(r[0] for r in rows):.2f}, max hearts lost {max(r[10] for r in rows)/16:.2f} "
+              f"(Link has 3).")
+        rows.sort(key=lambda r: r[5])
         best = min(rows, key=lambda r: r[5])
         print(f"\nBest distance closed by a single held action: {action_name(best[4], 'combat')} "
               f"{best[5]:+.1f} units over {a.steps} steps (r_approach {best[6]:.2f}).")
@@ -206,7 +232,7 @@ def main():
             z = pred(torch.cat([z, torch.nn.functional.one_hot(act, NA).float()], -1))
             p = dec(z)
             states = decoded_to_states({k: v for k, v in p.items()}, scale,
-                                       prev=prev_states, moved_thresh=MT)
+                                       prev=prev_states, moved_calib=MC)
             bc_ = p["baba_count"].argmax(-1).numpy()
             rhp = np.asarray(ROW_HP_VALUES)[p["row_hp"].argmax(-1).numpy()]
             pres = (p["row_present"].numpy() > 0)

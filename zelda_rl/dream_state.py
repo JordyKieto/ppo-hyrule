@@ -34,6 +34,50 @@ FN_BY_STATE = [_FN_FOR_STATE.get(i, 0) for i in range(N_BABA_STATES)]
 ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only uses pointers as identity
 
 
+def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
+                     hit_thresh: float = 0.5, link_hit_thresh: float = 0.0,
+                     hp_per_hit: int = 8) -> list[CombatState]:
+    """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
+
+    The audit this answers: across all 63 constant actions the dream managed max 0.00 kills and max 0.70 of
+    6 available damage, and the damage it did show came from SHIELD actions, which cannot deal damage at all.
+    The reward reads HP out of a decoded state whose predictor ties the identity, so nothing changed and the
+    only changes were decode noise -- billed as combat.
+
+    Position comes from the classified direction and magnitude (a mode, so it does not shrink the way the
+    regressed magnitude did, 0.11x of true on moving steps). Damage comes from the event heads, applied as a
+    real HP decrement to the row the head names.
+
+    Reward PARITY is preserved: this edits the STATE, and `CombatTracker` still computes all 18 terms from
+    states exactly as the emulator run does. Nothing here computes reward.
+    """
+    import torch as _t
+    from zelda_rl.dynamics import dir_unit_vectors, mag_centers
+    uv, mc = dir_unit_vectors(), mag_centers()
+    gate = _t.sigmoid(q["tr_moved"]).numpy()[:, 0]
+    d = q["tr_dir"].numpy().argmax(-1)
+    mg = q["tr_mag"].numpy().argmax(-1)
+    step = uv[d] * (mc[mg] * gate)[:, None]
+    dy = q["tr_dy"].numpy()[:, 0]
+    hitp = _t.softmax(q["tr_hit_row"], -1).numpy()
+    lhp = _t.sigmoid(q["tr_link_hit"]).numpy()[:, 0]
+    n_rows = hitp.shape[1] - 1
+    out = []
+    for i, (pv, cu) in enumerate(zip(prev, cur)):
+        cu.pos = (pv.pos[0] + float(step[i, 0]), pv.pos[1] + float(dy[i]), pv.pos[2] + float(step[i, 1]))
+        # enemy damage: the head names WHICH row, so the hit lands on a specific tracked actor
+        j = int(hitp[i, :n_rows].argmax())
+        if 1.0 - hitp[i, n_rows] > hit_thresh:
+            ptr = ROW_PTR_BASE + j * 0x100
+            e = cu.enemies.get(ptr)
+            if e is not None and e.hp > 0:
+                e.hp = max(0, e.hp - 1)
+        if lhp[i] > link_hit_thresh and cu.hp > 0:
+            cu.hp = max(0, cu.hp - hp_per_hit)          # a Deku Baba lunge costs half a heart
+        out.append(cu)
+    return out
+
+
 def decoded_to_states(p: dict, scale: dict, prev: list[CombatState] | None = None,
                       moved_thresh: float | None = None,
                       moved_calib: tuple[float, float] = (1.0, 0.0)) -> list[CombatState]:

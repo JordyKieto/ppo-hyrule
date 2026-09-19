@@ -40,7 +40,9 @@ from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, N_LINK_ACTIONS, ROW
                          BCNet, Norm,
                          StateDecoder, decode_targets,
                          featurise, hp_class)
-from zelda_rl.dynamics import build_predictor  # noqa: E402
+from zelda_rl.dynamics import (MAG_EDGES, N_DIR_SECTORS, N_MAG_BINS, TransitionHead,  # noqa: E402
+                               build_predictor, dir_unit_vectors, mag_centers)
+from zelda_rl.bc import N_ROWS  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
 
 DYING = 8
@@ -75,6 +77,10 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--w-trans", type=float, default=2.0,
+                    help="weight on the action-conditioned transition head (motion + damage events). These "
+                         "are what makes approach, damage and kills representable at all: the audit found "
+                         "max kills 0.00 and r_approach <= 0 for all 63 actions without them.")
     ap.add_argument("--w-dpos", type=float, default=2.0,
                     help="weight on the zero-inflated displacement heads. These are what the dream "
                          "integrates for motion, and over-moving by 20x was why it never reached the door.")
@@ -146,8 +152,13 @@ def main():
     dec = StateDecoder(latent=a.latent)
     NA = meta["n_actions"]
     pred = build_predictor(a.latent, NA)          # RESIDUAL: z + f(z,a); see zelda_rl/dynamics.py
+    # Action-conditioned transition head. Motion and combat events are read from (z_t, a_t) directly rather
+    # than decoded out of z_{t+1}, because the action barely survives into the latent (inverse dynamics
+    # 0.089 vs a 0.220 ceiling) and these are exactly the quantities that depend on it.
+    thead = TransitionHead(a.latent, NA, n_rows=N_ROWS)
     A = F.one_hot(act, NA).float()
-    params = list(enc.parameters()) + list(dec.parameters()) + list(pred.parameters())
+    params = (list(enc.parameters()) + list(dec.parameters()) + list(pred.parameters())
+              + list(thead.parameters()))
     opt = torch.optim.Adam(params, lr=a.lr)
 
     from zelda_rl.combat import BABA_STATES
@@ -189,6 +200,45 @@ def main():
 
     def E(i):
         return enc.encode(T["link"][i], T["rows"][i], T["ids"][i], T["mask"][i])
+
+    # --- transition head: what the action DID, all classified ------------------------------------------
+    TRM = torch.from_numpy(Y["tr_mask"].astype(np.float32))
+    TRMV = torch.from_numpy(Y["tr_moved"].astype(np.float32))
+    TRDIR = torch.from_numpy(Y["tr_dir"].astype(np.int64))
+    TRMAG = torch.from_numpy(Y["tr_mag"].astype(np.int64))
+    TRDY = torch.from_numpy(Y["tr_dy"].astype(np.float32))
+    TRHIT = torch.from_numpy(Y["tr_hit_row"].astype(np.int64))
+    TRLH = torch.from_numpy(Y["tr_link_hit"].astype(np.float32))
+    _m = (Y["tr_moved"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
+    _h = (Y["tr_hit_row"] != N_ROWS) & (Y["tr_mask"] > 0)
+    _l = (Y["tr_link_hit"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
+    pw = lambda pos: torch.tensor(float(np.sqrt(max(len(pos) - pos.sum(), 1) / max(pos.sum(), 1))))
+    PW_MV, PW_LH = pw(_m), pw(_l)
+    # hit_row is a 17-way choice dominated by "none": weight the classes by inverse sqrt frequency, the same
+    # square-rooting used for HP, because a raw inverse-frequency weight of 3633:1 collapsed a head before.
+    _hc = np.bincount(Y["tr_hit_row"][Y["tr_mask"] > 0], minlength=N_ROWS + 1).astype(float)
+    _hw = (_hc.sum() / np.maximum(_hc, 1)) ** 0.5
+    CW_HIT = torch.tensor((_hw / _hw.mean()).astype(np.float32))
+    print(f"transition head: moves {_m.mean():.1%} of steps, an actor is hit on {_h.mean():.2%}, "
+          f"Link is hit on {_l.mean():.2%} (pos_weights {float(PW_MV):.1f} / {float(PW_LH):.1f})")
+
+    def trans_loss(q, i):
+        """All classification except dy. A mode does not shrink; a regressed magnitude did, 9.3x."""
+        mk = TRM[i]
+        den = mk.sum().clamp(min=1)
+        L = (F.binary_cross_entropy_with_logits(q["tr_moved"], TRMV[i], pos_weight=PW_MV,
+                                                reduction="none").squeeze(-1) * mk).sum() / den
+        L = L + (F.binary_cross_entropy_with_logits(q["tr_link_hit"], TRLH[i], pos_weight=PW_LH,
+                                                    reduction="none").squeeze(-1) * mk).sum() / den
+        L = L + (F.cross_entropy(q["tr_hit_row"], TRHIT[i], weight=CW_HIT,
+                                 reduction="none") * mk).sum() / den
+        # direction and magnitude are only defined where Link actually moved
+        mvk = mk * TRMV[i].squeeze(-1)
+        d2 = mvk.sum().clamp(min=1)
+        L = L + (F.cross_entropy(q["tr_dir"], TRDIR[i], reduction="none") * mvk).sum() / d2
+        L = L + (F.cross_entropy(q["tr_mag"], TRMAG[i], reduction="none") * mvk).sum() / d2
+        L = L + 0.1 * (((q["tr_dy"] - TRDY[i]) ** 2).squeeze(-1) * mk).sum() / den
+        return L
 
     def decode_loss(p, i):
         m, mb = Yt["row_present"][i], Yt["row_is_baba"][i]
@@ -265,6 +315,7 @@ def main():
             i = torch.from_numpy(perm[s:s + a.batch])
             z = E(i)
             ld = decode_loss(dec(z), i)                          # every frame, exit frames included
+            ld = ld + a.w_trans * trans_loss(thead(z, A[i]), i)
             if a.unroll > 1:
                 zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)), replace=False))
                 zz, lp, wsum = E(zi), torch.zeros(()), 0.0
@@ -495,6 +546,43 @@ def main():
               f"-> ratio {mag_p.mean() / max(mag_t.mean(), 1e-9):.2f}x  "
               f"(std {mag_t.std():.2f} vs {mag_p.std():.2f}); "
               f"on truly-moving steps MAE {float(np.abs(mag_p - mag_t)[mv_t].mean()) if mv_t.any() else float('nan'):.2f}")
+        # --- transition head, the thing that makes approach and combat representable -------------------
+        with torch.no_grad():
+            q = thead(Zte, A[te])
+        tk = Y["tr_mask"][te] > 0
+        mvt = (Y["tr_moved"][te][:, 0] > 0.5) & tk
+        ap_of = lambda score, lab: float((np.cumsum(lab[np.argsort(-score)])
+                                          / np.arange(1, len(score) + 1) * lab[np.argsort(-score)]).sum()
+                                         / max(lab.sum(), 1))
+        mv_ap = ap_of(q["tr_moved"].numpy()[:, 0][tk], mvt[tk])
+        dirp = q["tr_dir"].numpy().argmax(-1); magp = q["tr_mag"].numpy().argmax(-1)
+        sel = mvt
+        dacc = float((dirp[sel] == Y["tr_dir"][te][sel]).mean()) if sel.any() else float("nan")
+        macc = float((magp[sel] == Y["tr_mag"][te][sel]).mean()) if sel.any() else float("nan")
+        # reconstruct the step the dream would take and compare it to the real one, in world units
+        uv, mc = dir_unit_vectors(), mag_centers()
+        step = uv[dirp] * mc[magp][:, None]
+        gate = 1.0 / (1.0 + np.exp(-q["tr_moved"].numpy()[:, 0]))
+        true_xz = Y["tr_dpos_xz"][te] if "tr_dpos_xz" in Y else None
+        tmag = Y["tr_mag_units"][te]
+        rec = np.linalg.norm(step, axis=1) * gate
+        print(f"          TRANSITION HEAD: moved AP {mv_ap:.4f} (base {float(mvt[tk].mean()):.3f}) | "
+              f"dir top-1 {dacc:.3f} (chance {1/N_DIR_SECTORS:.3f})  mag top-1 {macc:.3f} "
+              f"(chance {1/N_MAG_BINS:.3f})")
+        print(f"          step magnitude on truly-moving frames: true {tmag[sel].mean():.2f} / "
+              f"head {np.linalg.norm(step, axis=1)[sel].mean():.2f} units "
+              f"-> ratio {np.linalg.norm(step, axis=1)[sel].mean() / max(tmag[sel].mean(), 1e-9):.2f}x "
+              f"(the regressed head was 0.11x)")
+        ht = Y["tr_hit_row"][te]
+        hit_any = (ht != N_ROWS) & tk
+        hs = 1.0 - torch.softmax(q["tr_hit_row"], -1).numpy()[:, N_ROWS]
+        lht = (Y["tr_link_hit"][te][:, 0] > 0.5) & tk
+        ls = q["tr_link_hit"].numpy()[:, 0]
+        print(f"          DAMAGE events: enemy-hit AP {ap_of(hs[tk], hit_any[tk]):.4f} "
+              f"(base {float(hit_any[tk].mean()):.4f}, {int(hit_any.sum())} events) | "
+              f"which row, on hit frames: {float((q['tr_hit_row'].numpy().argmax(-1)[hit_any] == ht[hit_any]).mean()) if hit_any.any() else float('nan'):.3f}")
+        print(f"          LINK-hit AP {ap_of(ls[tk], lht[tk]):.4f} "
+              f"(base {float(lht[tk].mean()):.4f}, {int(lht.sum())} events)")
         zp = (p["link_ztarget"].numpy()[:, 0] > 0)[vmask]; zt_ = (Y["link_ztarget"][te][:, 0] > 0.5)[vmask]
         ap_ = (p["link_airborne"].numpy()[:, 0] > 0)[vmask]; at_ = (Y["link_airborne"][te][:, 0] > 0.5)[vmask]
         print(f"          z_target acc {float((zp == zt_).mean()):.4f} recall {float(zp[zt_].mean()):.3f} | "
@@ -533,7 +621,8 @@ def main():
                 # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
-                "norm": norm.state_dict(), "split": split, "pred_residual": True, "moved_thresh": moved_thresh, "moved_calib": moved_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "norm": norm.state_dict(), "split": split, "pred_residual": True,
+                "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)

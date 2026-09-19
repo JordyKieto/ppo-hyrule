@@ -16,6 +16,7 @@ into a Baba without shielding yields Link damage, enemy contact and eventually d
   wall      hold each compass direction into the geometry        -> bgCheckFlags WALL, wallYaw, speed -> 0
   flail     uniform random actions                               -> jumps, whiffed swings, Z with no target
   moves     cycle roll / backflip / sidehop / jump-attack / swing -> the rare ACTION STATES, on purpose
+  approach  close on the nearest Baba with the shield up, repeatedly -> SUSTAINED closing + contact
 
 Output is the same .npz + manifest format as scripts/collect_transitions.py, so all of it concatenates with
 the standard collection. States are v2 (zelda_rl/state_layout.py), so the collision and action fields are
@@ -48,7 +49,8 @@ N_DIRS, N_BTN = 9, 7          # 63 combat actions = 9 stick directions x 7 butto
 BTN_NONE, BTN_A, BTN_B, BTN_Z, BTN_SHIELD, BTN_ZB, BTN_ZA = range(7)
 
 # Per-scenario episode cap. A walkout takes a few seconds; the 180 s default would waste minutes per episode.
-SECONDS = {"walkout": 25.0, "suicide": 90.0, "wall": 40.0, "flail": 180.0, "moves": 120.0}
+SECONDS = {"walkout": 25.0, "suicide": 90.0, "wall": 40.0, "flail": 180.0, "moves": 120.0,
+           "approach": 120.0}
 
 
 def _nearest(c):
@@ -111,6 +113,31 @@ MOVE_CYCLE = [
 ]
 
 
+def act_approach(env, c, rng, t, st):
+    """Close distance on the nearest Baba and SURVIVE, so the trajectory is long.
+
+    `suicide` also walks at the nearest Baba but dies in ~70 steps, so the dataset has few sustained closing
+    trajectories -- and the audit found the dream could close only 43 world units in 120 steps while a real
+    held direction covers over 1300. This is the same move that fixed the room-exit head: the behaviour had
+    no examples, so it was scripted.
+
+    The shield is held while closing (R blocks a Deku Baba lunge) and released periodically so Link keeps
+    moving, and every few seconds Link backs off and re-approaches, which is what produces repeated closing
+    rather than one approach followed by standing still.
+    """
+    n = _nearest(c)
+    if n is None:
+        return int(rng.integers(0, N_DIRS * N_BTN))
+    toward = _dir_toward(c, n.pos[0], n.pos[2])
+    away = ((toward - 1 + 4) % 8) + 1
+    phase = (t // st["approach_leg"]) % 4
+    if phase == 3:                                   # back off, so the next phase closes again
+        return away * N_BTN + BTN_NONE
+    if phase == 2:                                   # hold the shield up at close range
+        return toward * N_BTN + BTN_SHIELD
+    return toward * N_BTN + (BTN_Z if phase == 1 else BTN_NONE)   # close, with and without lock-on
+
+
 def act_moves(env, c, rng, t, st):
     """Cycle deliberately through roll / backflip / sidehop / jump-attack / shield / swing.
 
@@ -128,7 +155,7 @@ def act_flail(env, c, rng, t, st):
 
 
 SCENARIOS = {"walkout": act_walkout, "suicide": act_suicide, "wall": act_wall, "flail": act_flail,
-             "moves": act_moves}
+             "moves": act_moves, "approach": act_approach}
 
 
 def main():
@@ -141,6 +168,8 @@ def main():
     ap.add_argument("--slots-dir", default=DEKU_STATES_DIR)
     ap.add_argument("--warmup-max", type=int, default=25, help="random steps before a scripted walkout")
     ap.add_argument("--leg", type=int, default=45, help="wall scenario: steps held per compass direction")
+    ap.add_argument("--approach-leg", type=int, default=40,
+                    help="approach scenario: steps per phase (close / close+Z / shield / back off)")
     ap.add_argument("--move-hold", type=int, default=6,
                     help="moves scenario: steps per move. Short, because a roll or sidehop is ~10 frames "
                          "and holding longer just records the walk that follows it.")
@@ -208,7 +237,9 @@ def main():
                 # env was built with the LONGEST scenario's cap; scale it down for the shorter ones
                 cap = max(1, round(env.cfg.max_steps * SECONDS[name] / max(SECONDS[n] for n in names)))
                 st = {"warm": int(rng.integers(3, args.warmup_max)), "dir": None, "leg": args.leg,
-                      "move_hold": args.move_hold}
+                      "move_hold": args.move_hold, "approach_leg": args.approach_leg}
+                # No `obs` here: camera yaw now lives in the v3 state itself, which is the only thing the
+                # 483-d obs was needed for (camera yaw + Link velocity), and Link velocity is in v2.
                 S, A, R = [encode_state(env.cstate, rows)], [], []
                 ep, n_wall, n_hit = None, 0, 0
                 hp0 = env.cstate.hp

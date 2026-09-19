@@ -36,9 +36,10 @@ from zelda_rl.ppo import gae, ppo_update_recurrent  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
 from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
 from zelda_rl.bc import StateDecoder  # noqa: E402
-from zelda_rl.dynamics import load_predictor  # noqa: E402
+from zelda_rl.dynamics import TransitionHead, load_predictor  # noqa: E402
 from zelda_rl.combat import CombatConfig, CombatTracker  # noqa: E402
-from zelda_rl.dream_state import (MEM_DIM, DreamPolicy, DreamTracker, build_seeds,  # noqa: E402
+from zelda_rl.dream_state import (MEM_DIM, DreamPolicy, DreamTracker, apply_transition,  # noqa: E402
+                                  build_seeds,
                                   decoded_states_from_raw, decoded_to_states, memory_features)
 from zelda_rl.runlog import RunLogger  # noqa: E402
 
@@ -53,12 +54,14 @@ class Dream:
     """
 
     def __init__(self, pred, dec, scale, seed_z, seed_trk, n_actions, max_steps, combat_cfg,
-                 exit_persist=3, moved_thresh=None, moved_calib=(1.0, 0.0)):
+                 exit_persist=3, moved_thresh=None, moved_calib=(1.0, 0.0), thead=None,
+                 hit_thresh=0.5):
         self.pred, self.dec, self.scale = pred, dec, scale
         self.seed_z, self.seed_trk = seed_z, seed_trk       # latent + the tracker replayed to that frame
         self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
         self.exit_persist = exit_persist
         self.moved_thresh, self.moved_calib = moved_thresh, moved_calib
+        self.thead, self.hit_thresh = thead, hit_thresh
 
     @torch.no_grad()
     def _states(self, z, prev=None):
@@ -90,8 +93,15 @@ class Dream:
 
     @torch.no_grad()
     def step(self, a):
-        self.z = self.pred(torch.cat([self.z, F.one_hot(a, self.NA).float()], -1))
-        nxt = self._states(self.z, prev=self.cur)      # position accumulates from where Link actually is
+        oh = F.one_hot(a, self.NA).float()
+        q = self.thead(self.z, oh) if self.thead is not None else None
+        self.z = self.pred(torch.cat([self.z, oh], -1))
+        if q is not None:
+            # motion and damage from (z_t, a_t); the decoded state supplies everything else, and
+            # CombatTracker still reads the STATE, so reward parity is untouched
+            nxt = apply_transition(self.cur, self._states(self.z), q, hit_thresh=self.hit_thresh)
+        else:
+            nxt = self._states(self.z, prev=self.cur)  # position accumulates from where Link actually is
         n = len(nxt)
         # Leaving the room is permanent, so require the scene flag to persist. The head's per-frame
         # false-positive rate is 0.0055, which over an ~85-step episode compounds to a ~38% chance of at
@@ -176,6 +186,13 @@ def main():
     enc = BCNet(link_dim=ck["link_dim"], row_dim=ck["row_dim"], n_actions=NA, latent=LAT, gru=0)
     enc.load_state_dict(ck["encoder"]); enc.eval()
     pred = load_predictor(ck, LAT, NA)      # residual or flat, per what the checkpoint stored
+    thead = None
+    if ck.get("thead") is not None:
+        thead = TransitionHead(LAT, NA)
+        thead.load_state_dict(ck["thead"]); thead.eval()
+        for q in thead.parameters():
+            q.requires_grad_(False)
+        print("transition head: motion and damage come from (z_t, a_t), not from differencing decoded state")
     dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
     for p in list(enc.parameters()) + list(pred.parameters()) + list(dec.parameters()):
         p.requires_grad_(False)
@@ -249,7 +266,7 @@ def main():
 
     env = Dream(pred, dec, ck["decode_scale"], starts, seed_trk, NA, a.max_steps, CombatConfig(),
                 moved_thresh=None,      # soft gate: P(moved) * dpos, see decoded_to_states
-                moved_calib=ck.get("moved_calib", (1.0, 0.0)),
+                moved_calib=ck.get("moved_calib", (1.0, 0.0)), thead=thead,
                 exit_persist=a.exit_persist)
     OBS = LAT + MEM_DIM
     model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy

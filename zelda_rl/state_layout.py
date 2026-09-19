@@ -38,6 +38,13 @@ LINK_FIELDS_V2_EXTRA = ["shape_yaw", "vel_x", "vel_y", "vel_z", "speed", "bg_fla
                         "door_timer", "knockback_type"]
 LINK_FIELDS_V2 = LINK_FIELDS_V1 + LINK_FIELDS_V2_EXTRA
 
+# v3 adds the CAMERA. A stick direction moves Link relative to the camera, so without it the world direction
+# of a walk cannot be known -- which is what capped the transition head's direction accuracy at 0.532 over 16
+# sectors and left the dream unable to approach a Baba. camera_yaw_sin_cos was in the original PPO's
+# observation, so this is a parity restoration, not an addition.
+LINK_FIELDS_V3_EXTRA = ["cam_yaw", "cam_pitch", "cam_eye_x", "cam_eye_y", "cam_eye_z"]
+LINK_FIELDS_V3 = LINK_FIELDS_V2 + LINK_FIELDS_V3_EXTRA
+
 ENEMY_FIELDS = ["present", "id", "hp", "pos_x", "pos_y", "pos_z", "fn_rel", "state_idx", "shape_yaw",
                 "yaw_to_player", "timer", "cat", "params", "yaw", "vel_x", "vel_y", "vel_z",
                 "focus_x", "focus_y", "focus_z"]
@@ -45,20 +52,24 @@ assert len(ENEMY_FIELDS) == ROW_DIM
 
 STATE_DIM_V1 = len(LINK_FIELDS_V1) + N_ROWS * ROW_DIM      # 335
 STATE_DIM_V2 = len(LINK_FIELDS_V2) + N_ROWS * ROW_DIM      # 358
+STATE_DIM_V3 = len(LINK_FIELDS_V3) + N_ROWS * ROW_DIM      # 363
 LINK_DIM_V1, LINK_DIM_V2 = len(LINK_FIELDS_V1), len(LINK_FIELDS_V2)
+LINK_DIM_V3 = len(LINK_FIELDS_V3)
+_KNOWN = (LINK_DIM_V1, LINK_DIM_V2, LINK_DIM_V3)
 
 
 def link_dim(width: int) -> int:
     """Link-block width implied by a flat state vector's total width."""
     d = width - N_ROWS * ROW_DIM
-    if d not in (LINK_DIM_V1, LINK_DIM_V2):
-        raise ValueError(f"state width {width} implies link block {d}, expected "
-                         f"{LINK_DIM_V1} (v1) or {LINK_DIM_V2} (v2)")
+    if d not in _KNOWN:
+        raise ValueError(f"state width {width} implies link block {d}, expected one of {_KNOWN} "
+                         f"(v1 / v2 / v3)")
     return d
 
 
 def link_fields(width: int) -> list[str]:
-    return LINK_FIELDS_V1 if link_dim(width) == LINK_DIM_V1 else LINK_FIELDS_V2
+    d = link_dim(width)
+    return {LINK_DIM_V1: LINK_FIELDS_V1, LINK_DIM_V2: LINK_FIELDS_V2, LINK_DIM_V3: LINK_FIELDS_V3}[d]
 
 
 def link_index(width: int) -> dict[str, int]:
@@ -67,4 +78,8 @@ def link_index(width: int) -> dict[str, int]:
 
 
 def has_v2(width: int) -> bool:
-    return link_dim(width) == LINK_DIM_V2
+    return link_dim(width) >= LINK_DIM_V2
+
+
+def has_v3(width: int) -> bool:
+    return link_dim(width) >= LINK_DIM_V3

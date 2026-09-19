@@ -116,6 +116,13 @@ class CombatState:
     door_direction: int = 0
     door_timer: int = 0
     knockback_type: int = 0             # Player +0x891: set when Link is knocked back
+    # Camera. NOT optional: a stick direction moves Link relative to the CAMERA, so without it the world
+    # direction of a walk is unknowable. It was in the original PPO's observation (camera_yaw_sin_cos) but
+    # never in the recorded state, and the audit traced the dream's failure to approach a Baba to exactly
+    # this -- displacement direction top-1 stalled at 0.532 over 16 sectors with no camera input at all.
+    cam_yaw: float = 0.0                # radians, atan2(dz, dx) of eye->at, same convention as obs.py
+    cam_pitch: float = 0.0              # radians, elevation of eye->at
+    cam_eye: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
     def action_fn_rel(self) -> int:
@@ -158,7 +165,7 @@ def read_combat_state(ram) -> CombatState:
         held_item=struct.unpack_from(">b", ram, (player + 0x141) & 0x3FFFFF)[0] if ok else 0,
         seeds=int(ram[(SAVE_CTX + 0x8C + 6) & 0x3FFFFF]), nuts=int(ram[(SAVE_CTX + 0x8C + 1) & 0x3FFFFF]),
         grass=_count_actors(ram, 6, GRASS_ID),
-        **(_read_link_body(ram, player) if ok else {}),
+        **(_read_link_body(ram, player) if ok else {}), **_read_camera(ram),
     )
 
 
@@ -219,6 +226,16 @@ def _read_link_body(ram, player: int) -> dict:
          for k, (o, f) in LINK_FIELD_OFFSETS.items()}
     d["vel"] = _vec3(ram, player + 0x5C)
     return d
+
+
+def _read_camera(ram) -> dict:
+    """Main camera, same offsets obs.read_state_v2 uses (MAIN_CAMERA +0x50 `at`, +0x5C `eye`)."""
+    from zelda_rl.obs import MAIN_CAMERA
+    at, eye = _vec3(ram, MAIN_CAMERA + 0x50), _vec3(ram, MAIN_CAMERA + 0x5C)
+    dx, dy, dz = at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]
+    return {"cam_yaw": math.atan2(dz, dx),
+            "cam_pitch": math.atan2(dy, math.hypot(dx, dz)),
+            "cam_eye": eye}
 
 
 def _count_actors(ram, cat: int, actor_id: int) -> int:

@@ -21,8 +21,8 @@ import torch
 import torch.nn as nn
 
 from zelda_rl.combat import BG_BITS, BG_DECODE_BITS, BG_GROUND, BG_WALL
-from zelda_rl.state_layout import (ENEMY_FIELDS as ROW_F, LINK_FIELDS_V1, LINK_FIELDS_V2, N_ROWS, ROW_DIM,
-                                  link_dim)
+from zelda_rl.state_layout import (ENEMY_FIELDS as ROW_F, LINK_FIELDS_V1, LINK_FIELDS_V2,
+                                  LINK_FIELDS_V3, N_ROWS, ROW_DIM, link_dim)
 
 LINK_DIM, N_ACTIONS = len(LINK_FIELDS_V1), 63     # v1 width; real width is read per call, see _split()
 N_BABA_STATES = 10
@@ -31,7 +31,7 @@ BABA_ID = 0x0055
 TURNS = 65536.0  # OoT binary angle unit
 
 LINK_F = LINK_FIELDS_V1
-LI = {k: i for i, k in enumerate(LINK_FIELDS_V2)}   # v1 names keep their v1 indices: v2 only appends
+LI = {k: i for i, k in enumerate(LINK_FIELDS_V3)}   # each version only APPENDS, so indices are stable
 RI = {k: i for i, k in enumerate(ROW_F)}
 
 
@@ -41,7 +41,7 @@ def _split(state: np.ndarray):
     state = np.asarray(state, np.float32)
     n, w = len(state), state.shape[-1]
     dl = link_dim(w)
-    return state[:, :dl], state[:, dl:].reshape(n, N_ROWS, ROW_DIM), dl == len(LINK_FIELDS_V2)
+    return state[:, :dl], state[:, dl:].reshape(n, N_ROWS, ROW_DIM), dl >= len(LINK_FIELDS_V2)
 
 
 LINK_FEAT_NAMES = (["hp", "hp_frac", "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "held_item", "nuts",
@@ -57,14 +57,37 @@ LINK_V2_FEAT_NAMES = (["speed", "vel_x", "vel_y", "vel_z", "vel_mag"]
                          "fall_distance", "floor_pitch_sin", "floor_pitch_cos", "has_interact_wall",
                          "dist_interact_wall", "y_dist_to_ledge", "door_type", "door_timer", "knockback"]
                       + [f"sf2_bit{i}" for i in range(SF1_BITS)] + [f"sf3_bit{i}" for i in range(8)])
+# v3: the CAMERA. A stick direction moves Link relative to it, so the world direction of a walk is
+# unknowable without it. Zero-filled for v1/v2 states so the encoder width stays version-independent.
+LINK_V3_FEAT_NAMES = ["cam_yaw_sin", "cam_yaw_cos", "cam_pitch_sin", "cam_pitch_cos",
+                      "cam_rel_x", "cam_rel_y", "cam_rel_z", "cam_dist",
+                      "heading_rel_cam_sin", "heading_rel_cam_cos"]
 ROW_FEAT_NAMES = (["present", "hp", "dx", "dy", "dz", "dist", "log_dist", "bearing_sin", "bearing_cos",
                    "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "shape_yaw_sin", "shape_yaw_cos",
                    "yaw_to_player_sin", "yaw_to_player_cos", "timer", "cat", "params", "fn_rel",
                    "vel_x", "vel_y", "vel_z", "speed", "focus_dx", "focus_dy", "focus_dz",
                    "is_baba", "is_targeted", "is_arrow"] + [f"state_{i}" for i in range(N_BABA_STATES)])
-LINK_FEAT_NAMES = LINK_FEAT_NAMES + LINK_V2_FEAT_NAMES
+LINK_FEAT_NAMES = LINK_FEAT_NAMES + LINK_V2_FEAT_NAMES + LINK_V3_FEAT_NAMES
 LINK_FEAT_DIM, ROW_FEAT_DIM = len(LINK_FEAT_NAMES), len(ROW_FEAT_NAMES)
-LINK_V2_FEAT_DIM = len(LINK_V2_FEAT_NAMES)
+LINK_V2_FEAT_DIM, LINK_V3_FEAT_DIM = len(LINK_V2_FEAT_NAMES), len(LINK_V3_FEAT_NAMES)
+
+
+def _link_v3_feats(lk: np.ndarray, n: int) -> np.ndarray:
+    """Camera features, or zeros when the state predates v3.
+
+    `heading_rel_cam` is the one that matters most: the stick is interpreted in camera space, so Link's
+    heading MINUS the camera yaw is what a held direction actually controls.
+    """
+    if lk.shape[1] < len(LINK_FIELDS_V3):
+        return np.zeros((n, LINK_V3_FEAT_DIM), np.float32)
+    cy, cp = lk[:, LI["cam_yaw"]], lk[:, LI["cam_pitch"]]
+    eye = lk[:, [LI["cam_eye_x"], LI["cam_eye_y"], LI["cam_eye_z"]]]
+    rel = (lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]] - eye) / 100.0
+    yaw_rad = lk[:, LI["yaw"]] * (2 * np.pi / TURNS)
+    hrel = yaw_rad - cy
+    return np.stack([np.sin(cy), np.cos(cy), np.sin(cp), np.cos(cp),
+                     rel[:, 0], rel[:, 1], rel[:, 2], np.linalg.norm(rel, axis=1),
+                     np.sin(hrel), np.cos(hrel)], 1).astype(np.float32)
 
 
 def wants_v2(link_dim_of_checkpoint: int) -> bool:
@@ -125,7 +148,7 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
     ], 1).astype(np.float32)
 
 
-LINK_FEAT_DIM_V1 = LINK_FEAT_DIM - LINK_V2_FEAT_DIM      # 45: the width checkpoints before state v2 expect
+LINK_FEAT_DIM_V1 = LINK_FEAT_DIM - LINK_V2_FEAT_DIM - LINK_V3_FEAT_DIM   # 45: pre-v2 checkpoint width
 
 
 def featurise(state: np.ndarray, link_v2: bool = True) -> dict[str, np.ndarray]:
@@ -155,7 +178,7 @@ def featurise(state: np.ndarray, link_v2: bool = True) -> dict[str, np.ndarray]:
         (lk[:, [LI["arrow_row"]]] >= 0).astype(np.float32),
         present.sum(1, keepdims=True), is_baba.sum(1, keepdims=True),
         bits,
-    ] + ([_link_v2_feats(lk, v2, n)] if link_v2 else []), 1).astype(np.float32)
+    ] + ([_link_v2_feats(lk, v2, n), _link_v3_feats(lk, n)] if link_v2 else []), 1).astype(np.float32)
 
     rpos = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
     d = rpos - lpos[:, None, :]
@@ -345,15 +368,65 @@ def decode_targets(state: np.ndarray, obs: np.ndarray | None = None,
         "baba_count": np.clip(((present > 0.5) & (rows[:, :, RI["id"]].astype(np.int64) == BABA_ID)
                                & (rows[:, :, RI["hp"]] > 0)).sum(1), 0, N_BABA_COUNT - 1).astype(np.int64),
     }
+    if lk.shape[1] >= len(LINK_FIELDS_V3):
+        out["cam_yaw"] = np.stack([np.sin(lk[:, LI["cam_yaw"]]), np.cos(lk[:, LI["cam_yaw"]])], 1)
+        out["has_cam"] = np.ones(n, np.float32)
+    else:
+        out["has_cam"] = np.zeros(n, np.float32)
     if obs is not None:
-        out["cam_yaw"] = np.asarray(obs[:, OBS_CAM_YAW], np.float32)
+        # v3 states carry the camera directly, so obs is only a fallback for older collections
+        out.setdefault("cam_yaw", np.asarray(obs[:, OBS_CAM_YAW], np.float32))
         out["link_vel"] = np.asarray(obs[:, OBS_LINK_VEL], np.float32)
     out.update(_v2_targets(lk, v2, n))
     out.update(_dpos_targets(lk, epid, n))
+    out.update(transition_targets(state, epid))
     return out
 
 
 MOVED_THRESH = 1.0          # world units of XZ travel in one 100 ms step that counts as "moved"
+
+
+def transition_targets(state: np.ndarray, epid: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """What the action at step t DID, indexed at t and describing t -> t+1.
+
+    These train `zelda_rl.dynamics.TransitionHead`, which is conditioned on (z_t, a_t). Everything here is
+    classified rather than regressed, because the regressed version shrank: on truly-moving steps the
+    regressed magnitude was 1.19 against a real 11.03. Direction goes to 16 sectors and magnitude to 8 bins.
+
+    `tr_hit_row` is which actor row lost HP over the step, or `N_ROWS` for "none" -- the analogue of decoding
+    the damage event rather than differencing two noisy HP decodes. A row that DESPAWNS while it still had HP
+    is not a hit (death reload despawns everything at once), so only rows present at both ends count.
+
+    `tr_mask` is 0 on the last frame of each episode, which has no successor.
+    """
+    from zelda_rl.dynamics import MAG_EDGES, N_DIR_SECTORS
+    state = np.asarray(state, np.float32)
+    n = len(state)
+    lk, rows, _ = _split(state)
+    nxt = np.arange(1, n + 1).clip(max=n - 1)
+    mask = np.ones(n, np.float32)
+    mask[-1] = 0.0
+    if epid is not None:
+        last = np.r_[epid[1:] != epid[:-1], True]
+        mask[last] = 0.0
+
+    pos = lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]]
+    d = pos[nxt] - pos
+    mag = np.linalg.norm(d[:, [0, 2]], axis=1)
+    moved = ((mag > MOVED_THRESH) & (mask > 0)).astype(np.float32)
+    ang = np.arctan2(d[:, 2], d[:, 0]) % (2 * np.pi)
+    sector = np.floor(ang / (2 * np.pi / N_DIR_SECTORS)).astype(np.int64) % N_DIR_SECTORS
+    mbin = np.searchsorted(np.asarray(MAG_EDGES), mag, side="right").clip(0, len(MAG_EDGES) - 1)
+
+    hp = rows[:, :, RI["hp"]]
+    present = rows[:, :, RI["present"]] > 0.5
+    both = present & present[nxt]
+    dropped = (hp[nxt] < hp) & both                     # HP fell while the row stayed present
+    hit_row = np.where(dropped.any(1), dropped.argmax(1), N_ROWS).astype(np.int64)
+    link_hit = ((lk[nxt, LI["hp"]] < lk[:, LI["hp"]]) & (mask > 0)).astype(np.float32)
+    return {"tr_mask": mask, "tr_moved": moved[:, None], "tr_dir": sector, "tr_mag": mbin,
+            "tr_dy": d[:, [1]].astype(np.float32), "tr_hit_row": hit_row, "tr_link_hit": link_hit[:, None],
+            "tr_mag_units": mag.astype(np.float32)}
 
 
 def _dpos_targets(lk: np.ndarray, epid: np.ndarray | None, n: int) -> dict[str, np.ndarray]:

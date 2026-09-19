@@ -77,3 +77,70 @@ def load_predictor(ck: dict, latent: int, n_actions: int) -> nn.Module:
         m.load_state_dict(sd)
     m.eval()
     return m
+
+
+# --- What an action DOES: motion and combat events, conditioned on (z_t, a_t) -------------------------
+#
+# The audit that motivates this: across all 63 constant actions in the dream, max kills 0.00, max damage
+# dealt 0.70 of the 6 HP available, and the damage that did appear came from SHIELD actions -- which cannot
+# deal damage in the real game. `approach` paid <= 0 for every action and the best Z-press acquired 0.90
+# lock-ons against a cap of 6. None of it is earnable, because the reward reads HP and position changes out
+# of a decoded state whose predictor ties the identity: nothing changes, so the only changes are decode noise.
+#
+# Two design points, both patterns that already worked here:
+#
+#   * CONDITION ON THE ACTION DIRECTLY. Displacement direction is close to a function of the stick direction
+#     and camera, and a sword hit is a function of swinging while near and facing a Baba -- but the action
+#     barely survives into the latent (inverse dynamics 0.089 against a 0.220 ceiling). Reading these out of
+#     z_{t+1} routes the quantities that need the action through the weakest channel. This is the event-head
+#     pattern: predict events from a latent transition rather than differencing a decoded state.
+#   * CLASSIFY, DO NOT REGRESS. On truly-moving steps the regressed magnitude was 1.19 against a real 11.03,
+#     9.3x too small -- regression to the conditional mean under uncertainty. The same failure made HP
+#     unusable until it was classified (damage F1 0.286 -> 0.906). Direction and magnitude are binned, and a
+#     mode does not shrink. Sectors are 16 so they align with the 9 stick directions of the action space.
+N_DIR_SECTORS = 16
+MAG_EDGES = (1.0, 3.0, 6.0, 9.0, 12.0, 16.0, 25.0, 1e9)      # 8 bins over |XZ| in world units
+N_MAG_BINS = len(MAG_EDGES)
+
+
+def mag_centers() -> "np.ndarray":
+    import numpy as np
+    lo = (0.0,) + MAG_EDGES[:-1]
+    c = [(a + b) / 2 for a, b in zip(lo, MAG_EDGES)]
+    c[-1] = 35.0                                              # open top bin: a representative, not (25+1e9)/2
+    return np.asarray(c, dtype="float32")
+
+
+def dir_unit_vectors() -> "np.ndarray":
+    import numpy as np
+    a = (np.arange(N_DIR_SECTORS) + 0.5) * (2 * np.pi / N_DIR_SECTORS)
+    return np.stack([np.cos(a), np.sin(a)], 1).astype("float32")   # (x, z) unit vectors at sector centres
+
+
+class TransitionHead(nn.Module):
+    """(z_t, one_hot(a_t)) -> what this action does over one step.
+
+    moved     1 logit    does Link move at all (he does not, on 95% of real steps)
+    dir       16 logits  displacement direction sector
+    mag       8 logits   displacement magnitude bin
+    dy        1          vertical displacement, regressed (small and nearly always 0)
+    hit_row   n_rows+1   which actor row loses HP this step, or "none" (the last index)
+    link_hit  1 logit    Link loses HP this step
+    """
+
+    def __init__(self, latent: int, n_actions: int, n_rows: int = 16, hidden: int = 512):
+        super().__init__()
+        self.latent, self.n_actions, self.n_rows = latent, n_actions, n_rows
+        self.trunk = nn.Sequential(nn.Linear(latent + n_actions, hidden), nn.ReLU(),
+                                   nn.Linear(hidden, hidden), nn.ReLU())
+        self.moved = nn.Linear(hidden, 1)
+        self.dir = nn.Linear(hidden, N_DIR_SECTORS)
+        self.mag = nn.Linear(hidden, N_MAG_BINS)
+        self.dy = nn.Linear(hidden, 1)
+        self.hit_row = nn.Linear(hidden, n_rows + 1)
+        self.link_hit = nn.Linear(hidden, 1)
+
+    def forward(self, z: torch.Tensor, a_onehot: torch.Tensor) -> dict:
+        h = self.trunk(torch.cat([z, a_onehot], -1))
+        return {"tr_moved": self.moved(h), "tr_dir": self.dir(h), "tr_mag": self.mag(h),
+                "tr_dy": self.dy(h), "tr_hit_row": self.hit_row(h), "tr_link_hit": self.link_hit(h)}
