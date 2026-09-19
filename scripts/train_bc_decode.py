@@ -148,6 +148,12 @@ def main():
                     help="also save <out>.ep<N>.pt every N epochs, so one run yields the whole training "
                          "curve instead of re-training from scratch per point")
     ap.add_argument("--torch-threads", type=int, default=6)
+    ap.add_argument("--no-control-echo", action="store_true",
+                    help="zero the encoder inputs that are near-copies of the controller (Link's action "
+                         "state, melee state, Z-target held, the jumping/z_targeting stateFlags bits). The "
+                         "state at t is read before action t, so those reflect action t-1, and the "
+                         "demonstrator holds buttons for many steps -- so BC can score by reading 'what I "
+                         "was just doing' rather than learning the world.")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     torch.set_num_threads(a.torch_threads)
@@ -163,7 +169,7 @@ def main():
     print(f"{len(state):,} frames | train {len(tr):,} (slots {sorted(set(slot[tr].tolist()))}) | "
           f"tune {len(tu):,} (slots {sorted(tune_slots)}) | test {len(va):,} (slots {sorted(val_slots)})")
 
-    Fa = featurise(state)
+    Fa = featurise(state, control_echo=not a.no_control_echo)
     norm = Norm.fit({k: v[tr] for k, v in Fa.items()})
     T = {k: torch.from_numpy(v) for k, v in norm.apply(Fa).items()}
     Y = decode_targets(state)

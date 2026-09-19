@@ -78,6 +78,12 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--enc-from", default=None,
+                    help="load the encoder from a behaviour-cloning checkpoint and FREEZE it. The world-model "
+                         "objective is then purely: current latent + action -> next latent, under pressure "
+                         "that the next latent decodes to the correct NEXT raw values. The encoder's "
+                         "normaliser and its control-echo setting are taken from that checkpoint so the "
+                         "features match what it was trained on.")
     ap.add_argument("--detach-pos", action="store_true",
                     help="compute the POSITION term on a detached latent, so a large --w-pos cannot reshape "
                          "z. Tests whether position and events compete for the latent (section 24) or only "
@@ -118,13 +124,20 @@ def main():
 
     ref = torch.load(a.ref, weights_only=False, map_location="cpu")
     norm, split = Norm.load(ref["norm"]), ref["split"]
+    bc_ck, ECHO = None, True
+    if a.enc_from:
+        bc_ck = torch.load(a.enc_from, weights_only=False, map_location="cpu")
+        norm, split = Norm.load(bc_ck["norm"]), bc_ck["split"]
+        ECHO = not bc_ck.get("config", {}).get("no_control_echo", False)
+        print(f"frozen encoder from {a.enc_from} (latent {bc_ck['latent']}, "
+              f"control-echo inputs {'ON' if ECHO else 'REMOVED'})")
     meta, state, action, slot, epid, obs, has_obs = load_many([a.data, *a.extra_data])
     if a.extra_data:
         print(f"data: {a.data} + {len(a.extra_data)} extra run(s) -> {len(state):,} frames")
     Y = decode_targets(state, obs, epid=epid)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
-    Fraw = featurise(state)
+    Fraw = featurise(state, control_echo=ECHO)
     act = torch.from_numpy(action)
     sc = {k: (Y[k].mean(0, keepdims=True), Y[k].std(0, keepdims=True) + 1e-6) for k in CONT}
     Yt = {k: torch.from_numpy(((Y[k] - sc[k][0]) / sc[k][1]).astype(np.float32)) if k in CONT
@@ -148,7 +161,7 @@ def main():
 
     # The reference checkpoint's Norm was fitted on the v1 feature width. v2 adds Link's body/collision
     # block, so refit -- on the TRAINING frames only, or test statistics leak into the standardisation.
-    if norm.link_mean.shape[0] != Fraw["link"].shape[1]:
+    if bc_ck is None and norm.link_mean.shape[0] != Fraw["link"].shape[1]:
         print(f"  refitting Norm: ref has {norm.link_mean.shape[0]} link features, data has "
               f"{Fraw['link'].shape[1]} (v2 block added); fitted on {len(tr_all):,} training frames")
         norm = Norm.fit({k: v[tr_all] for k, v in Fraw.items()})
@@ -186,6 +199,12 @@ def main():
 
     enc = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=meta["n_actions"],
                 latent=a.latent, gru=0)
+    if bc_ck is not None:
+        a.latent = bc_ck["latent"]
+        enc.load_state_dict(bc_ck["model"])
+        for q in enc.parameters():
+            q.requires_grad_(False)
+        enc.eval()
     dec = StateDecoder(latent=a.latent)
     NA = meta["n_actions"]
     pred = build_predictor(a.latent, NA)          # RESIDUAL: z + f(z,a); see zelda_rl/dynamics.py
@@ -194,8 +213,9 @@ def main():
     # 0.089 vs a 0.220 ceiling) and these are exactly the quantities that depend on it.
     thead = TransitionHead(a.latent, NA, n_rows=N_ROWS)
     A = F.one_hot(act, NA).float()
-    params = (list(enc.parameters()) + list(dec.parameters()) + list(pred.parameters())
-              + list(thead.parameters()))
+    params = list(dec.parameters()) + list(pred.parameters()) + list(thead.parameters())
+    if bc_ck is None:
+        params += list(enc.parameters())      # frozen encoder stays out of the optimiser
     opt = torch.optim.Adam(params, lr=a.lr)
 
     from zelda_rl.combat import BABA_STATES

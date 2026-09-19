@@ -100,6 +100,21 @@ def wants_v2(link_dim_of_checkpoint: int) -> bool:
                      f"{LINK_FEAT_DIM_V1} (pre-v2) nor {LINK_FEAT_DIM} (v2)")
 
 
+# Encoder-input features that are near-copies of the CONTROLLER rather than of the world. The state at step t
+# is read BEFORE action t is applied, so these reflect action t-1 -- and because the demonstrator holds buttons
+# for many steps in a row, knowing t-1 predicts t. So behaviour cloning fed these can score well by reading
+# "what I was just doing" instead of learning anything about the world, and the same echo inflated the
+# inverse-dynamics floor that was used to argue the action leaves no trace in a latent transition.
+CONTROL_ECHO_FEATS = ("action_fn_rel", "melee_active", "melee_anim", "ztarget_active", "ztarget_timer",
+                      "parallel_yaw_sin", "parallel_yaw_cos",
+                      "sf1_bit11", "sf1_bit15", "sf1_bit18", "sf1_bit19")   # carrying / z_target / jump / freefall
+
+
+def control_echo_idx():
+    """Column indices of the control-echo features inside the link feature block."""
+    return [i for i, n in enumerate(LINK_FEAT_NAMES) if n in CONTROL_ECHO_FEATS]
+
+
 def _sincos(units):
     a = units.astype(np.float32) * (2.0 * np.pi / TURNS)
     return np.sin(a), np.cos(a)
@@ -151,7 +166,8 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
 LINK_FEAT_DIM_V1 = LINK_FEAT_DIM - LINK_V2_FEAT_DIM - LINK_V3_FEAT_DIM   # 45: pre-v2 checkpoint width
 
 
-def featurise(state: np.ndarray, link_v2: bool = True) -> dict[str, np.ndarray]:
+def featurise(state: np.ndarray, link_v2: bool = True,
+              control_echo: bool = True) -> dict[str, np.ndarray]:
     """state: (N, 335) v1 or (N, 358) v2 float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16).
 
     `link_v2=False` omits the Link body/collision/action block, giving the 45-wide link vector that every
@@ -179,6 +195,8 @@ def featurise(state: np.ndarray, link_v2: bool = True) -> dict[str, np.ndarray]:
         present.sum(1, keepdims=True), is_baba.sum(1, keepdims=True),
         bits,
     ] + ([_link_v2_feats(lk, v2, n), _link_v3_feats(lk, n)] if link_v2 else []), 1).astype(np.float32)
+    if not control_echo:
+        link[:, control_echo_idx()] = 0.0      # zeroed, not removed, so the encoder width is unchanged
 
     rpos = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
     d = rpos - lpos[:, None, :]

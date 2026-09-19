@@ -1295,3 +1295,65 @@ two levers that did move it (oversampling 0 -> 50, and `w_pos`) had effects far 
 exactly why they were visible at one seed. Further sampling or weighting work is not worth running until
 variance is reduced -- more epochs, seed averaging, or more eval windows per kind -- because no untested lever
 appears to have an effect that large.
+
+## 26. Control echo in the encoder input, and the frozen-BC premise re-tested without it
+
+### The leak
+
+The encoder was fed 11 features that are near-copies of the controller: `action_fn_rel` (Link's roll / jump /
+attack / shield state), `melee_active`, `melee_anim`, `ztarget_active`, `ztarget_timer`, `parallel_yaw`, and the
+`carrying` / `z_targeting` / `jumping` / `freefall` stateFlags1 bits. The state at step t is read BEFORE action t
+is applied, so these reflect action t-1 -- and the demonstrator holds buttons for many consecutive steps, so
+knowing t-1 largely predicts t.
+
+Three things this contaminated:
+
+1. **The original behaviour-cloning objective.** It was trained to predict the action while being fed fields
+   that echo the previous one, so it could score by reading "what I was just doing".
+2. **The inverse-dynamics analysis.** The "single latent" floor of 0.056, against which the pair value of
+   0.059-0.139 was compared to argue that the action leaves no trace in a latent transition, was itself
+   partly action echo sitting in `z_t`. It was never a neutral baseline.
+3. **The decode numbers quoted as achievements.** `link_action` 0.918 and `melee_state` 0.998 are largely
+   reading the control back out. They were listed alongside `baba_count` 0.9986 as if equivalent.
+
+`featurise(..., control_echo=False)` zeroes those 11 columns (indices 24, 28, 31, 32, 66-72), leaving every
+other column bit-identical, and `train_bc_decode.py --no-control-echo` uses it.
+
+### Behaviour cloning without the echo
+
+12 epochs on the v3 policy dataset, BC + the same decoder pressure:
+
+| epoch | action CE | decode |
+|---|---|---|
+| 6 | 3.205 | 0.136 |
+| 9 | 3.046 | 0.085 |
+| 12 | **2.966** | **0.068** |
+
+Uniform guessing over 63 actions is ln(63) = 4.14, so 2.966 (perplexity ~19.4 effective actions) is real
+learning from the world rather than from the echo. Both losses were still falling at epoch 12.
+
+### Then frozen as a predictive surface -- and it is far worse
+
+`train_joint.py --enc-from` loads that encoder, freezes it, keeps its normaliser and its control-echo setting,
+and trains only the predictor / decoder / transition head under the world-model objective: current latent +
+action -> next latent, with pressure that the next latent decodes to the correct NEXT raw values.
+
+| | frozen BC encoder (echo-free) | learned encoder (joint) |
+|---|---|---|
+| tune skill | **-5.345** | ~-1.4 |
+| walk trajectory vs identity | **6.49x** | ~1.2-2.2x |
+| hit trajectory | 4.96x | ~1.1x |
+| lockon trajectory | 3.59x | ~1.09x |
+| outcome detection (lockon / roll / collision) | 0% / 0% / 0% | ~15% / 75% / 15% |
+
+`jump` detection reads 100%, which is the action echoing through the conditioning -- the model is *given* the
+action -- so it is a check that conditioning works, not evidence of prediction.
+
+**Conclusion: the frozen-BC premise does not hold, and the leak does not explain why.** A latent shaped by
+"predict the action" plus "decode the present" is not organised for "what happens next"; letting the prediction
+objective shape the encoder is strictly better. This reproduces the original section 4 result (frozen BC latent
+skill -7.24 / -1.73 against joint -1.14) with the contamination removed, so that earlier finding stands for a
+cleaner reason than was known at the time.
+
+Caveat: 12 epochs, single seed. Section 25 established this harness cannot resolve small differences, but
+6.49x against ~1.4x is far outside that band.
