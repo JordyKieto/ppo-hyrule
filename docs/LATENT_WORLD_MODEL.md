@@ -1045,3 +1045,55 @@ And the dream is not inert — the audit is physically coherent for the first ti
 Holding a direction walks out of the room, which is what the scripted walkout scenario does and therefore
 correct rather than spurious. Attacking in place kills and **pays a positive return** — the first held action in
 this line of work to do so. Progression of max kills across the audits: 0.00 → 0.00 → 0.00 → 0.30 → **0.80**.
+
+## 22. The metric that was missing: does the dream reproduce a real trajectory?
+
+Every measurement before this was either single-step (decode accuracy on real latents) or self-referential
+(does the dream avoid spurious terminals, does a held action close distance). None asked the only question
+that matters for planning in a model: **replay a real episode's actions from its real start state and see
+whether the dream goes where the game went.**
+
+`scripts/eval_dream_rollout.py`, 12 held-out episodes of ≥ 600 steps, same start, same action sequence, always
+against the identity control.
+
+### Position: worse than identity at every horizon past 25
+
+| h | dream err | identity err | travelled dream / real |
+|---|---|---|---|
+| 5 | 36.3 | 35.4 | **4 / 53** |
+| 25 | 46.2 | **41.6** | 20 / 63 |
+| 100 | 59.5 | **49.7** | 72 / 88 |
+| 200 | 85.0 | **49.7** | 109 / 88 |
+| 1800 | **102.7** | **49.7** | **130 / 88** |
+
+The motion profile is wrong three separate ways: **13× too slow early** (4 units travelled against 53 by h=5),
+then over-travelling (109 against 88 by h=200), then **frozen** — 130 units at h=200 and still 130 at h=1800.
+Final position error 103 units against 50 for assuming Link never moved at all.
+
+### Key events: nothing happens
+
+| h | kills dream/real | damage dream/real | exited dream/real |
+|---|---|---|---|
+| 100 | 0.00 / 0.08 | **0.00 / 0.17** | 0.00 / 0.00 |
+| 400 | 0.00 / 0.08 | **0.00 / 0.17** | **0.25 / 0.00** |
+| 1800 | 0.00 / 0.08 | **0.00 / 0.17** | 0.00 / 0.00 |
+
+On real action sequences the dream produces **zero damage and zero kills**, and still exits spuriously in 25%
+of episodes that never exit.
+
+### This reframes §18–21 as measuring scaffolding, not the model
+
+The raw latent rollout (`scripts/eval_rollout.py`, absolute decode, no transition head) is worse still: at
+h=1800 `link_pos` MAE is **10,030** world units against an identity baseline of **26.3**, and `link_hp` decodes
+at 0.077 against 0.923. The dream only looks better because `apply_transition` patches it — carried HP, carried
+roster, integrated displacement, event heads. Those are scaffolding around a latent transition that does not
+model trajectories past ~25 steps.
+
+The constant-action audit that showed `S+Z+A` reaching 0.80 kills and a +7.15 return was therefore measuring
+**which action triggers the event head**, not whether combat is reproduced. Fed real action sequences, the same
+machinery produces nothing. Progression of "max kills" across §16–21 (0.00 → 0.30 → 0.80) describes the event
+head's responsiveness to held inputs, not the model's fidelity.
+
+**Stated plainly: the world model does not yet model walking to a location or interacting with an enemy.**
+Room exit, which §19–21 spent the most effort on, was the least important of the three — it is a terminal, not
+the dynamics.
