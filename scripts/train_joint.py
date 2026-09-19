@@ -214,12 +214,14 @@ def main():
     TRDY = torch.from_numpy(Y["tr_dy"].astype(np.float32))
     TRHIT = torch.from_numpy(Y["tr_hit_row"].astype(np.int64))
     TRGONE = torch.from_numpy(Y["tr_gone_row"].astype(np.int64))
+    TREX = torch.from_numpy(Y["tr_exit"].astype(np.float32))
     TRLH = torch.from_numpy(Y["tr_link_hit"].astype(np.float32))
     _m = (Y["tr_moved"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
     _h = (Y["tr_hit_row"] != N_ROWS) & (Y["tr_mask"] > 0)
     _l = (Y["tr_link_hit"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
     pw = lambda pos: torch.tensor(float(np.sqrt(max(len(pos) - pos.sum(), 1) / max(pos.sum(), 1))))
-    PW_MV, PW_LH = pw(_m), pw(_l)
+    _x = (Y["tr_exit"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
+    PW_MV, PW_LH, PW_EX = pw(_m), pw(_l), pw(_x)
     # hit_row is a 17-way choice dominated by "none": weight the classes by inverse sqrt frequency, the same
     # square-rooting used for HP, because a raw inverse-frequency weight of 3633:1 collapsed a head before.
     def rowcw(key):
@@ -229,7 +231,8 @@ def main():
     CW_HIT, CW_GONE = rowcw("tr_hit_row"), rowcw("tr_gone_row")
     _g = (Y["tr_gone_row"] != N_ROWS) & (Y["tr_mask"] > 0)
     print(f"transition head: moves {_m.mean():.1%} of steps, an actor is hit on {_h.mean():.2%}, "
-          f"a row despawns on {_g.mean():.2%}, Link is hit on {_l.mean():.2%} (pos_weights {float(PW_MV):.1f} / {float(PW_LH):.1f})")
+          f"a row despawns on {_g.mean():.2%}, the room is left on {_x.mean():.3%}, "
+          f"Link is hit on {_l.mean():.2%} (pos_weights {float(PW_MV):.1f} / {float(PW_LH):.1f})")
 
     def trans_loss(q, i):
         """All classification except dy. A mode does not shrink; a regressed magnitude did, 9.3x."""
@@ -243,6 +246,9 @@ def main():
                                  reduction="none") * mk).sum() / den
         L = L + (F.cross_entropy(q["tr_gone_row"], TRGONE[i], weight=CW_GONE,
                                  reduction="none") * mk).sum() / den
+        # the -20 room-exit terminal: the rarest event here, so it gets the scene head's own weight
+        L = L + a.w_scene * (F.binary_cross_entropy_with_logits(
+            q["tr_exit"], TREX[i], pos_weight=PW_EX, reduction="none").squeeze(-1) * mk).sum() / den
         # direction and magnitude are only defined where Link actually moved
         mvk = mk * TRMV[i].squeeze(-1)
         d2 = mvk.sum().clamp(min=1)
@@ -471,6 +477,8 @@ def main():
                           (Y["tr_link_hit"][tu][:, 0] > 0.5)[tmk], "link-hit"),
         "moved": platt(qt["tr_moved"].numpy()[:, 0][tmk],
                        (Y["tr_moved"][tu][:, 0] > 0.5)[tmk], "moved"),
+        "exit": platt(qt["tr_exit"].numpy()[:, 0][tmk],
+                      (Y["tr_exit"][tu][:, 0] > 0.5)[tmk], "room-exit"),
     }
 
     print(f"  moved calibration: P = sigmoid({moved_calib[0]:.3f}*logit {moved_calib[1]:+.3f}) | "
@@ -666,6 +674,10 @@ def main():
         print(f"          DAMAGE events: enemy-hit AP {ap_of(hs[tk], hit_any[tk]):.4f} "
               f"(base {float(hit_any[tk].mean()):.4f}, {int(hit_any.sum())} events) | "
               f"which row, on hit frames: {float((q['tr_hit_row'].numpy().argmax(-1)[hit_any] == ht[hit_any]).mean()) if hit_any.any() else float('nan'):.3f}")
+        xt = (Y["tr_exit"][te][:, 0] > 0.5) & tk
+        xs = q["tr_exit"].numpy()[:, 0]
+        print(f"          ROOM-EXIT event AP {ap_of(xs[tk], xt[tk]):.4f} "
+              f"(base {float(xt[tk].mean()):.5f}, {int(xt.sum())} events)")
         print(f"          LINK-hit AP {ap_of(ls[tk], lht[tk]):.4f} "
               f"(base {float(lht[tk].mean()):.4f}, {int(lht.sum())} events)")
         zp = (p["link_ztarget"].numpy()[:, 0] > 0)[vmask]; zt_ = (Y["link_ztarget"][te][:, 0] > 0.5)[vmask]

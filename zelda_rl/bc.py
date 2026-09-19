@@ -430,9 +430,12 @@ def transition_targets(state: np.ndarray, epid: np.ndarray | None = None) -> dic
     bulk = vanished.sum(1) > np.maximum(present.sum(1) * 0.5, 1)
     vanished = vanished & ~bulk[:, None]
     gone_row = np.where(vanished.any(1), vanished.argmax(1), N_ROWS).astype(np.int64)
+    sc = lk[:, LI["scene"]].astype(np.int64)
+    exit_ev = ((sc == 0) & (sc[nxt] != 0) & (mask > 0)).astype(np.float32)   # the frame the room is left
     return {"tr_mask": mask, "tr_moved": moved[:, None], "tr_dir": sector, "tr_mag": mbin,
             "tr_dy": d[:, [1]].astype(np.float32), "tr_hit_row": hit_row, "tr_link_hit": link_hit[:, None],
-            "tr_gone_row": gone_row, "tr_mag_units": mag.astype(np.float32)}
+            "tr_gone_row": gone_row, "tr_exit": exit_ev[:, None],
+            "tr_mag_units": mag.astype(np.float32)}
 
 
 def _dpos_targets(lk: np.ndarray, epid: np.ndarray | None, n: int) -> dict[str, np.ndarray]:

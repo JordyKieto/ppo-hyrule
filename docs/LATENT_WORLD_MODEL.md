@@ -978,3 +978,70 @@ So the trustworthy horizon is ~130 steps, not 30. Two honest consequences:
 Recorded correction to §19: I proposed ~100 minutes of unroll-120 training for this. It was not needed — the
 defect was four lines of state handling, and the diagnosis that "the rollout is stable exactly as far as it was
 supervised" was wrong: with correct state handling it is stable to ~4x the supervised horizon.
+
+## 21. The spurious terminals were `fell`, not the scene head
+
+§20 fixed HP and the roster but left room exit "bounded, not eliminated". Chasing it properly took three wrong
+turns worth recording, because each was an assumption made instead of a measurement.
+
+**Wrong turn 1: a door gate.** Gating the exit on proximity to a real door (71 door positions extracted from
+every real `left_room` episode) changed nothing — false fires per 400 steps were 1.504 with the gate against
+1.511 without. The head's false fires *already* happen beside doors. Dead code, removed.
+
+**Wrong turn 2: an exit event head, sampled.** Adding `tr_exit` to the transition head and sampling it made
+things *worse in timing*: exits/50 fell 31 → 20 but the earliest moved 138 → 112 and the median 226 → 160. A
+Bernoulli draw fires from step 1, whereas drift needs time to build.
+
+The rate was wrong for a specific reason. Calibrated to the dataset marginal, the head fired at 0.00094/step,
+against a **real** random-play hazard of **0.000052/step** measured from the `flail` episodes — 18× too high.
+The collections are deliberately enriched with scripted walkouts, so their marginal is not the world's.
+
+| | per-step exit hazard | over 400 steps |
+|---|---|---|
+| real emulator, random actions | **0.000052** | **2.1%** |
+| training-data marginal (walkout-enriched) | 0.00024 | 9.2% |
+| the calibrated head | 0.00094 | 31.4% |
+
+The head itself is fine — on real exit trajectories it scores **AP 0.6514 at 103× base rate, with 59 of 71 exit
+frames in the top 1% of scores.** It knows where the door is. Only the score-to-event conversion was wrong, so
+it became a threshold rather than a sample: exit is **absorbing and once per episode**, where over-firing ends
+episodes that should continue, while damage is repeatable, where under-firing is what kept kills at 0.00.
+
+**Wrong turn 3, and the actual cause.** With the threshold in, the proof was byte-identical: 20/50 exits at the
+same steps. The exit logit in a dream rollout never approaches its threshold — it sits at −13 and falls to −103.
+The exit head was firing *never*. `_left_reason` has **four** conditions and only `scene` had been examined:
+
+```python
+if cur.scene != self.start_scene: ...        # fixed
+if cur.room  != self.start_room:  ...        # room still re-decoded every step
+if cur.pos[1] < start_pos[1] - fall_drop     # y integrates an unbounded dy
+if hypot(dx, dz) > room_radius    ...
+```
+
+Instrumenting it: **all 20 were `fell`**, at a mean y drift of −150.9 against a threshold of −150.0. `dy` is an
+unbounded regression added every step, and a bias of ~−1.3 units/step walked Link through the floor.
+
+Falling is not a real outcome here: of **70** real room exits, **70 are scene transitions and 0 are falls**, and
+the real per-episode y range is mean 15.1 with a 95th percentile of 38.1. Clamping y to ±60 of the episode's
+start preserves every real jump and removes the drift.
+
+### Result: 50 random 400-step episodes, zero spurious terminals
+
+| | v14 | v15 + exit head | **+ y clamp** |
+|---|---|---|---|
+| spurious deaths | 0/50 | 0/50 | **0/50** |
+| spurious exits | 31/50 | 20/50 | **0/50** |
+| outcomes | — | — | **50/50 timeout** |
+
+And the dream is not inert — the audit is physically coherent for the first time:
+
+| held action | dmg | kills | `r_kill` | Δdist | `r_approach` | left% | return |
+|---|---|---|---|---|---|---|---|
+| `S+Z+A` (attack in place) | **1.50** | **0.80** | **+4.00** | +0.6 | 0.08 | **0%** | **+7.15** |
+| `NW+Z+B` | 1.30 | 0.70 | +3.50 | −37 | 0.03 | 10% | −105 |
+| `NE` (hold a direction) | 0.00 | 0.00 | 0.00 | **−147** | +0.25 | 60% | −776 |
+| `E+Z+A` | 0.00 | 0.00 | 0.00 | −96 | **+0.33** | 80% | −1023 |
+
+Holding a direction walks out of the room, which is what the scripted walkout scenario does and therefore
+correct rather than spurious. Attacking in place kills and **pays a positive return** — the first held action in
+this line of work to do so. Progression of max kills across the audits: 0.00 → 0.00 → 0.00 → 0.30 → **0.80**.

@@ -127,6 +127,12 @@ class TransitionHead(nn.Module):
     hit_row   n_rows+1   which actor row loses HP this step, or "none" (the last index)
     link_hit  1 logit    Link loses HP this step
     gone_row  n_rows+1   which actor row DESPAWNS this step, or "none"
+    exit      1 logit    the room is LEFT this step (scene flips 0 -> nonzero)
+
+    `exit` exists because reading room exit off the absolute `scene` decode head does not survive a long
+    rollout: on an autoregressive rollout it fired on 0 of 10 states at step 50 and 10 of 10 by step 400, so
+    the -20 terminal triggered wherever the latent drifted. As an event conditioned on (z_t, a_t) and
+    calibrated to the true rate it is bounded the same way the damage events are.
 
     `gone_row` exists because a Deku Baba that dies is removed from the actor list, and without it a killed
     Baba lingers at HP 0 forever -- so `row_present` and `baba_count` disagree with the enemy dict, and the
@@ -145,9 +151,10 @@ class TransitionHead(nn.Module):
         self.hit_row = nn.Linear(hidden, n_rows + 1)
         self.link_hit = nn.Linear(hidden, 1)
         self.gone_row = nn.Linear(hidden, n_rows + 1)
+        self.exit = nn.Linear(hidden, 1)
 
     def forward(self, z: torch.Tensor, a_onehot: torch.Tensor) -> dict:
         h = self.trunk(torch.cat([z, a_onehot], -1))
         return {"tr_moved": self.moved(h), "tr_dir": self.dir(h), "tr_mag": self.mag(h),
                 "tr_dy": self.dy(h), "tr_hit_row": self.hit_row(h), "tr_link_hit": self.link_hit(h),
-                "tr_gone_row": self.gone_row(h)}
+                "tr_gone_row": self.gone_row(h), "tr_exit": self.exit(h)}

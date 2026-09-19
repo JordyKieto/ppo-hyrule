@@ -39,6 +39,10 @@ ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only
 
 
 def _load_exit_points():
+    """NOTE: kept for analysis only. Gating the exit on proximity to a door was MEASURED to do nothing --
+    false fires per 400 steps were 1.504 with the gate against 1.511 without, because the head's false fires
+    already happen beside doors (it fires when Link is next to one but not leaving). Not used by the dream.
+    """
     """XZ of the last in-room frame of every real room exit: where the doors are.
 
     The dream's `scene` head cannot be trusted on a long rollout -- it fired on 10 of 10 states by step 400 of
@@ -59,7 +63,7 @@ EXIT_POINTS = _load_exit_points()
 
 def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
                      calib: dict | None = None, rng=None, hp_per_hit: int = 8,
-                     hp0_despawn_steps: int = 12, exit_radius: float = 80.0,
+                     hp0_despawn_steps: int = 12, exit_thresh: float = 6.38, max_y_dev: float = 60.0,
                      _timers: dict | None = None) -> list[CombatState]:
     """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
 
@@ -113,11 +117,21 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
     hit_row = q["tr_hit_row"].numpy()[:, :n_rows].argmax(-1)
     gone_row = q["tr_gone_row"].numpy()[:, :n_rows].argmax(-1)
     p_lhit = prob(q["tr_link_hit"].numpy()[:, 0], "link_hit")
+    exit_logit = q["tr_exit"].numpy()[:, 0] if "tr_exit" in q else None
     timers = _timers if _timers is not None else {}
 
     out = []
     for i, (pv, cu) in enumerate(zip(prev, cur)):
-        cu.pos = (pv.pos[0] + float(step[i, 0]), pv.pos[1] + float(dy[i]), pv.pos[2] + float(step[i, 1]))
+        # y is CLAMPED to a band around the episode's starting height. `dy` is an unbounded regression added
+        # every step, and a bias of about -1.3 units/step accumulated past CombatConfig.fall_drop (150), so
+        # `_left_reason` returned "fell" -- which was ALL 20 of the spurious room exits, not the scene head at
+        # all (the exit event head's logit never came near its threshold: it sat at -13 falling to -103).
+        # Falling is not a real outcome in this room: of 70 real room exits, 70 are scene transitions and 0 are
+        # falls, and the real per-episode y range is mean 15.1 with a 95th percentile of 38.1. A +/-60 band
+        # therefore preserves every real jump while removing the drift.
+        y0 = timers.setdefault(("y", i), pv.pos[1])
+        y = float(np.clip(pv.pos[1] + float(dy[i]), y0 - max_y_dev, y0 + max_y_dev))
+        cu.pos = (pv.pos[0] + float(step[i, 0]), y, pv.pos[2] + float(step[i, 1]))
 
         # ---- CARRY STATEFUL QUANTITIES FORWARD; only events may change them --------------------------
         # `decoded_to_states` re-reads Link HP, enemy HP, presence and scene from the decode heads on EVERY
@@ -159,12 +173,19 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
         # (net 43 units over 120 steps against 143 of path), so it let every drift-driven exit through.
         if pv.scene != 0:
             cu.scene = pv.scene                      # absorbing
-        elif cu.scene != 0 and len(EXIT_POINTS):
-            near = float(np.hypot(EXIT_POINTS[:, 0] - cu.pos[0],
-                                  EXIT_POINTS[:, 1] - cu.pos[2]).min())
-            cu.scene = cu.scene if near <= exit_radius else 0
-        elif not len(EXIT_POINTS):
-            pass                                     # no door data: leave the head's call alone
+        elif exit_logit is not None:
+            # Room exit is a THRESHOLD on the event head, not a sampled probability, and not a reading of the
+            # absolute scene head (which drifted to "left" on 10 of 10 states by step 400).
+            #
+            # Thresholded rather than sampled because exit is ABSORBING and once per episode: over-firing ends
+            # episodes that should continue, which is the failure that pinned PPO return at -5 to -10, while
+            # under-firing merely weakens the deterrent. Damage is the opposite -- repeatable, and under-firing
+            # is what kept kills at 0.00 -- so damage is sampled and exit is not.
+            #
+            # `exit_thresh` is chosen so the spurious rate matches the REAL one measured in the emulator under
+            # random actions (2.1% of 400-step episodes). Calibrating to the dataset marginal instead gave 19x
+            # that, because the collections are deliberately enriched with scripted walkouts.
+            cu.scene = 85 if exit_logit[i] > exit_thresh else 0
         out.append(cu)
     return out
 
