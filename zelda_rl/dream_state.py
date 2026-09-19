@@ -70,12 +70,13 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
     def prob(logits, key, softmax_none=None):
         """Platt-calibrated probability; identity when the checkpoint carries no calibration for this head."""
         a, b = calib.get(key, (1.0, 0.0))
+        sig = lambda x: 1.0 / (1.0 + np.exp(-np.clip(x, -60.0, 60.0)))   # clipped: raw logits overflow exp
         if softmax_none is None:
-            return 1.0 / (1.0 + np.exp(-(a * logits + b)))
+            return sig(a * logits + b)
         p_none = _t.softmax(_t.as_tensor(logits), -1).numpy()[:, softmax_none]
         pe = 1.0 - p_none
         lg = np.log(np.clip(pe, 1e-6, 1 - 1e-6) / np.clip(1 - pe, 1e-6, 1 - 1e-6))
-        return 1.0 / (1.0 + np.exp(-(a * lg + b)))
+        return sig(a * lg + b)
 
     gate = prob(q["tr_moved"].numpy()[:, 0], "moved")
     d = q["tr_dir"].numpy().argmax(-1)

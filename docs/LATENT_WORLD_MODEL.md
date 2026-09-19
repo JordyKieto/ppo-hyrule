@@ -877,3 +877,60 @@ rollout stability are compatible once the predictor is trained on its own output
 - **`left%` is 10–90% on the approach-heavy actions.** Walking still frequently exits the room.
 - **The predictor still does not beat identity** (skill −1.203). Every gain here is in what the model can
   represent, not in its one-step accuracy.
+
+## 19. PPO in the v14 dream: 80% of episodes end in a penalty the policy never caused
+
+Run [wandb `930i7qsx`](https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/930i7qsx), killed at update 260
+of 2669 (4.0 M of 41 M dream transitions).
+
+| upd | return | len | clear% | death% | left% | kills | hpLost |
+|---|---|---|---|---|---|---|---|
+| 1 | 17.54 | 40 | 54.8% | 45.2% | 0.0% | 0.55 | 0.40 |
+| 50 | −9.50 | 277 | 17.9% | 38.1% | 43.9% | 0.30 | 0.95 |
+| 150 | −5.04 | 326 | 22.8% | 36.8% | 40.5% | 0.34 | 0.68 |
+| 250 | −7.55 | 400 | 19.4% | 37.4% | 43.2% | 0.31 | 0.68 |
+| 260 | −7.33 | 427 | 18.2% | 41.0% | 40.8% | 0.27 | 0.77 |
+
+Return did not improve across updates 100–260, and **~80% of episodes ended in a −20 terminal**.
+
+### The arithmetic that gave it away
+
+`death% 37–41%` alongside `hpLost 0.68–0.77` hearts is impossible: death requires 3 hearts, so 37% dying implies
+at least 1.1 hearts lost on average. Something was killing Link without damaging him.
+
+**First hypothesis, wrong and retracted.** `CombatState.dead` is `hp <= 0 OR sf1 bit 7`, and
+`decoded_to_states` sets that bit from a raw logit thresholded at 0 — the same shape as the `link_hit_thresh`
+bug. Measured over a 400-step autoregressive rollout from all 10 start states: **the DEAD bit never fires
+once**. The hypothesis was wrong.
+
+### What is actually happening
+
+The decoded state **decays into a "dead and left the room" attractor**:
+
+| step | `scene != 0` | decoded HP mean | `hp == 0` |
+|---|---|---|---|
+| 25 | 0/10 | 41.6 | 0/10 |
+| 50 | 0/10 | 41.6 | 0/10 |
+| 100 | 1/10 | 28.8 | 1/10 |
+| 200 | 5/10 | 25.6 | 4/10 |
+| 400 | **10/10** | 24.0 | **5/10** |
+
+Link is not dying of damage and not walking out. The **HP head drifts to 0** and the **scene head drifts to
+"left"** as the latent leaves the data manifold. That is precisely the 41% / 41% in the log.
+
+And the timing is the finding: **it is stable through step 25–50 and breaks immediately after.** Training used
+`--unroll 30`. The rollout is stable exactly as far as it was supervised and no further. §18's bounded `|z|`
+(44.5 at step 120) was necessary but **not sufficient** — a bounded latent can still drift into a region that
+decodes as death and exit.
+
+This is §11's rollout collapse again, now localised to the two heads that drive terminals, and it caps the
+whole approach: dream episodes average 400+ steps against a supervised horizon of 30.
+
+### Options recorded
+
+1. **Unroll to the horizon actually used** (`--unroll 120`+, decode-the-prediction already applies at every
+   step). Cost is linear: unroll 30 took ~25 min, so ~100 min at 120. Targets the mechanism directly.
+2. **Cap dream episodes at the supervised horizon** (~100 steps). Cheap and honest, but abandons the
+   1800-step parity with the real environment, and a 100-step episode cannot contain a full fight.
+3. An anchor penalty keeping predicted latents near the encoder's distribution — plausible, but not a
+   technique validated on this project, so not led with.
