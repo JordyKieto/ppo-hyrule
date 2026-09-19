@@ -16,9 +16,13 @@ seeds / nuts / grass / held_item are read only by the Gohma tracker, and `arrow`
 """
 from __future__ import annotations
 
+import copy as _copy
+
 import numpy as np
 import torch
 import torch.nn as nn
+
+from pathlib import Path
 
 from zelda_rl.ppo import RecurrentEntityActorCritic, _layer
 from zelda_rl.bc import LINK_HP_VALUES, N_BABA_STATES, ROW_HP_VALUES
@@ -34,9 +38,29 @@ FN_BY_STATE = [_FN_FOR_STATE.get(i, 0) for i in range(N_BABA_STATES)]
 ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only uses pointers as identity
 
 
+def _load_exit_points():
+    """XZ of the last in-room frame of every real room exit: where the doors are.
+
+    The dream's `scene` head cannot be trusted on a long rollout -- it fired on 10 of 10 states by step 400 of
+    an autoregressive rollout, against 0 of 10 at step 50 -- so the -20 exit terminal was firing wherever the
+    latent happened to drift. Being AT a door is a necessary physical condition that drift cannot fake, and it
+    is available from the data: 71 real exits cluster at z ~ 800 (x -66..66) and z ~ 0.
+    """
+    import json
+    f = Path(__file__).resolve().parents[1] / "datasets" / "transitions" / "exit_points.json"
+    try:
+        return np.asarray(json.loads(f.read_text())["points"], np.float32)
+    except Exception:  # noqa: BLE001
+        return np.zeros((0, 2), np.float32)
+
+
+EXIT_POINTS = _load_exit_points()
+
+
 def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
                      calib: dict | None = None, rng=None, hp_per_hit: int = 8,
-                     hp0_despawn_steps: int = 12, _timers: dict | None = None) -> list[CombatState]:
+                     hp0_despawn_steps: int = 12, exit_radius: float = 80.0,
+                     _timers: dict | None = None) -> list[CombatState]:
     """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
 
     The audit this answers: across all 63 constant actions the dream managed max 0.00 kills and max 0.70 of
@@ -94,22 +118,53 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
     out = []
     for i, (pv, cu) in enumerate(zip(prev, cur)):
         cu.pos = (pv.pos[0] + float(step[i, 0]), pv.pos[1] + float(dy[i]), pv.pos[2] + float(step[i, 1]))
-        if rng.random() < p_hit[i]:
-            e = cu.enemies.get(ROW_PTR_BASE + int(hit_row[i]) * 0x100)
-            if e is not None and e.hp > 0:
-                e.hp = max(0, e.hp - 1)
+
+        # ---- CARRY STATEFUL QUANTITIES FORWARD; only events may change them --------------------------
+        # `decoded_to_states` re-reads Link HP, enemy HP, presence and scene from the decode heads on EVERY
+        # step, which overwrote whatever the event heads did and made them cosmetic. Under a long rollout
+        # those heads drift: over 400 autoregressive steps the HP head fell 44.8 -> 24.0 with 5 of 10 states
+        # reading hp == 0, and `scene != 0` went 0/10 at step 50 to 10/10 at step 400. So ~80% of dream
+        # episodes ended in a -20 death or room-exit that the policy never caused, and PPO return sat at
+        # -5 to -10 with no trend.
+        #
+        # HP is a counter, not a per-frame observation: it changes only when something hits. So carry it and
+        # decrement on the event, exactly as position is carried and moved by the displacement head.
+        cu.hp = pv.hp
         if rng.random() < p_lhit[i] and cu.hp > 0:
-            cu.hp = max(0, cu.hp - hp_per_hit)      # a Deku Baba lunge costs half a heart
-        # despawn: the head's choice, or any row stuck at 0 HP past the dying animation
-        drop = {ROW_PTR_BASE + int(gone_row[i]) * 0x100} if rng.random() < p_gone[i] else set()
-        for ptr, e in list(cu.enemies.items()):
+            cu.hp = max(0, cu.hp - hp_per_hit)          # a Deku Baba lunge costs half a heart
+
+        # Enemies: the roster cannot grow mid-episode, HP only falls on a hit, and a row leaves only by
+        # despawning. Anything the decoder invents is dropped.
+        hit_ptr = ROW_PTR_BASE + int(hit_row[i]) * 0x100 if rng.random() < p_hit[i] else None
+        gone = {ROW_PTR_BASE + int(gone_row[i]) * 0x100} if rng.random() < p_gone[i] else set()
+        enemies = {}
+        for ptr, pe in pv.enemies.items():
+            e = cu.enemies.get(ptr)
+            if e is None:                                # decoder dropped it; keep the tracked actor
+                e = _copy.copy(pe)
+            e.hp = pe.hp                                 # carried, not re-decoded
+            if ptr == hit_ptr and e.hp > 0:
+                e.hp = max(0, e.hp - 1)
             k = (i, ptr)
             timers[k] = timers.get(k, 0) + 1 if e.hp <= 0 else 0
-            if timers[k] > hp0_despawn_steps:
-                drop.add(ptr)
-        for ptr in drop:
-            cu.enemies.pop(ptr, None)
-            timers.pop((i, ptr), None)
+            if ptr in gone or timers[k] > hp0_despawn_steps:
+                timers.pop(k, None)
+                continue                                 # despawned: a kill is HP 0 then removal
+            enemies[ptr] = e
+        cu.enemies = enemies
+
+        # Room exit is absorbing, and it cannot happen unless Link ends up somewhere else: the door is at a
+        # fixed place, so what matters is NET displacement from where the episode started, not distance
+        # walked. Cumulative travel was the wrong gate -- random play racks it up while wandering in circles
+        # (net 43 units over 120 steps against 143 of path), so it let every drift-driven exit through.
+        if pv.scene != 0:
+            cu.scene = pv.scene                      # absorbing
+        elif cu.scene != 0 and len(EXIT_POINTS):
+            near = float(np.hypot(EXIT_POINTS[:, 0] - cu.pos[0],
+                                  EXIT_POINTS[:, 1] - cu.pos[2]).min())
+            cu.scene = cu.scene if near <= exit_radius else 0
+        elif not len(EXIT_POINTS):
+            pass                                     # no door data: leave the head's call alone
         out.append(cu)
     return out
 

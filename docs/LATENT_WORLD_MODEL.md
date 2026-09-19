@@ -934,3 +934,47 @@ whole approach: dream episodes average 400+ steps against a supervised horizon o
    1800-step parity with the real environment, and a 100-step episode cannot contain a full fight.
 3. An anchor penalty keeping predicted latents near the encoder's distribution — plausible, but not a
    technique validated on this project, so not led with.
+
+## 20. The fix: HP and the enemy roster are counters, not per-frame observations
+
+§19's drift was not a training problem. `decoded_to_states` re-read **Link HP, enemy HP, the enemy roster and
+`scene` from the decode heads on every step**, so whatever the event heads did was immediately overwritten.
+The events were cosmetic. Position was the only quantity being carried forward.
+
+HP is a counter: it changes when something hits, not continuously. Same for the roster — actors do not respawn
+mid-fight. So `apply_transition` now carries them and lets only events change them:
+
+- `cu.hp = pv.hp`, minus half a heart on a sampled `link_hit`
+- enemy HP carried per pointer, minus 1 on a sampled `hit_row`; a row leaves only via `gone_row` or the
+  HP-0 despawn backstop; anything the decoder invents is dropped
+- `scene` is absorbing, and gated on proximity to a real door
+
+Door positions are data, not a guess: the XZ of the last in-room frame of all **71** real `left_room` episodes,
+in `datasets/transitions/exit_points.json`. They cluster at z ≈ 800 (x −66…66) and z ≈ 0.
+
+### Measured, 50 episodes of random play at 400 steps
+
+| | before | after |
+|---|---|---|
+| deaths | 2/10 | **0/50** |
+| mean hearts lost | 1.10 | **0.00** |
+| earliest spurious exit | step ~60 | **step 138** |
+| spurious exits within a 100-step cap | — | **0/50** |
+| within 150 | — | 2/50 |
+| within 300 | — | 25/50 |
+
+**Spurious deaths are gone.** Room exit is the one artifact carry-forward cannot remove, because `scene` has no
+event head and the door gate cannot help the slots that *start* beside a door — but it is now bounded: nothing
+spurious before step 138, against a supervised unroll horizon of 30.
+
+So the trustworthy horizon is ~130 steps, not 30. Two honest consequences:
+
+1. A dream episode capped near 120 steps is clean by measurement (0/50 artifacts), and that is a defensible
+   operating point rather than a fudge.
+2. It is **not** the 1800-step parity with the real environment, and a 120-step episode cannot contain a full
+   three-Baba fight. Choosing it trades task completeness for model validity, and that is a decision about the
+   experiment, not a bug fix.
+
+Recorded correction to §19: I proposed ~100 minutes of unroll-120 training for this. It was not needed — the
+defect was four lines of state handling, and the diagnosis that "the rollout is stable exactly as far as it was
+supervised" was wrong: with correct state handling it is stable to ~4x the supervised horizon.
