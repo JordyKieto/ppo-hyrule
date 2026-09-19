@@ -139,8 +139,11 @@ def main():
             trs = []
             for s0 in true0:
                 t = DreamTracker(cfg); t.reset(s0, a.steps); trs.append(t)
+            nearest = lambda st: min((float(np.linalg.norm(np.subtract(e.pos, st.pos)))
+                                      for e in st.enemies.values() if e.hp > 0), default=float("nan"))
             with torch.no_grad():
                 cur = decoded_to_states(dec(zz), scale)
+                d0 = [nearest(st) for st in cur]
                 for _ in range(a.steps):
                     oh = torch.nn.functional.one_hot(torch.full((len(zz),), act_id), NA).float()
                     zz = pred(torch.cat([zz, oh], -1))
@@ -148,18 +151,41 @@ def main():
                     for i, t in enumerate(trs):
                         t.step(cur[i], nxt[i])
                     cur = nxt
+                d_end = [nearest(st) for st in cur]
             k = np.mean([t.ep["defeated"] for t in trs])
             cl = np.mean([t.ep["end"] == "success" for t in trs])
             lf = np.mean([t.ep["end"] == "left_room" for t in trs])
             ret = np.mean([t.ep["return"] for t in trs])
-            rows.append((k, cl, lf, ret, act_id))
-        rows.sort(reverse=True)
-        print(f"{'action':<14} {'kills':>6} {'clear%':>7} {'left%':>6} {'return':>8}")
-        for k, cl, lf, ret, act_id in rows[:12]:
-            print(f"{action_name(act_id, 'combat'):<14} {k:>6.2f} {cl:>7.0%} {lf:>6.0%} {ret:>8.2f}")
+            # Can the dream represent APPROACHING and ORIENTING, not just leaving? These are the shaping
+            # terms the reward actually pays: `approach` pays w*(d0-d1)/100 while NOT locked on, `lockon`
+            # pays once per acquisition. Room exit got scripted data and a verification sweep; these never did.
+            dd = float(np.mean([d_end[i] - d0[i] for i in range(len(trs))
+                                if np.isfinite(d0[i]) and np.isfinite(d_end[i])]))
+            appr = float(np.mean([t.ep["r_parts"].get("approach", 0.0) for t in trs]))
+            lock = float(np.mean([t.ep["lockons"] for t in trs]))
+            lockr = float(np.mean([t.ep["r_parts"].get("lockon", 0.0)
+                                   + t.ep["r_parts"].get("lock_hold", 0.0) for t in trs]))
+            rows.append((k, cl, lf, ret, act_id, dd, appr, lock, lockr))
+        rows.sort(key=lambda r: r[5])          # most distance CLOSED first
+        print(f"{'action':<14} {'d_end-d0':>9} {'r_approach':>11} {'lockons':>8} {'r_lock':>7} "
+              f"{'kills':>6} {'left%':>6} {'return':>9}")
+        for r in rows[:14]:
+            k, cl, lf, ret, act_id, dd, appr, lock, lockr = r
+            print(f"{action_name(act_id, 'combat'):<14} {dd:>+9.1f} {appr:>11.2f} {lock:>8.2f} "
+                  f"{lockr:>7.2f} {k:>6.2f} {lf:>6.0%} {ret:>9.2f}")
         print("  ...")
-        for k, cl, lf, ret, act_id in rows[-3:]:
-            print(f"{action_name(act_id, 'combat'):<14} {k:>6.2f} {cl:>7.0%} {lf:>6.0%} {ret:>8.2f}")
+        for r in rows[-3:]:
+            k, cl, lf, ret, act_id, dd, appr, lock, lockr = r
+            print(f"{action_name(act_id, 'combat'):<14} {dd:>+9.1f} {appr:>11.2f} {lock:>8.2f} "
+                  f"{lockr:>7.2f} {k:>6.2f} {lf:>6.0%} {ret:>9.2f}")
+        best = min(rows, key=lambda r: r[5])
+        print(f"\nBest distance closed by a single held action: {action_name(best[4], 'combat')} "
+              f"{best[5]:+.1f} units over {a.steps} steps (r_approach {best[6]:.2f}).")
+        print("In the emulator a held direction closes hundreds of units. If nothing here closes distance,")
+        print("the dream cannot represent approaching a Baba and the `approach` term is unearnable.")
+        mx = max(rows, key=lambda r: r[7])
+        print(f"Most lock-ons by a held action: {action_name(mx[4], 'combat')} {mx[7]:.2f} "
+              f"(cap is 6/episode). A Z-press that never acquires means `lockon` is unearnable too.")
         worst = rows[0]
         print(f"\nBest single held action: {action_name(worst[4], 'combat')} -> {worst[0]:.2f} kills, "
               f"{worst[1]:.0%} clear, return {worst[3]:.2f} in {a.steps} steps.")

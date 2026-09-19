@@ -551,3 +551,69 @@ only by a class merge. **A one-run gap of this size is not evidence.** The earli
 single-seed and its between-config differences should be read with that caveat; its one load-bearing
 conclusion — that down-weighting the v2 heads does not recover action recoverability — rests on a gap far
 larger than the spread.
+
+## 15. The gap for approaching and orienting, which never got the room-exit treatment
+
+Room exit got scripted data, a dedicated head, exit-persistence and a constant-action verification sweep.
+**Approach, orienting and lock-on got none of that** — only static decode accuracy, never a test of whether
+the dream can represent *closing distance* or *acquiring* a lock-on as a consequence of an action. Those are
+the shaping terms the reward pays: `approach` pays `w·(d0−d1)/100` while not locked on, `lockon` once per
+acquisition (cap 6), `lock_hold` per step held.
+
+### Constant-action sweep, 120 steps from all 10 start states
+
+| held action | Δ dist to nearest Baba | `r_approach` | lock-ons (cap 6) | left% |
+|---|---|---|---|---|
+| best closer, `S+Z` | **−43.2** | **−0.04** | 0.00 | 0% |
+| `E+Shield` | −34.7 | −0.02 | 0.00 | 0% |
+| `N` (no Z) | **+7455** | −2.58 | 0.10 | 70% |
+| best lock-on, `NE+Z+A` | — | — | **0.90** | 70% |
+
+`r_approach` is ≈0 or negative for **every** action, and the best Z-press acquires 0.90 lock-ons in 120 steps
+against a cap of 6. Both terms are effectively unearnable. The dream has two regimes: Z-held, which is nearly
+frozen, and non-Z, which diverges by thousands of units and exits the room. Neither is "walk over and engage".
+
+### Displacement direction, which had never been measured
+
+| on truly-moving steps (held-out slots) | |
+|---|---|
+| median angular error | **26.7°** |
+| mean angular error | 47.0° |
+| within 30° / 45° / 90° | 53.3% / 63.0% / 80.2% (chance 16.7 / 25.0 / 50.0%) |
+| cosine similarity | **+0.548** |
+
+There is real directional signal — cosine +0.548, well above the 0 of noise — but 47° mean error accumulates:
+path length over 120 steps is ~143 units while net displacement is ~43, a **tortuosity of 3.3×**. The dream
+wanders instead of walking.
+
+### The aggregate metric was hiding the real error
+
+§14 reported displacement at "1.93× of true" and called that nearly fixed. Disaggregated:
+
+| | dream | real |
+|---|---|---|
+| mean step over ALL frames | 1.76 | 0.91 → **1.93× too much** |
+| mean step on TRULY-MOVING frames | **1.19** | **11.03** → **9.3× too little** |
+
+Those are *opposite* errors that partially cancel in the aggregate: the gate fires on frames where Link should
+be still (too often), while the magnitude on real moving frames is ~9× too small. A real held direction covers
+~1324 units in 120 steps; the dream covers 143 of path and 43 of net. That ~30× shortfall in net approach is
+the gap, and the 1.93× aggregate concealed it.
+
+Same class of mistake as the pooled inverse-dynamics number in §10: **report the conditional metric, not the
+aggregate.** Added to the probe as a standing check.
+
+### Proposed fix, grounded in patterns that already worked here
+
+1. **Classify displacement instead of regressing it.** Magnitude 9× too small on moving frames is textbook
+   regression-to-the-conditional-mean under uncertainty — the same failure that made HP unusable until it was
+   classified (0.286 → 0.906). Discretise into direction sector × magnitude bin and classify; a mode does not
+   shrink. Direction sectors align naturally with the 9 stick directions of the action space.
+2. **Predict displacement from `(z_t, a_t)` directly, not by decoding `z_{t+1}`.** Displacement direction is
+   close to a function of the stick direction and the camera, but the action barely survives into the latent
+   (inverse dynamics 0.089 against a 0.220 ceiling), so routing it through `z_{t+1}` passes the one quantity
+   that needs the action through the weakest channel. This is exactly the event-head pattern already in the
+   repo: *predict reward events from a latent transition instead of differencing a decoded state.*
+3. **Scripted sustained-approach data.** `suicide` walks at the nearest Baba but dies in ~70 steps, so there
+   are few long approach trajectories. A shielded-approach scenario (walk in with the shield up, survive) would
+   give the sustained closing that room exit got from scripted walkouts.
