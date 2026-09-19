@@ -1,4 +1,4 @@
-"""Behaviour cloning over the 335-d structured state, to produce a frozen encoder for a latent world model.
+"""Behaviour cloning over the structured game state (335-d v1 / 358-d v2, see zelda_rl.state_layout), to produce a frozen encoder for a latent world model.
 
 Featuriser: raw state -> (link block, 16 actor rows, actor ids, present mask). Angles become sin/cos, the Link
 state-flags word becomes bits, actor rows get Link-relative geometry and one-hot behaviour state, and lock-on /
@@ -20,27 +20,51 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-LINK_DIM, N_ROWS, ROW_DIM, N_ACTIONS = 15, 16, 20, 63
+from zelda_rl.combat import BG_BITS, BG_WALL
+from zelda_rl.state_layout import (ENEMY_FIELDS as ROW_F, LINK_FIELDS_V1, LINK_FIELDS_V2, N_ROWS, ROW_DIM,
+                                  link_dim)
+
+LINK_DIM, N_ACTIONS = len(LINK_FIELDS_V1), 63     # v1 width; real width is read per call, see _split()
 N_BABA_STATES = 10
 SF1_BITS = 32
 BABA_ID = 0x0055
 TURNS = 65536.0  # OoT binary angle unit
 
-LINK_F = ["scene", "room", "hp", "hp_cap", "sf1", "pos_x", "pos_y", "pos_z", "yaw", "targeted_row", "arrow_row",
-          "held_item", "seeds", "nuts", "grass"]
-ROW_F = ["present", "id", "hp", "pos_x", "pos_y", "pos_z", "fn_rel", "state_idx", "shape_yaw", "yaw_to_player",
-         "timer", "cat", "params", "yaw", "vel_x", "vel_y", "vel_z", "focus_x", "focus_y", "focus_z"]
-LI = {k: i for i, k in enumerate(LINK_F)}
+LINK_F = LINK_FIELDS_V1
+LI = {k: i for i, k in enumerate(LINK_FIELDS_V2)}   # v1 names keep their v1 indices: v2 only appends
 RI = {k: i for i, k in enumerate(ROW_F)}
+
+
+def _split(state: np.ndarray):
+    """Flat state -> (link block, row block, is_v2). Width decides the version; v2 only APPENDS Link
+    fields, so every v1 index in `LI` stays valid for both."""
+    state = np.asarray(state, np.float32)
+    n, w = len(state), state.shape[-1]
+    dl = link_dim(w)
+    return state[:, :dl], state[:, dl:].reshape(n, N_ROWS, ROW_DIM), dl == len(LINK_FIELDS_V2)
+
 
 LINK_FEAT_NAMES = (["hp", "hp_frac", "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "held_item", "nuts",
                     "has_lockon", "has_arrow", "n_present", "n_baba"] + [f"sf1_bit{i}" for i in range(SF1_BITS)])
+# v2 block: Link's body, collision and action state. ALWAYS emitted, zero-filled for a v1 state, so the
+# encoder input width does not depend on the dataset version and v1/v2 episodes can be mixed in one batch.
+LINK_V2_FEAT_NAMES = (["speed", "vel_x", "vel_y", "vel_z", "vel_mag"]
+                      + [f"bg_{n}" for n in ("ground", "ground_touch", "ground_leave", "wall", "ceiling",
+                                             "water", "ground_strict", "crushed", "player_wall")]
+                      + ["wall_yaw_sin", "wall_yaw_cos", "floor_dy", "shape_yaw_sin", "shape_yaw_cos",
+                         "turn_sin", "turn_cos", "action_fn_rel", "melee_active", "melee_anim",
+                         "ztarget_active", "ztarget_timer", "parallel_yaw_sin", "parallel_yaw_cos",
+                         "fall_distance", "floor_pitch_sin", "floor_pitch_cos", "has_interact_wall",
+                         "dist_interact_wall", "y_dist_to_ledge", "door_type", "door_timer", "knockback"]
+                      + [f"sf2_bit{i}" for i in range(SF1_BITS)] + [f"sf3_bit{i}" for i in range(8)])
 ROW_FEAT_NAMES = (["present", "hp", "dx", "dy", "dz", "dist", "log_dist", "bearing_sin", "bearing_cos",
                    "pos_x", "pos_y", "pos_z", "yaw_sin", "yaw_cos", "shape_yaw_sin", "shape_yaw_cos",
                    "yaw_to_player_sin", "yaw_to_player_cos", "timer", "cat", "params", "fn_rel",
                    "vel_x", "vel_y", "vel_z", "speed", "focus_dx", "focus_dy", "focus_dz",
                    "is_baba", "is_targeted", "is_arrow"] + [f"state_{i}" for i in range(N_BABA_STATES)])
+LINK_FEAT_NAMES = LINK_FEAT_NAMES + LINK_V2_FEAT_NAMES
 LINK_FEAT_DIM, ROW_FEAT_DIM = len(LINK_FEAT_NAMES), len(ROW_FEAT_NAMES)
+LINK_V2_FEAT_DIM = len(LINK_V2_FEAT_NAMES)
 
 
 def _sincos(units):
@@ -48,11 +72,53 @@ def _sincos(units):
     return np.sin(a), np.cos(a)
 
 
+def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
+    """Link body / collision / action features, or zeros for a v1 state.
+
+    Angles are sin/cos, never raw units. `wall_yaw` is MASKED by actual wall contact: with no wall touched
+    the field holds a stale value, and feeding that taught the Baba-facing head a 103-degree error before
+    the same masking fixed it to 5 degrees.
+    """
+    if not v2:
+        return np.zeros((n, LINK_V2_FEAT_DIM), np.float32)
+    col = lambda k: lk[:, LI[k]]                                            # noqa: E731
+    bg = col("bg_flags").astype(np.int64)
+    vel = lk[:, [LI["vel_x"], LI["vel_y"], LI["vel_z"]]]
+    touching_wall = ((bg >> BG_WALL) & 1).astype(np.float32)
+    wys, wyc = _sincos(col("wall_yaw"))
+    sys_, syc = _sincos(col("shape_yaw"))
+    tus, tuc = _sincos(col("shape_yaw") - col("yaw"))                       # mid-turn body-vs-heading offset
+    pys, pyc = _sincos(col("parallel_yaw"))
+    fps, fpc = _sincos(col("floor_pitch"))
+    zt = col("ztarget_timer")
+    diw = col("dist_interact_wall")
+    sf2 = col("sf2").astype(np.int64)
+    sf3 = col("sf3").astype(np.int64)
+    return np.concatenate([
+        (col("speed") / 10.0)[:, None], vel / 10.0, (np.linalg.norm(vel, axis=1) / 10.0)[:, None],
+        np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),
+        (wys * touching_wall)[:, None], (wyc * touching_wall)[:, None],
+        ((col("floor_height") - col("pos_y")) / 100.0)[:, None],
+        sys_[:, None], syc[:, None], tus[:, None], tuc[:, None],
+        (col("action_fn_rel") * 1e-4)[:, None],
+        (col("melee_state") != 0).astype(np.float32)[:, None], (col("melee_anim") / 10.0)[:, None],
+        (zt != 0).astype(np.float32)[:, None], (np.clip(zt, 0, 10) / 10.0)[:, None],
+        pys[:, None], pyc[:, None],
+        (np.clip(col("fall_distance"), -100, 2000) / 100.0)[:, None], fps[:, None], fpc[:, None],
+        (diw > 0).astype(np.float32)[:, None], (np.clip(diw, 0, 200) / 100.0)[:, None],
+        (np.clip(col("y_dist_to_ledge"), -200, 200) / 100.0)[:, None],
+        col("door_type")[:, None], (np.clip(col("door_timer"), 0, 200) / 100.0)[:, None],
+        (col("knockback_type") != 0).astype(np.float32)[:, None],
+        np.stack([((sf2 >> b) & 1).astype(np.float32) for b in range(SF1_BITS)], 1),
+        np.stack([((sf3 >> b) & 1).astype(np.float32) for b in range(8)], 1),
+    ], 1).astype(np.float32)
+
+
 def featurise(state: np.ndarray) -> dict[str, np.ndarray]:
-    """state: (N, 335) float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16)."""
+    """state: (N, 335) v1 or (N, 358) v2 float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16)."""
     state = np.asarray(state, dtype=np.float32)
     n = len(state)
-    lk, rows = state[:, :LINK_DIM], state[:, LINK_DIM:].reshape(n, N_ROWS, ROW_DIM)
+    lk, rows, v2 = _split(state)
     present = (rows[:, :, RI["present"]] > 0.5).astype(np.float32)
     ids = rows[:, :, RI["id"]].astype(np.int64)
     is_baba = ((ids == BABA_ID) & (present > 0)).astype(np.float32)
@@ -70,6 +136,7 @@ def featurise(state: np.ndarray) -> dict[str, np.ndarray]:
         (lk[:, [LI["arrow_row"]]] >= 0).astype(np.float32),
         present.sum(1, keepdims=True), is_baba.sum(1, keepdims=True),
         bits,
+        _link_v2_feats(lk, v2, n),
     ], 1).astype(np.float32)
 
     rpos = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
@@ -208,27 +275,50 @@ SF1_DEAD, SF1_SHIELD, SF1_DAMAGED = 7, 22, 26
 DECODE_CONT = ("link_pos", "link_yaw", "row_pos")   # HP is classified, not regressed
 
 
-def decode_targets(state: np.ndarray) -> dict[str, np.ndarray]:
-    """Raw 335-d state -> the fields CombatTracker.step() reads. Continuous fields stay in raw units."""
+OBS_CAM_YAW = slice(12, 14)     # GLOBAL_FIELDS_V2: camera_yaw_sin_cos
+OBS_LINK_VEL = slice(14, 17)    # GLOBAL_FIELDS_V2: link_vel
+
+
+def decode_targets(state: np.ndarray, obs: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """Raw state (v1 335-d or v2 358-d) -> the fields CombatTracker.step() reads. Continuous fields stay in raw units.
+
+    `obs` is the 483-d observation the demonstrator saw, stored alongside every transition. Camera yaw and
+    Link's velocity live only there -- the 335-d state was built from CombatState, the combat-task reader,
+    which has no camera and no Link velocity. Both were in the original PPO's observation, so decoding
+    them closes that parity gap without re-collecting anything.
+    """
     state = np.asarray(state, np.float32)
     n = len(state)
-    lk, rows = state[:, :LINK_DIM], state[:, LINK_DIM:].reshape(n, N_ROWS, ROW_DIM)
+    lk, rows, v2 = _split(state)
     sf1 = lk[:, LI["sf1"]].astype(np.int64)
     ys, yc = _sincos(lk[:, LI["yaw"]])
     tr = lk[:, LI["targeted_row"]].astype(np.int64)
     present = (rows[:, :, RI["present"]] > 0.5).astype(np.float32)
-    return {
+    out = {
         "link_hp": lk[:, [LI["hp"]]],
         "link_pos": lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]],
         "link_yaw": np.stack([ys, yc], 1),
         "link_bits": np.stack([((sf1 >> b) & 1).astype(np.float32)
                                for b in (SF1_DEAD, SF1_SHIELD, SF1_DAMAGED)], 1),
+        # jumping, freefall, z_targeting, ledge_*, in_water, ... -- the jump-attack phase lives here
+        "link_sf1": np.stack([((sf1 >> b) & 1).astype(np.float32) for b in SF1_NAMED], 1),
         "targeted": np.where((tr >= 0) & (tr < N_ROWS), tr, N_ROWS),          # N_ROWS = "no lock-on"
         "row_present": present,
         "row_is_baba": ((rows[:, :, RI["id"]].astype(np.int64) == BABA_ID) & (present > 0)).astype(np.float32),
         "row_hp": rows[:, :, RI["hp"]],
         "row_pos": rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]],
         "row_state": np.clip(rows[:, :, RI["state_idx"]].astype(np.int64), 0, N_BABA_STATES - 1),
+        # Orientation and timing: whether a Baba is turned toward Link, and how long until its action
+        # fires. The real policy reads both (t1_facing_link_cos_sin, t1_timer) and its kill move is a
+        # timed Z+A against that telegraph. The encoder is given them; nothing checked z kept them.
+        "row_facing_link": np.stack(_sincos((rows[:, :, RI["shape_yaw"]]
+                                             - rows[:, :, RI["yaw_to_player"]])), -1),
+        "row_timer": (np.clip(rows[:, :, RI["timer"]], 0, 100) / 100.0)[..., None],
+        "row_vel": rows[:, :, [RI["vel_x"], RI["vel_y"], RI["vel_z"]]],
+        "link_facing_target": np.stack(_sincos(
+            np.arctan2(rows[:, :, RI["pos_x"]] - lk[:, [LI["pos_x"]]],
+                       rows[:, :, RI["pos_z"]] - lk[:, [LI["pos_z"]]]) * (TURNS / (2 * np.pi))
+            - lk[:, [LI["yaw"]]]), -1),
         # the room-exit terminal reads scene and room; without them nothing downstream can tell Link left.
         "scene": np.clip(lk[:, LI["scene"]].astype(np.int64), 0, 1),
         "room": np.clip(lk[:, LI["room"]].astype(np.int64), 0, MAX_ROOM - 1),
@@ -236,11 +326,18 @@ def decode_targets(state: np.ndarray) -> dict[str, np.ndarray]:
         "baba_count": np.clip(((present > 0.5) & (rows[:, :, RI["id"]].astype(np.int64) == BABA_ID)
                                & (rows[:, :, RI["hp"]] > 0)).sum(1), 0, N_BABA_COUNT - 1).astype(np.int64),
     }
+    if obs is not None:
+        out["cam_yaw"] = np.asarray(obs[:, OBS_CAM_YAW], np.float32)
+        out["link_vel"] = np.asarray(obs[:, OBS_LINK_VEL], np.float32)
+    return out
 
 
 LINK_HP_VALUES = (0.0, 8.0, 16.0, 24.0, 32.0, 40.0, 48.0)   # half-heart steps; 48 = 3 full hearts
 ROW_HP_VALUES = (0.0, 1.0, 2.0)                             # Deku Baba has 2 HP
 N_BABA_COUNT = 4                                            # 0..3 live Babas
+# The 14 stateFlags1 bits the original PPO observed (obs.SF1_BITS). They are already in the recorded
+# state; only 3 were ever decoded, so jumping / freefall / z_targeting were never checked to survive z.
+SF1_NAMED = [6, 7, 10, 11, 13, 14, 15, 16, 18, 19, 21, 26, 27, 29]
 MAX_ROOM = 8                                                # room ids seen in this scene
 
 
@@ -269,9 +366,13 @@ class StateDecoder(nn.Module):
         self.scene = _layer(latent, 2, 0.1)
         self.room = _layer(latent, MAX_ROOM, 0.1)
         self.baba_count = _layer(latent, N_BABA_COUNT, 0.1)
+        self.link_sf1 = _layer(latent, len(SF1_NAMED), 0.1)
+        self.cam_yaw = _layer(latent, 2, 0.1)          # camera yaw sin/cos: Z-target recentres it
+        self.link_vel = _layer(latent, 3, 0.1)         # Link's momentum, which a jump attack depends on
         self.row_expand = _layer(latent, n_rows * row_hidden)
         self.row_mlp = nn.Sequential(nn.ReLU(), _layer(row_hidden, row_hidden), nn.ReLU())
-        self.row_out = _layer(row_hidden, 1 + 1 + self.n_row_hp + 3 + n_states, 0.1)
+        # present, is_baba, hp, pos(3), state, facing-link sin/cos, timer, vel(3), link-facing sin/cos
+        self.row_out = _layer(row_hidden, 1 + 1 + self.n_row_hp + 3 + n_states + 2 + 1 + 3 + 2, 0.1)
 
     def forward(self, z):
         lo = self.link_out(self.link(z))
@@ -281,5 +382,11 @@ class StateDecoder(nn.Module):
         return {"link_hp": lo[:, :k], "link_pos": lo[:, k:k + 3], "link_yaw": lo[:, k + 3:k + 5],
                 "link_bits": lo[:, k + 5:k + 8], "targeted": self.targeted(z),
                 "scene": self.scene(z), "room": self.room(z), "baba_count": self.baba_count(z),
+                "link_sf1": self.link_sf1(z), "cam_yaw": self.cam_yaw(z), "link_vel": self.link_vel(z),
                 "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
-                "row_pos": r[..., j:j + 3], "row_state": r[..., j + 3:]}
+                "row_pos": r[..., j:j + 3],
+                "row_state": r[..., j + 3:j + 3 + self.n_states],
+                "row_facing_link": r[..., j + 3 + self.n_states:j + 5 + self.n_states],
+                "row_timer": r[..., j + 5 + self.n_states:j + 6 + self.n_states],
+                "row_vel": r[..., j + 6 + self.n_states:j + 9 + self.n_states],
+                "link_facing_target": r[..., j + 9 + self.n_states:j + 11 + self.n_states]}

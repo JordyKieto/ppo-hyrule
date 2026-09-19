@@ -92,6 +92,38 @@ class CombatState:
     seeds: int = 0                      # slingshot seeds (save ctx ammo slot 6)
     nuts: int = 0                       # Deku nuts (ammo slot 1)
     grass: int = -1                     # grass tufts (En_Kusa 0x0125, prop list) still standing; -1 = not read
+    # --- Link body / collision / action state. Offsets from the OoT decomp (see LINK_FIELD_OFFSETS).
+    # Defaults are inert so a CombatState rebuilt from decoder output (zelda_rl/dream_state.py) still works.
+    shape_yaw: int = 0                  # Actor +0xB6: rendered facing, differs from world yaw mid-turn
+    vel: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    speed: float = 0.0                  # Actor +0x68 speed. ~0 when pressed into a wall, ~4.7 walking free
+    bg_flags: int = 0                   # Actor +0x88 bgCheckFlags: GROUND / WALL / CEILING / WATER / CRUSHED
+    wall_yaw: int = 0                   # Actor +0x7E: facing of the wall being touched
+    floor_height: float = 0.0           # Actor +0x80: y of the floor poly below Link
+    action_fn: int = 0                  # Player +0x664 actionFunc: Link's action state machine
+    upd_fn: int = 0                     # Actor +0x130: Link's own update fn, to make action_fn relocation-proof
+    sf2: int = 0                        # Player +0x670 stateFlags2
+    sf3: int = 0                        # Player +0x682 stateFlags3
+    melee_state: int = 0                # Player +0x833 meleeWeaponState: nonzero while a swing is live
+    melee_anim: int = 0                 # Player +0x832 meleeWeaponAnimation
+    ztarget_timer: int = 0              # Player +0x65C: Z-target held, nonzero even with NO lock-on target
+    parallel_yaw: int = 0               # Player +0x82E: aim yaw when Z-held without a target
+    fall_distance: int = 0              # Player +0x886: how far Link has fallen so far (positive = down)
+    floor_pitch: int = 0                # Player +0x888: floor slope along current heading
+    dist_interact_wall: float = 0.0     # Player +0x878: xyz distance to the interact wall
+    y_dist_to_ledge: float = 0.0        # Player +0x874: height of ground above an interact wall
+    door_type: int = 0                  # Player +0x41C..0x41E: door interaction (how a room is actually left)
+    door_direction: int = 0
+    door_timer: int = 0
+    knockback_type: int = 0             # Player +0x891: set when Link is knocked back
+
+    @property
+    def action_fn_rel(self) -> int:
+        """actionFunc relative to Link's own update fn, so the value survives a different load address."""
+        return self.action_fn - self.upd_fn if self.upd_fn else 0
+
+    def bg(self, b: int) -> bool:
+        return bool(self.bg_flags >> b & 1)
 
     @property
     def dead(self) -> bool:
@@ -126,7 +158,46 @@ def read_combat_state(ram) -> CombatState:
         held_item=struct.unpack_from(">b", ram, (player + 0x141) & 0x3FFFFF)[0] if ok else 0,
         seeds=int(ram[(SAVE_CTX + 0x8C + 6) & 0x3FFFFF]), nuts=int(ram[(SAVE_CTX + 0x8C + 1) & 0x3FFFFF]),
         grass=_count_actors(ram, 6, GRASS_ID),
+        **(_read_link_body(ram, player) if ok else {}),
     )
+
+
+# Link body / collision / action state. Offsets come from the OoT decompilation, NOT from recall:
+# `Actor` from include/actor.h and `Player` from include/player.h in github.com/zeldaret/oot.
+#
+# The decomp prints offsets for a DEBUG_FEATURES build, where `Actor` ends with `char dbgPad[0x10]` and so
+# `size = 0x14C`. Retail NTSC 1.2 has no pad, so `Actor` is 0x13C and every *Player* field sits 0x10 lower
+# than the decomp says; Actor's own fields are unshifted. The two offsets that predate this table agree:
+# stateFlags1 0x67C-0x10 = 0x66C (sf1 above) and heldItemAction 0x151-0x10 = 0x141 (held_item above).
+#
+# Verified live by scripts/verify_link_fields.py over 2,510 frames (16/16 checks), the decisive one being a
+# redundant pair: BGCHECKFLAG_WALL (bit 3 of bgCheckFlags) == (wallPoly != 0) at 1.0000 agreement.
+# See docs/ADDING_OBSERVATIONS.md step 0.
+PLAYER_SHIFT = 0x10
+LINK_FIELD_OFFSETS = {                      # name: (offset, struct format)
+    "speed": (0x068, ">f"), "wall_yaw": (0x07E, ">h"), "floor_height": (0x080, ">f"),
+    "bg_flags": (0x088, ">H"), "shape_yaw": (0x0B6, ">h"), "upd_fn": (0x130, ">I"),
+    "door_type": (0x42C - PLAYER_SHIFT, ">b"), "door_direction": (0x42D - PLAYER_SHIFT, ">b"),
+    "door_timer": (0x42E - PLAYER_SHIFT, ">h"), "ztarget_timer": (0x66C - PLAYER_SHIFT, ">i"),
+    "action_fn": (0x674 - PLAYER_SHIFT, ">I"), "sf2": (0x680 - PLAYER_SHIFT, ">I"),
+    "sf3": (0x692 - PLAYER_SHIFT, ">B"), "parallel_yaw": (0x83E - PLAYER_SHIFT, ">h"),
+    "melee_anim": (0x842 - PLAYER_SHIFT, ">b"), "melee_state": (0x843 - PLAYER_SHIFT, ">b"),
+    "y_dist_to_ledge": (0x884 - PLAYER_SHIFT, ">f"), "dist_interact_wall": (0x888 - PLAYER_SHIFT, ">f"),
+    "fall_distance": (0x896 - PLAYER_SHIFT, ">h"), "floor_pitch": (0x898 - PLAYER_SHIFT, ">h"),
+    "knockback_type": (0x8A1 - PLAYER_SHIFT, ">B"),
+}
+# bgCheckFlags bit -> name (include/actor.h BGCHECKFLAG_*)
+BG_GROUND, BG_GROUND_TOUCH, BG_GROUND_LEAVE, BG_WALL, BG_CEILING = 0, 1, 2, 3, 4
+BG_WATER, BG_WATER_TOUCH, BG_GROUND_STRICT, BG_CRUSHED, BG_PLAYER_WALL = 5, 6, 7, 8, 9
+BG_BITS = [BG_GROUND, BG_GROUND_TOUCH, BG_GROUND_LEAVE, BG_WALL, BG_CEILING,
+           BG_WATER, BG_GROUND_STRICT, BG_CRUSHED, BG_PLAYER_WALL]
+
+
+def _read_link_body(ram, player: int) -> dict:
+    d = {k: struct.unpack_from(f, ram, (player + o) & 0x3FFFFF)[0]
+         for k, (o, f) in LINK_FIELD_OFFSETS.items()}
+    d["vel"] = _vec3(ram, player + 0x5C)
+    return d
 
 
 def _count_actors(ram, cat: int, actor_id: int) -> int:

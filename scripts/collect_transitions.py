@@ -27,6 +27,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.combat import BABA_STATES, DEKU_BABA, CombatState, read_combat_state  # noqa: E402
+from zelda_rl.state_layout import (ENEMY_FIELDS as ENEMY_FIELDS_,  # noqa: E402
+                                    LINK_FIELDS_V2, MAX_ENEMIES as MAX_ENEMIES_)
 from zelda_rl.env import EnvError, action_name  # noqa: E402
 from zelda_rl.policy_io import DEFAULT_SLOTS_DIR, load_policy, make_env, resolve_checkpoint  # noqa: E402
 
@@ -41,13 +43,10 @@ DEFAULT_MIX = [
     ("checkpoints/inbox/deku-combat-gru-v2b_u00100.pt", 130, 15),
     ("checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt", 150, 20),
 ]
-MAX_ENEMIES = 16          # slots start with 9 cat-5 actors (3 Baba + 3 0x0095 + 3 0x0037); headroom for mid-fight spawns
+MAX_ENEMIES = MAX_ENEMIES_  # 16: slots start with 9 cat-5 actors (3 Baba + 3 0x0095 + 3 0x0037); headroom for spawns
 DEKU_STATES_DIR = "datasets/zelda/combat/deku-baba/states"   # NOT the live Dolphin slots: those hold Gohma states now
-LINK_FIELDS = ["scene", "room", "hp", "hp_cap", "sf1", "pos_x", "pos_y", "pos_z", "yaw",
-               "targeted_row", "arrow_row", "held_item", "seeds", "nuts", "grass"]
-ENEMY_FIELDS = ["present", "id", "hp", "pos_x", "pos_y", "pos_z", "fn_rel", "state_idx", "shape_yaw",
-                "yaw_to_player", "timer", "cat", "params", "yaw", "vel_x", "vel_y", "vel_z",
-                "focus_x", "focus_y", "focus_z"]
+# Layout lives in zelda_rl/state_layout.py so the collector and the world model cannot drift apart.
+LINK_FIELDS, ENEMY_FIELDS = LINK_FIELDS_V2, ENEMY_FIELDS_
 LINK_DIM, ENEMY_DIM = len(LINK_FIELDS), len(ENEMY_FIELDS)
 STATE_DIM = LINK_DIM + MAX_ENEMIES * ENEMY_DIM
 
@@ -92,7 +91,11 @@ def encode_state(c: CombatState, rows: EnemyRows) -> np.ndarray:
         rows.row(ptr)
     out[:LINK_DIM] = [c.scene, c.room, c.hp, c.hp_cap, c.sf1, *c.pos, c.yaw,
                       rows.row(c.targeted) if c.targeted else -1, rows.row(c.arrow) if c.arrow else -1,
-                      c.held_item, c.seeds, c.nuts, c.grass]
+                      c.held_item, c.seeds, c.nuts, c.grass,
+                      c.shape_yaw, *c.vel, c.speed, c.bg_flags, c.wall_yaw, c.floor_height,
+                      c.action_fn_rel, c.sf2, c.sf3, c.melee_state, c.melee_anim, c.ztarget_timer,
+                      c.parallel_yaw, c.fall_distance, c.floor_pitch, c.dist_interact_wall,
+                      c.y_dist_to_ledge, c.door_type, c.door_direction, c.door_timer, c.knockback_type]
     for ptr, e in c.enemies.items():
         j = rows.row(ptr)
         if j < 0:
