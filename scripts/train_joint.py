@@ -78,6 +78,10 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--detach-pos", action="store_true",
+                    help="compute the POSITION term on a detached latent, so a large --w-pos cannot reshape "
+                         "z. Tests whether position and events compete for the latent (section 24) or only "
+                         "for gradient direction.")
     ap.add_argument("--oversample", type=float, default=0.0,
                     help="oversample EVENT frames in the transition objective. The repo already uses "
                          "transition_frames() this way for the HP decode heads (damage F1 0.458 -> 0.746) "
@@ -285,19 +289,29 @@ def main():
         L = L + 0.1 * (((q["tr_dy"] - TRDY[i]) ** 2).squeeze(-1) * mk).sum() / den
         return L
 
-    def decode_loss(p, i):
+    def decode_loss(p, i, p_det=None):
+        """`p_det` supplies the POSITION heads only, decoded from a detached latent.
+
+        With --detach-pos, the position term is computed on dec(z.detach()), so position is read OUT of
+        whatever the latent is instead of dictating what it becomes. The A/B in section 24 showed w_pos 200
+        fixes trajectory (walk 1.38x -> 1.06x of identity) and annihilates damage (detection 55% -> 0%),
+        because w_pos flows back through the predictor and encoder and repurposes the 128-d latent. Detaching
+        isolates that mechanism: if events survive while trajectory still improves, the conflict was the
+        encoder being reshaped, not a shortage of capacity.
+        """
+        q = p_det if p_det is not None else p
         m, mb = Yt["row_present"][i], Yt["row_is_baba"][i]
         hp_l = (F.cross_entropy(p["link_hp"], Yt["link_hp_c"][i], weight=CW["link_hp"],
                                 reduction="none") * wl[i]).mean()
         rh = (F.cross_entropy(p["row_hp"].reshape(-1, 3), Yt["row_hp_c"][i].reshape(-1), weight=CW["row_hp"],
                               reduction="none").reshape(m.shape) * m * wr[i])
-        L = (a.w_pos * F.mse_loss(p["link_pos"], Yt["link_pos"][i])
+        L = (a.w_pos * F.mse_loss(q["link_pos"], Yt["link_pos"][i])
              + F.mse_loss(p["link_yaw"], Yt["link_yaw"][i])
              + F.binary_cross_entropy_with_logits(p["link_bits"], Yt["link_bits"][i])
              + F.cross_entropy(p["targeted"], Yt["targeted"][i])
              + F.binary_cross_entropy_with_logits(p["row_present"], m)
              + F.binary_cross_entropy_with_logits(p["row_is_baba"], mb))
-        L = L + a.w_pos * (((p["row_pos"] - Yt["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
+        L = L + a.w_pos * (((q["row_pos"] - Yt["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
         ce = F.cross_entropy(p["row_state"].reshape(-1, p["row_state"].shape[-1]),
                              Yt["row_state"][i].reshape(-1), reduction="none").reshape(m.shape)
         L = L + (ce * mb).sum() / mb.sum().clamp(min=1)
@@ -360,7 +374,7 @@ def main():
         for s in range(0, len(perm), a.batch):
             i = torch.from_numpy(perm[s:s + a.batch])
             z = E(i)
-            ld = decode_loss(dec(z), i)                          # every frame, exit frames included
+            ld = decode_loss(dec(z), i, dec(z.detach()) if a.detach_pos else None)
             ld = ld + a.w_trans * trans_loss(thead(z, A[i]), i)
             if a.unroll > 1:
                 zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)),
@@ -373,7 +387,8 @@ def main():
                     w = a.unroll_decay ** j
                     lp = lp + w * F.mse_loss(zz, zt)
                     if a.w_decpred > 0:                          # decode EVERY rollout step: momentum over time
-                        ld = ld + a.w_decpred * w * decode_loss(dec(zz), zi + (j + 1) * K)
+                        ld = ld + a.w_decpred * w * decode_loss(
+                            dec(zz), zi + (j + 1) * K, dec(zz.detach()) if a.detach_pos else None)
                     wsum += w
                     if a.unroll_detach and (j + 1) % a.unroll_detach == 0:
                         zz = zz.detach()                         # bound backprop depth, keep the exposure
@@ -394,7 +409,8 @@ def main():
                     # That is why velocity went stale in the dream and the walk wandered: nothing ever
                     # penalised the TRANSITION for getting velocity wrong.
                     if a.w_decpred > 0:
-                        ld = ld + a.w_decpred * decode_loss(dec(zh), zi + K)
+                        ld = ld + a.w_decpred * decode_loss(
+                            dec(zh), zi + K, dec(zh.detach()) if a.detach_pos else None)
                         # the transition head reads predicted latents from step 2 of a dream onward, so train
                         # it on them too rather than only on real encoder outputs
                         ld = ld + a.w_decpred * a.w_trans * trans_loss(thead(zh, A[zi + K]), zi + K)

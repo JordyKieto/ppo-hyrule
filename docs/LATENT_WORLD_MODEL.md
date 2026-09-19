@@ -1215,3 +1215,33 @@ Two candidate fixes, neither yet tested:
 2. **Detach the encoder for the position term**, so position is decoded *from* whatever `z` is rather than
    dictating what `z` becomes. This isolates the mechanism: it tests whether the events need the capacity or
    merely need it not taken away.
+
+### Detach test: the competition is for capacity, and it is not avoidable this way
+
+`--detach-pos` computes the position term on `dec(z.detach())`, so a large `--w-pos` cannot reshape the latent.
+If the conflict in section 24 were merely about gradient direction, events would survive and trajectory would
+hold. Same setup, 4 epochs, event-rich windows at horizon 40:
+
+| config | Baba HP removed | detected | walk trajectory | hit trajectory |
+|---|---|---|---|---|
+| `w_pos 6` | 1.15 / 1.25 | 55% | 1.38x | 1.11x |
+| `w_pos 60` | 0.35 | 25% | 1.20x | 1.07x |
+| `w_pos 200` | **0.00** | **0%** | **1.06x** | **1.00x** |
+| **`w_pos 200` + detach** | **0.85** | **45%** | **2.36x** | 1.09x |
+
+Detaching **recovers damage almost fully** (0.00 -> 0.85, 0% -> 45%) and **wrecks walking** (1.06x -> 2.36x,
+worse than any other configuration). So the hypothesis is **falsified**: `z` has to genuinely encode position
+for trajectories to work, and detaching removes precisely the mechanism that made trajectory work.
+
+The competition is for latent capacity, and it cannot be dodged by controlling where the gradient flows. The
+remaining lever is width, which needs re-testing because the section 10 evidence against it is stale --
+single-seed, predating the decode-the-prediction objective, and never evaluated on event-rich windows.
+
+Current best-known operating points, all at latent 128:
+
+| want | config | cost |
+|---|---|---|
+| events | `w_pos 6`, oversample 50 | walking 1.38x of identity |
+| trajectory | `w_pos 200`, oversample 50 | damage dead (0%) |
+| a compromise | `w_pos 60` | walking 1.20x, damage 25% |
+| events with position read-only | `w_pos 200` + `--detach-pos` | walking 2.36x, worst trajectory |
