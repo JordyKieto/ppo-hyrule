@@ -33,16 +33,59 @@ DYING = 8                    # index of "dying" in dataset.json["baba_states"]
 CONT = ("link_pos", "link_yaw", "row_pos")
 
 
-def load(data_dir: Path):
-    meta = json.loads((data_dir / "dataset.json").read_text())
+def load_many(dirs):
+    """Concatenate several collection runs, keeping episode ids unique. Only the first needs dataset.json."""
+    meta = json.loads((Path(dirs[0]) / "dataset.json").read_text())
+    S, A, SL, EP = [], [], [], []
+    off = 0
+    for d in dirs:
+        d = Path(d)
+        rows = [json.loads(l) for l in (d / "manifest.jsonl").read_text().splitlines() if l.strip()]
+        for i, r in enumerate(rows):
+            arr = np.load(d / r["file"])
+            a_, st = arr["action"], arr["state"]
+            n = min(len(a_) + 1, len(st))
+            S.append(st[:n])
+            A.append(np.r_[a_[:n - 1], a_[n - 2]] if n > 1 else a_[:1])
+            SL.append(np.full(n, r["slot"], np.int64)); EP.append(np.full(n, off + i, np.int64))
+        off += len(rows)
+    return meta, np.concatenate(S), np.concatenate(A), np.concatenate(SL), np.concatenate(EP)
+
+
+def episode_targets(data_dir: Path, kind: str):
+    """One scalar per episode, broadcast to every frame in it."""
     rows = [json.loads(l) for l in (data_dir / "manifest.jsonl").read_text().splitlines() if l.strip()]
-    S, A, slot, ep = [], [], [], []
-    for i, r in enumerate(rows):
+    out = []
+    for r in rows:
         d = np.load(data_dir / r["file"])
         t = len(d["action"])
-        S.append(d["state"][:t]); A.append(d["action"])
-        slot.append(np.full(t, r["slot"], np.int64)); ep.append(np.full(t, i, np.int64))
-    return meta, np.concatenate(S), np.concatenate(A), np.concatenate(slot), np.concatenate(ep)
+        v = float(r["return"]) if kind == "return" else float(d["reward"].mean())
+        out.append(np.full(t, v, np.float32))
+    return np.concatenate(out)
+
+
+def load(data_dir: Path):
+    """-> meta, state, action, slot, episode-id, with T+1 states per episode.
+
+    The final state of each episode is KEPT. An earlier version stored state[:T] for T actions, which
+    silently dropped the last transition -- the one carrying the death, the room clear, or the room exit.
+    For the room-exit episodes that was 100% of the signal: `scene` flips 0->85 at exactly index T, so all
+    27 exits sat one index past everything training could see.
+
+    Actions are padded by repeating the last one so every array aligns; the padded frame is never a
+    transition source, because a transition needs episode-id equality with the following frame.
+    """
+    meta = json.loads((data_dir / "dataset.json").read_text())
+    rows = [json.loads(l) for l in (data_dir / "manifest.jsonl").read_text().splitlines() if l.strip()]
+    S, act, slot, ep = [], [], [], []
+    for i, r in enumerate(rows):
+        d = np.load(data_dir / r["file"])
+        a_, st = d["action"], d["state"]
+        n = min(len(a_) + 1, len(st))                       # T+1 states where they were stored
+        S.append(st[:n])
+        act.append(np.r_[a_[:n - 1], a_[n - 2]] if n > 1 else a_[:1])
+        slot.append(np.full(n, r["slot"], np.int64)); ep.append(np.full(n, i, np.int64))
+    return (meta, np.concatenate(S), np.concatenate(act), np.concatenate(slot), np.concatenate(ep))
 
 
 def transition_frames(y: np.ndarray, ep: np.ndarray) -> np.ndarray:
@@ -79,6 +122,14 @@ def main():
     ap.add_argument("--w-consistency", type=float, default=0.5,
                     help="penalise HP=0 on a Baba row that is neither dying nor despawned")
     ap.add_argument("--out", default="checkpoints/bc/bc-decode.pt")
+    ap.add_argument("--cond", choices=["none", "return", "mean"], default="none",
+                    help="condition the ACTION head on one number per episode: its total return, or its "
+                         "mean reward per step. The encoder is untouched, so z stays a function of state "
+                         "alone. Without this, BC sees the same state in a +86 game and a -25 game and is "
+                         "asked to predict both actions.")
+    ap.add_argument("--snapshot-every", type=int, default=0,
+                    help="also save <out>.ep<N>.pt every N epochs, so one run yields the whole training "
+                         "curve instead of re-training from scratch per point")
     ap.add_argument("--torch-threads", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
@@ -129,12 +180,24 @@ def main():
     net = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=meta["n_actions"],
                 latent=a.latent, gru=0)
     dec = StateDecoder(latent=a.latent)
-    opt = torch.optim.Adam(list(net.parameters()) + list(dec.parameters()), lr=a.lr)
+    extra = []
+    if a.cond != "none":
+        ct = episode_targets(Path(a.data), a.cond)
+        cmu, csd = float(ct[tr].mean()), float(ct[tr].std() + 1e-6)
+        C = torch.from_numpy(((ct - cmu) / csd).astype(np.float32))[:, None]
+        cond_head = torch.nn.Linear(a.latent + 1, meta["n_actions"])
+        torch.nn.init.orthogonal_(cond_head.weight, 0.01); torch.nn.init.zeros_(cond_head.bias)
+        extra = list(cond_head.parameters())
+        print(f"conditioning the action head on per-episode {a.cond}: "
+              f"mean {cmu:.2f} sd {csd:.2f} over train")
+    opt = torch.optim.Adam(list(net.parameters()) + list(dec.parameters()) + extra, lr=a.lr)
+    act_logits = (lambda z, i: cond_head(torch.cat([z, C[i]], -1))) if a.cond != "none" \
+        else (lambda z, i: net.action(z))
     rng = np.random.default_rng(a.seed)
 
     def fwd(i):
         z = net.encode(T["link"][i], T["rows"][i], T["ids"][i], T["mask"][i])
-        return net.action(z), dec(z)
+        return act_logits(z, i), dec(z)
 
     def decode_loss(p, i):
         m, mb = Yt["row_present"][i], Yt["row_is_baba"][i]
@@ -178,8 +241,18 @@ def main():
             torch.nn.utils.clip_grad_norm_(list(net.parameters()) + list(dec.parameters()), 1.0)
             opt.step()
             n += 1; na += la.item(); nd += ld.item()
-        print(f"  epoch {ep}/{a.epochs}  action CE {na / n:.3f}  decode {nd / n:.3f}  ({time.time() - t0:.0f}s)",
-              flush=True)
+        if ep % max(a.epochs // 12, 1) == 0 or ep == 1:
+            print(f"  epoch {ep}/{a.epochs}  action CE {na / n:.3f}  decode {nd / n:.3f}  "
+                  f"({time.time() - t0:.0f}s)", flush=True)
+        if a.snapshot_every and ep % a.snapshot_every == 0:
+            snap = Path(str(a.out).replace(".pt", f".ep{ep:04d}.pt"))
+            snap.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({"model": net.state_dict(), "decoder": dec.state_dict(), "norm": norm.state_dict(),
+                        "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()}, "config": vars(a) | {"epoch": ep},
+                        "latent": a.latent, "link_dim": T["link"].shape[1], "row_dim": T["rows"].shape[2],
+                        "n_actions": meta["n_actions"],
+                        "split": {"val_slots": sorted(val_slots), "tune_slots": sorted(tune_slots),
+                                  "train_slots": sorted(set(slot[tr].tolist()))}}, snap)
 
     # ---------------- report
     net.eval(); dec.eval()

@@ -229,11 +229,19 @@ def decode_targets(state: np.ndarray) -> dict[str, np.ndarray]:
         "row_hp": rows[:, :, RI["hp"]],
         "row_pos": rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]],
         "row_state": np.clip(rows[:, :, RI["state_idx"]].astype(np.int64), 0, N_BABA_STATES - 1),
+        # the room-exit terminal reads scene and room; without them nothing downstream can tell Link left.
+        "scene": np.clip(lk[:, LI["scene"]].astype(np.int64), 0, 1),
+        "room": np.clip(lk[:, LI["room"]].astype(np.int64), 0, MAX_ROOM - 1),
+        # live Baba count as ONE low-cardinality head, rather than counting 16 noisy per-row predictions
+        "baba_count": np.clip(((present > 0.5) & (rows[:, :, RI["id"]].astype(np.int64) == BABA_ID)
+                               & (rows[:, :, RI["hp"]] > 0)).sum(1), 0, N_BABA_COUNT - 1).astype(np.int64),
     }
 
 
 LINK_HP_VALUES = (0.0, 8.0, 16.0, 24.0, 32.0, 40.0, 48.0)   # half-heart steps; 48 = 3 full hearts
 ROW_HP_VALUES = (0.0, 1.0, 2.0)                             # Deku Baba has 2 HP
+N_BABA_COUNT = 4                                            # 0..3 live Babas
+MAX_ROOM = 8                                                # room ids seen in this scene
 
 
 def hp_class(v: np.ndarray, values) -> np.ndarray:
@@ -258,6 +266,9 @@ class StateDecoder(nn.Module):
         self.link = nn.Sequential(_layer(latent, hidden), nn.ReLU(), _layer(hidden, hidden), nn.ReLU())
         self.link_out = _layer(hidden, self.n_link_hp + 3 + 2 + 3, 0.1)   # hp logits, pos, yaw sin/cos, sf1 bits
         self.targeted = _layer(latent, n_rows + 1, 0.1)
+        self.scene = _layer(latent, 2, 0.1)
+        self.room = _layer(latent, MAX_ROOM, 0.1)
+        self.baba_count = _layer(latent, N_BABA_COUNT, 0.1)
         self.row_expand = _layer(latent, n_rows * row_hidden)
         self.row_mlp = nn.Sequential(nn.ReLU(), _layer(row_hidden, row_hidden), nn.ReLU())
         self.row_out = _layer(row_hidden, 1 + 1 + self.n_row_hp + 3 + n_states, 0.1)
@@ -269,5 +280,6 @@ class StateDecoder(nn.Module):
         j = 2 + self.n_row_hp
         return {"link_hp": lo[:, :k], "link_pos": lo[:, k:k + 3], "link_yaw": lo[:, k + 3:k + 5],
                 "link_bits": lo[:, k + 5:k + 8], "targeted": self.targeted(z),
+                "scene": self.scene(z), "room": self.room(z), "baba_count": self.baba_count(z),
                 "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
                 "row_pos": r[..., j:j + 3], "row_state": r[..., j + 3:]}

@@ -38,7 +38,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, decode_targets,  # noqa: E402
                          featurise, hp_class)
-from scripts.train_bc_decode import DEFAULT_DATA, CONT, load, transition_frames  # noqa: E402
+from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
 
 DYING = 8
 
@@ -46,6 +46,8 @@ DYING = 8
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=DEFAULT_DATA)
+    ap.add_argument("--extra-data", nargs="*", default=[],
+                    help="extra collection runs to fold in, e.g. the room-exit episodes")
     ap.add_argument("--ref", default="checkpoints/bc/bc-decode-final.pt", help="normaliser + slot split only")
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch", type=int, default=1024)
@@ -56,6 +58,8 @@ def main():
     ap.add_argument("--w-pred", type=float, default=1.0)
     ap.add_argument("--w-hp", type=float, default=3.0)
     ap.add_argument("--w-pos", type=float, default=3.0)
+    ap.add_argument("--w-scene", type=float, default=2.0,
+                    help="weight on the in-room / left-room head; it drives the -20 room-exit terminal")
     ap.add_argument("--whiten", action="store_true",
                     help="standardise each latent dim before the prediction loss, so a dim holding 0.5%% of "
                          "the variance counts as much as one holding 60%%")
@@ -71,7 +75,9 @@ def main():
 
     ref = torch.load(a.ref, weights_only=False, map_location="cpu")
     norm, split = Norm.load(ref["norm"]), ref["split"]
-    meta, state, action, slot, epid = load(Path(a.data))
+    meta, state, action, slot, epid = load_many([a.data, *a.extra_data])
+    if a.extra_data:
+        print(f"data: {a.data} + {len(a.extra_data)} extra run(s) -> {len(state):,} frames")
     Y = decode_targets(state)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
@@ -89,7 +95,16 @@ def main():
             ok &= (np.r_[epid[j:], np.full(j, -1)] == epid)
         return np.where(ok)[0]
     K = a.stride
-    tr = starts(~np.isin(slot, list(test | tune)), K)
+    # The decoder can learn from every frame; the predictor needs a successor. The room-exit frame is the
+    # LAST of its episode, so a shared pair-index silently excludes exactly the label we collected.
+    # Exits only occur on training slots (7 and 9 never reach a door), so the slot split cannot measure
+    # the scene head. Hold out a quarter of the exit EPISODES instead, and report recall on those.
+    exit_ep = np.unique(epid[Y["scene"] != 0])
+    exit_eval_ep = exit_ep[::4]
+    tr_mask = ~np.isin(slot, list(test | tune)) & ~np.isin(epid, exit_eval_ep)
+    tr_all = np.where(tr_mask)[0]
+    tr = starts(tr_mask, K)
+    has_next = np.zeros(len(slot), bool); has_next[tr] = True
     tu = starts(np.isin(slot, list(tune)), K)
     te = starts(np.isin(slot, list(test)), 10 * K)
     print(f"stride {K} ({K*100} ms) | train {len(tr):,} tune {len(tu):,} test {len(te):,} | "
@@ -107,10 +122,18 @@ def main():
 
     pres_m = Y["row_present"] > 0.5
     def cw(y, n, mask=None):
-        c = np.bincount(y[tr].ravel() if mask is None else y[tr][mask[tr]].ravel(), minlength=n).astype(float)
+        c = np.bincount(y[tr_all].ravel() if mask is None else y[tr_all][mask[tr_all]].ravel(),
+                        minlength=n).astype(float)
         w = (c.sum() / np.maximum(c, 1)) ** 0.5
         return torch.tensor((w / w.mean()).astype(np.float32))
     CW = {"link_hp": cw(Y["link_hp_c"], 7), "row_hp": cw(Y["row_hp_c"], 3, pres_m)}
+    # Leaving the room is a scene change and it is the rarest label in the data -- 27 frames in 154,805.
+    # Unweighted it is simply never predicted, and the -20 terminal can never fire inside a dream.
+    n_sc = np.bincount(Y["scene"][tr_all], minlength=2).astype(float)
+    w_sc = (n_sc.sum() / np.maximum(n_sc, 1)) ** 0.5           # sqrt: a raw 3633:1 ratio zeroes class 0
+    CW["scene"] = torch.tensor((w_sc / w_sc.mean()).astype(np.float32))
+    print(f"scene class counts (train): {n_sc.astype(int).tolist()}  "
+          f"weights {CW['scene'].numpy().round(2)}  | held-out exit episodes: {len(exit_eval_ep)}")
     wl = torch.from_numpy(1 + 20.0 * transition_frames(Y["link_hp_c"], epid).astype(np.float32))
     wr = torch.from_numpy(1 + 20.0 * transition_frames(Y["row_hp_c"], epid).astype(np.float32))
 
@@ -133,6 +156,11 @@ def main():
         ce = F.cross_entropy(p["row_state"].reshape(-1, p["row_state"].shape[-1]),
                              Yt["row_state"][i].reshape(-1), reduction="none").reshape(m.shape)
         L = L + (ce * mb).sum() / mb.sum().clamp(min=1)
+        # live-Baba count as one head: the timeout penalty and the clear condition both read it, and a
+        # single 4-way choice is far steadier than counting 16 independent per-row predictions.
+        L = L + F.cross_entropy(p["baba_count"], Yt["baba_count"][i])
+        L = L + a.w_scene * F.cross_entropy(p["scene"], Yt["scene"][i], weight=CW["scene"])
+        L = L + 0.1 * F.cross_entropy(p["room"], Yt["room"][i])
         L = L + a.w_hp * (hp_l + rh.sum() / (m * wr[i]).sum().clamp(min=1))
         p0, pdy = p["row_hp"].softmax(-1)[..., 0], p["row_state"].softmax(-1)[..., DYING]
         return L + 0.5 * (p0 * p["row_present"].sigmoid() * (1 - pdy) * mb).mean()
@@ -142,19 +170,25 @@ def main():
     t0 = time.time()
     for ep in range(1, a.epochs + 1):
         enc.train(); dec.train(); pred.train()
-        perm = rng.permutation(tr)
+        perm = rng.permutation(tr_all)
         td = tp = n = 0.0
         for s in range(0, len(perm), a.batch):
             i = torch.from_numpy(perm[s:s + a.batch])
             z = E(i)
-            ld = decode_loss(dec(z), i)
-            with torch.no_grad():
-                zt = E(i + K)                                  # stop-gradient: no smoothing the target
-            zh = pred(torch.cat([z, A[i]], -1))
-            if a.whiten and mu is not None:
-                lp = F.mse_loss((zh - mu) / sd, (zt - mu) / sd)
+            ld = decode_loss(dec(z), i)                          # every frame, exit frames included
+            nx = torch.from_numpy(has_next[i.numpy()])           # predictor: only frames with a successor
+            if nx.any():
+                zi = i[nx]
+                zp = z[nx]
+                with torch.no_grad():
+                    zt = E(zi + K)                               # stop-gradient: no smoothing the target
+                zh = pred(torch.cat([zp, A[zi]], -1))
+                if a.whiten and mu is not None:
+                    lp = F.mse_loss((zh - mu) / sd, (zt - mu) / sd)
+                else:
+                    lp = F.mse_loss(zh, zt)
             else:
-                lp = F.mse_loss(zh, zt)
+                lp = torch.zeros((), requires_grad=True)
             loss = a.w_decode * ld + a.w_pred * lp
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(params, 1.0)
@@ -191,12 +225,29 @@ def main():
         Zte = E(torch.from_numpy(te)); Zte2 = E(torch.from_numpy(te + K))
         p = dec(Zte)
     m, mb = Y["row_present"][te] > .5, Y["row_is_baba"][te] > .5
-    fields = {"link_hp": float((p["link_hp"].argmax(-1).numpy() == Y["link_hp_c"][te]).mean()),
+    ho = np.where(np.isin(epid, exit_eval_ep))[0]
+    with torch.no_grad():
+        p_ho = dec(E(torch.from_numpy(ho)))
+    sc_ho = p_ho["scene"].argmax(-1).numpy(); sc_ho_true = Y["scene"][ho]
+    sc_pred = p["scene"].argmax(-1).numpy(); sc_true = Y["scene"][te]
+    fields = {"scene_recall": float((sc_pred[sc_true != 0] != 0).mean()) if (sc_true != 0).any() else float("nan"),
+              "scene_acc": float((sc_pred == sc_true).mean()),
+              "baba_count": float((p["baba_count"].argmax(-1).numpy() == Y["baba_count"][te]).mean()),
+              "link_hp": float((p["link_hp"].argmax(-1).numpy() == Y["link_hp_c"][te]).mean()),
               "row_hp": float((p["row_hp"].argmax(-1).numpy()[m] == Y["row_hp_c"][te][m]).mean()),
               "row_state": float((p["row_state"].argmax(-1).numpy()[mb] == Y["row_state"][te][mb]).mean()),
               "link_pos_mae": float(np.abs(p["link_pos"].numpy() * sc["link_pos"][1] + sc["link_pos"][0]
                                            - Y["link_pos"][te]).mean())}
-    print(f"decode: link_hp {fields['link_hp']:.4f}  row_hp {fields['row_hp']:.4f}  "
+    import collections
+    bc_major = collections.Counter(Y["baba_count"][te].tolist()).most_common(1)[0][1] / len(te)
+    ho_rec = float((sc_ho[sc_ho_true != 0] != 0).mean()) if (sc_ho_true != 0).any() else float("nan")
+    ho_fp = float((sc_ho[sc_ho_true == 0] != 0).mean())
+    fields["exit_recall_heldout"] = ho_rec; fields["exit_false_pos"] = ho_fp
+    print(f"decode: LEFT-ROOM on {len(exit_eval_ep)} held-out exit episodes -> "
+          f"recall {ho_rec:.3f} on {int((sc_ho_true != 0).sum())} exit frames, "
+          f"false-positive rate {ho_fp:.5f} on the {int((sc_ho_true == 0).sum()):,} in-room frames")
+    print(f"        baba_count {fields['baba_count']:.4f} (majority {bc_major:.4f})  "
+          f"link_hp {fields['link_hp']:.4f}  row_hp {fields['row_hp']:.4f}  "
           f"row_state {fields['row_state']:.4f}  link_pos MAE {fields['link_pos_mae']:.2f}")
     print(f"  (BC encoder: 0.9839 / 0.9073 / 0.9992 / 4.22)")
     zc = Zte - Zte.mean(0, keepdim=True)

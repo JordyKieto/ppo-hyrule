@@ -23,7 +23,7 @@ from scripts.collect_transitions import DEKU_STATES_DIR, EnemyRows, check_slots,
 from zelda_rl.bc import BCNet, Norm, featurise  # noqa: E402
 from zelda_rl.env import action_name  # noqa: E402
 from zelda_rl.policy_io import load_policy, make_env, resolve_checkpoint  # noqa: E402
-from zelda_rl.ppo import ActorCritic  # noqa: E402
+from zelda_rl.dream_state import MEM_DIM, DreamPolicy, memory_features  # noqa: E402
 
 ENV_REF = "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt"
 
@@ -49,8 +49,10 @@ def main():
     norm = Norm.load(mk["norm"])
 
     pk = torch.load(a.policy, weights_only=False, map_location="cpu")
-    pol = ActorCritic(LAT, NA, pk["config"]["hidden"])
+    pc = pk["config"]
+    pol = DreamPolicy(LAT + MEM_DIM, NA, hidden=pc["hidden"], gru=pc.get("gru", 256))
     pol.load_state_dict(pk["model"]); pol.eval()
+    DREAM_CAP = pc.get("max_steps", 100)     # the policy learned time_left against the dream's cap
     hist = pk.get("history", [])
     print(f"policy {a.policy}  (trained on {hist[-1]['transitions']:,} dream transitions, "
           f"final dream return {hist[-1]['return']:.1f}; real-data baseline {pk.get('baseline', float('nan')):.2f})")
@@ -69,12 +71,16 @@ def main():
                         f'process whose unix id is {env.inst.proc.pid}) to true'], capture_output=True)
 
     @torch.no_grad()
-    def act(state335):
+    def act(state335, trk, h, first):
+        """Memory block comes from the REAL tracker here, the same quantities the dream computed."""
         f = norm.apply(featurise(state335[None]))
         z = enc.encode(torch.from_numpy(f["link"]), torch.from_numpy(f["rows"]),
                        torch.from_numpy(f["ids"]), torch.from_numpy(f["mask"]))
-        act_, _, _, v = pol.act(z, deterministic=a.deterministic)
-        return int(act_[0]), float(v[0])
+        tl = max(0.0, 1.0 - trk.t / DREAM_CAP)
+        m = torch.from_numpy(memory_features(trk, tl))[None]
+        act_, _, _, v, h = pol.act(torch.cat([z, m], -1), h, torch.tensor([first]),
+                                   deterministic=a.deterministic)
+        return int(act_[0]), float(v[0]), h
 
     try:
         for n in range(a.episodes):
@@ -84,8 +90,9 @@ def main():
             print(f"\n── slot {a.slot} ep {n + 1}: Link {env.cstate.hp / 16:.1f} hearts | "
                   f"targets {tr.targets_start} | {'argmax' if a.deterministic else 'sampled'}")
             t_hud, ep = 0.0, None
+            h = pol.init_hidden(1)
             for t in range(env.cfg.max_steps):
-                ac, v = act(encode_state(env.cstate, rows))
+                ac, v, h = act(encode_state(env.cstate, rows), tr, h, 1.0 if t == 0 else 0.0)
                 env.send_action(ac)
                 while not env.ready():
                     time.sleep(0.0005)

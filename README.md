@@ -2,7 +2,7 @@
 
 RL agents that play *The Legend of Zelda: Ocarina of Time* (Wii VC) in Dolphin, observing **live game RAM** (zero-copy, ~25 µs per step) instead of pixels. Develop and evaluate on a Mac; train on a RunPod CPU fleet coordinated over Upstash.
 
-[**Paper draft**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Dataset card**](datasets/transitions/deku-baba/README.md) · [**Figures**](results/)
+[**Paper draft**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Methodology trail**](docs/LATENT_WORLD_MODEL.md) · [**Dataset card**](datasets/transitions/deku-baba/README.md) · [**Figures**](results/)
 
 ## Research direction
 
@@ -17,8 +17,8 @@ The claim is stated as a comparison, not a preference: the same dynamics model i
 | Deku Baba combat, model-free PPO | **Solved.** G150 clears **10/10** start states locally, 0 deaths; 77% fleet training success; 40.7 M env steps ([docs/COMBAT_TASK.md](docs/COMBAT_TASK.md)) |
 | Transition dataset | **Released.** 109,817 transitions, 168 episodes, six competence tiers ([dataset card](datasets/transitions/deku-baba/README.md)) |
 | Frozen BC encoder + state decoder | **Done.** 128-d latent reconstructs the reward function's inputs on held-out slots (Baba behaviour state 0.999, row HP 0.908, lock-on 1.000); reward events recovered at AP 0.89 ([paper §6](paper/paper.md)) |
-| Latent dynamics model | Next ([protocol fixed](paper/paper.md) §7) |
-| Dream-trained policy | Not started |
+| Latent dynamics model | **Built.** Encoder/decoder/predictor trained jointly (`joint_v3`); reward is the real `CombatTracker` on decoded states ([methodology](docs/LATENT_WORLD_MODEL.md)) |
+| Dream-trained policy | **Running.** PPO inside the model, recurrent policy at parity with the model-free run, targeting 41 M dream steps — [wandb `nqild5b2`](https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/nqild5b2). Not yet evaluated in the emulator |
 | Queen Gohma (boss), model-free | Task, reward, obs v7 and slingshot/nut actions built and validated on recorded human fights; not solved ([docs/GOHMA_TASK.md](docs/GOHMA_TASK.md)) |
 
 ## Artifacts
@@ -30,6 +30,7 @@ The claim is stated as a comparison, not a preference: the same dynamics model i
 | Training curves | wandb [`drift-ai-models/zelda-rl-combat-ppo`](https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo): groups `deku-combat-gru-v2` (G1–30), `deku-combat-gru-v2b` (G31–154) |
 | **Transition dataset** | [`datasets/transitions/deku-baba/20260918-134229/`](datasets/transitions/deku-baba/README.md) — 109,817 transitions, 168 episodes, 17 MB, committed · mirror `s3://zelda-rl/zelda/combat/deku-baba/transitions/20260918-134229/` |
 | **Frozen BC encoder** | `s3://zelda-rl/zelda/combat/deku-baba/encoders/bc-decode-final.pt` — 128-d latent + state decoder ([paper §6](paper/paper.md)) |
+| Room-exit episodes | `datasets/transitions/deku-baba-exits/` — 27 walkouts; the released dataset has 0 ([why](docs/LATENT_WORLD_MODEL.md#6-room-exit-no-examples-existed)) |
 
 The bucket is private (aws profile `race-wm`). Game data (savestates, NAND, ROM) is never committed to git.
 
@@ -43,7 +44,7 @@ The bucket is private (aws profile `race-wm`). Game data (savestates, NAND, ROM)
 | `paper/` | [paper.md](paper/paper.md) the draft · [CLAIMS.md](paper/CLAIMS.md) the per-claim evidence audit |
 | `results/` | `make_figures.py` regenerates every paper table and figure from committed artifacts; `figures/`, `tables/` |
 | `datasets/` | savestate manifests (files in S3) and transition datasets with cards |
-| `docs/` | [FINDINGS](docs/FINDINGS.md) · [RAM_MAP](docs/RAM_MAP.md) · [OBSERVATION_SCHEMA](docs/OBSERVATION_SCHEMA.md) · [ADDING_OBSERVATIONS](docs/ADDING_OBSERVATIONS.md) · [COMBAT_TASK](docs/COMBAT_TASK.md) · [RUNPOD](docs/RUNPOD.md) |
+| `docs/` | [LATENT_WORLD_MODEL](docs/LATENT_WORLD_MODEL.md) · [FINDINGS](docs/FINDINGS.md) · [RAM_MAP](docs/RAM_MAP.md) · [OBSERVATION_SCHEMA](docs/OBSERVATION_SCHEMA.md) · [ADDING_OBSERVATIONS](docs/ADDING_OBSERVATIONS.md) · [COMBAT_TASK](docs/COMBAT_TASK.md) · [RUNPOD](docs/RUNPOD.md) |
 
 ## Quick start (Mac)
 

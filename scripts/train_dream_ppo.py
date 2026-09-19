@@ -32,46 +32,78 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, decode_targets, featurise,  # noqa: E402
                          hp_class)
-from zelda_rl.ppo import ActorCritic, gae, ppo_update  # noqa: E402
+from zelda_rl.ppo import gae, ppo_update_recurrent  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
-from scripts.train_event_head import EventHead, labels, load_with_terminal  # noqa: E402
-
-W_DMG, W_KILL, W_LINK, HP_UNIT, DEATH, SUCCESS, TIME_PEN = 1.0, 5.0, 0.25, 8.0, 20.0, 20.0, 0.001
+from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
+from zelda_rl.bc import StateDecoder  # noqa: E402
+from zelda_rl.combat import CombatConfig, CombatTracker  # noqa: E402
+from zelda_rl.dream_state import MEM_DIM, DreamPolicy, decoded_to_states, memory_features  # noqa: E402
+from zelda_rl.runlog import RunLogger  # noqa: E402
 
 
 class Dream:
-    """Batched latent rollout. Reward and termination both come from the event head."""
+    """Batched latent rollout. Reward comes from the REAL CombatTracker run on decoded states.
 
-    def __init__(self, pred, head, starts, n_actions, max_steps):
-        self.pred, self.head, self.starts = pred, head, starts
-        self.NA, self.max_steps = n_actions, max_steps
+    Not a re-implementation: this is the same tracker object the emulator uses, so every one of its 18
+    reward terms applies -- including the four outcome terms an earlier hand-rolled version silently
+    dropped (room exit, timeout, kill-speed bonus, success-time bonus), which were exactly the terms that
+    punish stalling and escaping.
+    """
+
+    def __init__(self, pred, dec, scale, starts, n_actions, max_steps, combat_cfg):
+        self.pred, self.dec, self.scale, self.starts = pred, dec, scale, starts
+        self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
+
+    @torch.no_grad()
+    def _states(self, z):
+        return decoded_to_states(self.dec(z), self.scale)
 
     @torch.no_grad()
     def reset(self, n, rng):
         self.z = self.starts[torch.from_numpy(rng.integers(0, len(self.starts), n))].clone()
-        self.t = torch.zeros(n)
+        self.cur = self._states(self.z)
+        self.trk = [CombatTracker(self.ccfg) for _ in range(n)]
+        for i, t in enumerate(self.trk):
+            t.reset(self.cur[i], self.max_steps)
         return self.z
 
     @torch.no_grad()
     def reset_at(self, k, rng):
         self.z[k] = self.starts[torch.from_numpy(rng.integers(0, len(self.starts), len(k)))]
-        self.t[k] = 0
+        fresh = self._states(self.z[k])
+        for n, i in enumerate(k.tolist()):
+            self.cur[i] = fresh[n]
+            self.trk[i] = CombatTracker(self.ccfg)
+            self.trk[i].reset(fresh[n], self.max_steps)
 
     @torch.no_grad()
     def step(self, a):
-        a1h = F.one_hot(a, self.NA).float()
-        z2 = self.pred(torch.cat([self.z, a1h], -1))
-        d, k, l, t = self.head(self.z, a1h, z2)
-        e_d = (d.softmax(-1) * torch.arange(d.shape[-1], dtype=torch.float)).sum(-1)
-        e_k = (k.softmax(-1) * torch.arange(k.shape[-1], dtype=torch.float)).sum(-1)
-        pt = t.softmax(-1)
-        r = (W_DMG * e_d + W_KILL * e_k - W_LINK * HP_UNIT * l.sigmoid() - TIME_PEN
-             - DEATH * pt[..., 1] + SUCCESS * pt[..., 2])
-        term = torch.multinomial(pt, 1).squeeze(-1)          # sampled, consistent with the expected reward
-        self.z, self.t = z2, self.t + 1
-        dead, cleared = term == 1, term == 2
-        done = dead | cleared | (self.t >= self.max_steps)
-        return self.z, r, done, {"dead": dead, "cleared": cleared, "e_kill": e_k}
+        self.z = self.pred(torch.cat([self.z, F.one_hot(a, self.NA).float()], -1))
+        nxt = self._states(self.z)
+        n = len(nxt)
+        r = torch.zeros(n); done = torch.zeros(n, dtype=torch.bool)
+        dead = torch.zeros(n, dtype=torch.bool); cleared = torch.zeros(n, dtype=torch.bool)
+        left = torch.zeros(n, dtype=torch.bool); kills = torch.zeros(n)
+        dmg = torch.zeros(n); hploss = torch.zeros(n); lock = torch.zeros(n); blk = torch.zeros(n)
+        for i in range(n):
+            rr, term, ev = self.trk[i].step(self.cur[i], nxt[i])
+            ep = self.trk[i].ep
+            r[i] = rr
+            kills[i] = ep["defeated"]; dmg[i] = ep["damage_dealt"]; hploss[i] = ep["hp_lost"]
+            lock[i] = ep["lockons"]; blk[i] = ep["blocks"] + ep["dodges"]
+            trunc = self.trk[i].t >= self.max_steps
+            done[i] = term or trunc
+            dead[i] = ep["end"] == "death"; cleared[i] = ep["end"] == "success"
+            left[i] = ep["end"] == "left_room"
+        self.cur = nxt
+        return self.z, r, done, {"dead": dead, "cleared": cleared, "left": left, "kills": kills,
+                                 "dmg": dmg, "hp_lost": hploss, "lockons": lock, "blocks": blk}
+
+    def obs(self, z):
+        """z plus the episode-memory block the real policy sees: kills, damage, hearts lost, time since
+        last hit / damage / kill, lock-ons, time remaining."""
+        m = np.stack([memory_features(t, 1.0 - t.t / self.max_steps) for t in self.trk])
+        return torch.cat([z, torch.from_numpy(m)], -1)
 
 
 def main():
@@ -81,15 +113,26 @@ def main():
     ap.add_argument("--data", default=DEFAULT_DATA)
     ap.add_argument("--transitions", type=int, default=100_000)
     ap.add_argument("--envs", type=int, default=128)
-    ap.add_argument("--steps", type=int, default=32)
+    ap.add_argument("--steps", type=int, default=120, help="rollout length; must be >= chunk")
     ap.add_argument("--max-steps", type=int, default=100, help="dream episode cap")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--hidden", type=int, default=256)
-    ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--gru", type=int, default=256)
+    ap.add_argument("--chunk", type=int, default=60, help="recurrent PPO sequence chunk (real run: 60)")
+    ap.add_argument("--minibatches", type=int, default=16, help="real run: 16, adaptive chunks_per_mb")
+    ap.add_argument("--target-kl", type=float, default=0.03, help="real run early-stops an update at this")
+    ap.add_argument("--gamma", type=float, default=0.995)   # parity with scripts/train_combat.py
     ap.add_argument("--lam", type=float, default=0.95)
     ap.add_argument("--clip", type=float, default=0.2)
     ap.add_argument("--ent", type=float, default=0.01)
     ap.add_argument("--out", default="checkpoints/dynamics/dream_ppo.pt")
+    ap.add_argument("--log-every", type=int, default=10, help="updates between table rows / wandb points")
+    ap.add_argument("--run-name", default=None)
+    ap.add_argument("--wandb-project", default="zelda-rl-combat-ppo")
+    ap.add_argument("--wandb-entity", default=None)
+    ap.add_argument("--no-wandb", dest="wandb", action="store_false", default=True)
+    ap.add_argument("--snapshot-every", type=int, default=100,
+                    help="save <out>.upd<N>.pt periodically; a 41 M-step run is hours long")
     ap.add_argument("--torch-threads", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
@@ -104,10 +147,8 @@ def main():
     pred = nn.Sequential(nn.Linear(LAT + NA, 512), nn.ReLU(), nn.Linear(512, 512), nn.ReLU(),
                          nn.Linear(512, LAT))
     pred.load_state_dict(ck["pred"]); pred.eval()
-    hk = torch.load(a.event_head, weights_only=False, map_location="cpu")
-    head = EventHead(LAT, NA, hk["config"]["hidden"])
-    head.load_state_dict(hk["head"]); head.eval()
-    for p in list(enc.parameters()) + list(pred.parameters()) + list(head.parameters()):
+    dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
+    for p in list(enc.parameters()) + list(pred.parameters()) + list(dec.parameters()):
         p.requires_grad_(False)
 
     meta, state, frm, action, slot = load_with_terminal(Path(a.data))
@@ -129,69 +170,116 @@ def main():
     ep_start = frm[first][~np.isin(slot[first], held)]
     starts = Z[torch.from_numpy(ep_start)]
 
-    # real-data control: the SAME event reward, using true labels, per held-out episode
-    te = np.isin(slot, list(set(ck["split"]["val_slots"])))
-    r_real = (W_DMG * L["dmg"][te] + W_KILL * L["kill"][te] - W_LINK * HP_UNIT * L["link"][te] - TIME_PEN
-              - DEATH * (L["term"][te] == 1) + SUCCESS * (L["term"][te] == 2))
-    n_ep_te = max(int((L["term"][te] != 0).sum()), 1)
-    base = float(r_real.sum() / n_ep_te)
+    # real-data control: the returns the SAME tracker produced on real held-out episodes (from the manifest)
+    man = [json.loads(l) for l in (Path(a.data) / "manifest.jsonl").read_text().splitlines() if l.strip()]
+    tev = set(ck["split"]["val_slots"])
+    base = float(np.mean([m["return"] for m in man if m["slot"] in tev]))
 
-    env = Dream(pred, head, starts, NA, a.max_steps)
-    model = ActorCritic(LAT, NA, a.hidden)
+    run_name = a.run_name or f"dream-{Path(a.model).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
+    run_dir = Path("runs") / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log = RunLogger(run_dir, vars(a) | {"encoder": a.model, "real_reference_return": 55.5,
+                                        "real_reference_env_steps": 40_700_000},
+                    use_wandb=a.wandb, project=a.wandb_project, entity=a.wandb_entity,
+                    run_name=run_name, resume=False, tags=["dream", "latent-wm", "deku-baba"],
+                    group="dream-deku-baba")
+
+    env = Dream(pred, dec, ck["decode_scale"], starts, NA, a.max_steps, CombatConfig())
+    OBS = LAT + MEM_DIM
+    model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy
     opt = torch.optim.Adam(model.parameters(), lr=a.lr, eps=1e-5)
     N, T = a.envs, a.steps
     updates = max(a.transitions // (N * T), 1)
     print(f"dreaming {updates} updates x {N} envs x {T} steps = {updates*N*T:,} transitions")
     print(f"start states: {len(starts)} real episode starts (training slots only)")
-    print(f"real-data control, same event reward on TRUE labels: {base:.2f} per held-out episode\n")
-    print(f"{'upd':>4} {'transitions':>12} {'return':>8} {'len':>6} {'clear%':>7} {'death%':>7} "
-          f"{'E[kill]':>8} {'sps':>8}")
-    print("-" * 70)
+    print(f"policy: DreamPolicy (RecurrentEntityActorCritic + GRU {a.gru}); obs = {LAT} latent + "
+          f"{MEM_DIM} episode-memory")
+    print(f"PPO (parity with train_combat.py): gamma {a.gamma} lam {a.lam} clip {a.clip} chunk {a.chunk} "
+          f"minibatches {a.minibatches} target_kl {a.target_kl} ent {a.ent}")
+    print(f"reward: the real CombatTracker on decoded states -- all 18 terms, no re-implementation")
+    print(f"real-data control, same tracker on real held-out episodes: {base:.2f}\n")
+    print(f"{'upd':>4} {'transitions':>12} {'return':>8} {'len':>5} {'clear%':>7} {'death%':>7} "
+          f"{'left%':>6} {'kills':>6} {'dmg':>5} {'hpLost':>7} {'lock':>5} {'blk':>5} {'sps':>6}")
+    print("-" * 100)
 
-    obs = env.reset(N, rng)
+    z = env.reset(N, rng)
+    obs = env.obs(z)
+    h = model.init_hidden(N)
+    first = torch.ones(N)
     ep_r, ep_l = torch.zeros(N), torch.zeros(N)
-    done_ret, done_len, ncl, nde, neps, ekill, hist = [], [], 0, 0, 0, 0.0, []
+    done_ret, done_len, ncl, nde, nlf, neps, nkill = [], [], 0, 0, 0, 0, 0.0
+    ndmg = nhp = nlock = nblk = 0.0
+    hist = []
     t0 = time.time()
     for u in range(1, updates + 1):
-        O = torch.zeros(T, N, LAT); A_ = torch.zeros(T, N, dtype=torch.long)
+        O = torch.zeros(T, N, OBS); A_ = torch.zeros(T, N, dtype=torch.long)
         LP = torch.zeros(T, N); V = torch.zeros(T, N); R = torch.zeros(T, N); D = torch.zeros(T, N)
+        FI = torch.zeros(T, N); H = torch.zeros(T, N, a.gru)
         for t in range(T):
+            H[t], FI[t] = h, first
             with torch.no_grad():
-                act_, lp, _, v = model.act(obs)
+                act_, lp, _, v, h = model.act(obs, h, first)
+            first = torch.zeros(N)
             O[t], A_[t], LP[t], V[t] = obs, act_, lp, v
-            obs, r, done, info = env.step(act_)
+            z, r, done, info = env.step(act_)
             R[t], D[t] = r, done.float()
             ep_r += r; ep_l += 1
-            ekill += float(info["e_kill"].sum())
             if done.any():
                 k = done.nonzero(as_tuple=True)[0]
                 done_ret += ep_r[k].tolist(); done_len += ep_l[k].tolist()
-                ncl += int(info["cleared"][k].sum()); nde += int(info["dead"][k].sum()); neps += len(k)
+                ncl += int(info["cleared"][k].sum()); nde += int(info["dead"][k].sum())
+                nlf += int(info["left"][k].sum()); nkill += float(info["kills"][k].sum()); neps += len(k)
+                ndmg += float(info["dmg"][k].sum()); nhp += float(info["hp_lost"][k].sum())
+                nlock += float(info["lockons"][k].sum()); nblk += float(info["blocks"][k].sum())
                 ep_r[k] = 0; ep_l[k] = 0
                 env.reset_at(k, rng)
-                obs = env.z
+                z = env.z
+                first[k] = 1.0                      # zero this env's memory at the new episode
+            obs = env.obs(z)
         with torch.no_grad():
-            nv = model.value(obs)
+            nv = model.value(obs, h, first)
         adv, ret = gae(R.numpy(), V.numpy(), D.numpy(), nv.numpy(), a.gamma, a.lam)
-        ppo_update(model, opt, {"obs": O.reshape(-1, LAT).numpy(), "act": A_.reshape(-1).numpy(),
-                                "logp": LP.reshape(-1).numpy(), "adv": adv.reshape(-1),
-                                "ret": ret.reshape(-1), "val": V.reshape(-1).numpy()},
-                   epochs=4, minibatches=8, clip=a.clip, ent_coef=a.ent, vf_coef=0.5, max_grad_norm=0.5)
-        if u % max(updates // 20, 1) == 0 or u == 1:
+        ppo_update_recurrent(model, opt, {"obs": O.numpy(), "act": A_.numpy(), "logp": LP.numpy(),
+                                          "adv": adv, "ret": ret, "val": V.numpy(),
+                                          "first": FI.numpy(), "h": H.numpy()},
+                             chunk=a.chunk, epochs=4,
+                             chunks_per_mb=max(1, (N * (T // a.chunk)) // a.minibatches),
+                             clip=a.clip, ent_coef=a.ent, vf_coef=0.5, max_grad_norm=0.5,
+                             target_kl=a.target_kl)
+        if u % a.log_every == 0 or u == 1:
             mr = float(np.mean(done_ret[-200:])) if done_ret else float("nan")
             ml = float(np.mean(done_len[-200:])) if done_len else float("nan")
-            print(f"{u:>4} {u*N*T:>12,} {mr:>8.2f} {ml:>6.0f} {100*ncl/max(neps,1):>6.1f}% "
-                  f"{100*nde/max(neps,1):>6.1f}% {ekill/(N*T):>8.4f} "
-                  f"{u*N*T/(time.time()-t0):>8,.0f}", flush=True)
-            hist.append({"update": u, "transitions": u * N * T, "return": mr, "length": ml,
-                         "clear_pct": 100 * ncl / max(neps, 1), "death_pct": 100 * nde / max(neps, 1)})
-            ncl = nde = neps = 0; ekill = 0.0
+            e = max(neps, 1)
+            print(f"{u:>4} {u*N*T:>12,} {mr:>8.2f} {ml:>5.0f} {100*ncl/e:>6.1f}% {100*nde/e:>6.1f}% "
+                  f"{100*nlf/e:>5.1f}% {nkill/e:>6.2f} {ndmg/e:>5.2f} {nhp/e/16:>7.2f} {nlock/e:>5.2f} "
+                  f"{nblk/e:>5.2f} {u*N*T/(time.time()-t0):>6,.0f}", flush=True)
+            row = {"update": u, "transitions": u * N * T, "return": mr, "length": ml,
+                   "clear_pct": 100 * ncl / e, "death_pct": 100 * nde / e, "left_pct": 100 * nlf / e,
+                   "kills": nkill / e, "damage": ndmg / e, "hearts_lost": nhp / e / 16,
+                   "lockons": nlock / e, "blocks_dodges": nblk / e}
+            hist.append(row)
+            log.update({"episode/return": mr, "episode/length": ml,
+                        "combat/success_rate": (100 * ncl / e) / 100, "combat/death_rate": (100 * nde / e) / 100,
+                        "combat/left_room_rate": (100 * nlf / e) / 100, "combat/defeated": nkill / e,
+                        "combat/damage_dealt": ndmg / e, "combat/hearts_lost": nhp / e / 16,
+                        "combat/lockons": nlock / e, "combat/blocks_dodges": nblk / e,
+                        "perf/dream_steps_per_sec": u * N * T / (time.time() - t0),
+                        "charts/real_reference_return": 55.5},
+                       global_step=u * N * T)
+            ncl = nde = nlf = neps = 0; nkill = ndmg = nhp = nlock = nblk = 0.0
+        if a.snapshot_every and u % a.snapshot_every == 0:
+            snap = Path(str(a.out).replace(".pt", f".upd{u:05d}.pt"))
+            snap.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({"model": model.state_dict(), "config": vars(a), "history": hist,
+                        "baseline": base}, snap)
     el = time.time() - t0
     print(f"\n{updates*N*T:,} dream transitions in {el:.0f}s ({updates*N*T/el:,.0f}/s), 0 emulator steps")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model": model.state_dict(), "config": vars(a), "history": hist, "baseline": base}, a.out)
     Path("results/dream_ppo.json").write_text(json.dumps({"config": vars(a), "history": hist,
                                                           "real_baseline": base}, indent=2))
+    log.summary({"final_return": hist[-1]["return"] if hist else float("nan"),
+                 "dream_transitions": updates * N * T, "authoritative_env_steps": 0})
 
 
 if __name__ == "__main__":
