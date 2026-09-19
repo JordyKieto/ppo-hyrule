@@ -823,3 +823,57 @@ decode-the-prediction term is applied at **every** unroll step. It has been off 
 
 Recorded as the clearest negative result of this line of work: **single-step decode quality and rollout
 stability are in direct tension, and optimising either alone produces a useless dream.**
+
+## 18. Unrolled training resolves the tension, and kills become possible
+
+`--unroll 30` (detach every 8, decay 0.97, 97,893 usable starts), with the decode-the-prediction term applied
+at every unroll step.
+
+### Latent stability restored without giving up decode authority
+
+| step | no decode-pred | decode-pred, unroll 1 | **decode-pred, unroll 30** |
+|---|---|---|---|
+| 1 | 12.8 | 16.4 | 15.3 |
+| 25 | 9.9 | 295 | 18.2 |
+| 50 | 10.8 | 23,817 | 22.4 |
+| 120 | 13.8 | **1.7 × 10¹⁴** | **44.5** |
+| `max‖pos‖` at 120 | 471 | 5 × 10¹⁵ | **669** |
+
+Positions stay in plausible room coordinates. And the head metrics did **not** trade away — they improved:
+
+| | unroll 1 | unroll 30 |
+|---|---|---|
+| enemy-hit AP (base 0.0002) | 0.6270 | **0.8091** |
+| moved AP | 0.4918 | **0.7243** |
+| `baba_count`, predicted / real latent | 0.9895 / 0.9524 | **0.9906 / 0.9906** |
+| `speed` MAE, predicted / real | 0.0806 / 0.0375 | **0.0597 / 0.0705** |
+| tune skill | −1.904 | **−1.203** |
+
+So the tension of §17 was not fundamental — it was the absence of multi-step supervision. Decode authority and
+rollout stability are compatible once the predictor is trained on its own output.
+
+### Audit progression across the whole line of work
+
+| | v10 | v11 | v12 (+camera) | v14 (+decode-pred, unroll) |
+|---|---|---|---|---|
+| **max kills** (3 available) | 0.00 | 0.00 | 0.00 | **0.30** |
+| max damage dealt (6 available) | 0.70 | 0.90 | 0.90 | 0.50 |
+| damage attributed to | **Shield** (impossible) | Z+A | Z+A | Z+A / Z+B |
+| best distance closed | −43 | −18 | −107 | **−136** |
+| best `r_approach` | **−0.04** | +0.13 | +0.18 | **+0.21** |
+| step magnitude, moving frames | 0.11× | 1.02× | 0.99× | 1.05× |
+
+**Kills are non-zero for the first time**: `-+Z+A` (a standing jump attack) reaches 0.30 kills and pays
+`r_kill` +1.50. The despawn head plus calibrated sampling is what made two hits on one row possible.
+
+### What is still broken, stated plainly
+
+- **Kills 0.30 of 3.** Non-zero, not competent. Clearing a room is still far away.
+- **Lock-on: max 0.70 against a cap of 6.** A Z-press still rarely acquires, so `lockon` and `lock_hold`
+  remain nearly unearnable. This got an audit but never a fix.
+- **`r_blk` is 0.00 for every action** — blocks and dodges never fire. Never audited either.
+- **Returns are all negative** (−3.8 to −697), and `hpLost` reaches 1.9 hearts on the movement actions, so
+  approaching is still punished more than it pays.
+- **`left%` is 10–90% on the approach-heavy actions.** Walking still frequently exits the room.
+- **The predictor still does not beat identity** (skill −1.203). Every gain here is in what the model can
+  represent, not in its one-step accuracy.
