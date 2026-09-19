@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -77,6 +78,13 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--oversample", type=float, default=0.0,
+                    help="oversample EVENT frames in the transition objective. The repo already uses "
+                         "transition_frames() this way for the HP decode heads (damage F1 0.458 -> 0.746) "
+                         "but batches for the predictor were drawn uniformly, over data where an actor is "
+                         "hit on 0.13%% of steps -- so the transition objective was computed almost entirely "
+                         "on frames where nothing happens, and 'nothing happens' is what it learned. "
+                         "This is the multiplier on rare-event frames; motion frames get sqrt of it.")
     ap.add_argument("--w-decpred", type=float, default=1.0,
                     help="weight on DECODING THE PREDICTED LATENT against the true next state. Without it the "
                          "predictor is only ever supervised by L2 in latent space, so nothing asks whether "
@@ -145,6 +153,26 @@ def main():
     tr = starts(tr_mask, K)
     has_next = np.zeros(len(slot), bool); has_next[tr] = True
     deep = starts(tr_mask, K * a.unroll)            # frames with the whole unroll window inside an episode
+    # --- event oversampling for the TRANSITION objective -------------------------------------------------
+    # Rare events (a hit, a despawn, Link hit, a room exit) and motion frames, so the predictor is not
+    # trained almost exclusively on frames where the correct answer is "nothing changed".
+    _rare = ((Y["tr_hit_row"] != N_ROWS) | (Y["tr_link_hit"][:, 0] > 0.5)
+             | (Y["tr_gone_row"] != N_ROWS) | (Y["tr_exit"][:, 0] > 0.5)) & (Y["tr_mask"] > 0)
+    _move = (Y["tr_moved"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
+    _w = 1.0 + a.oversample * _rare + math.sqrt(max(a.oversample, 0.0)) * _move
+    SAMP_P = _w[tr_all] / _w[tr_all].sum()
+    if a.oversample > 0:
+        print(f"oversample x{a.oversample:.0f}: rare events are {_rare.mean():.3%} of frames "
+              f"({int(_rare.sum())} of {len(_rare):,}), motion {_move.mean():.1%}; "
+              f"their share of a batch rises to {_w[tr_all][_rare[tr_all]].sum()/_w[tr_all].sum():.1%} "
+              f"and {_w[tr_all][_move[tr_all]].sum()/_w[tr_all].sum():.1%}")
+    if a.oversample > 0 and a.unroll > 1:
+        _c = np.cumsum(np.r_[0.0, _rare.astype(float)])
+        _n = np.minimum(deep + K * a.unroll, len(_rare))
+        _dw = 1.0 + a.oversample * (_c[_n] - _c[deep])      # events inside each unroll window
+        DEEP_P = _dw / _dw.sum()
+    else:
+        DEEP_P = None
     print(f"unroll {a.unroll} (detach every {a.unroll_detach}, decay {a.unroll_decay}): "
           f"{len(deep):,} usable starts")
     tu = starts(np.isin(slot, list(tune)), K)
@@ -326,7 +354,8 @@ def main():
     t0 = time.time()
     for ep in range(1, a.epochs + 1):
         enc.train(); dec.train(); pred.train()
-        perm = rng.permutation(tr_all)
+        perm = (rng.permutation(tr_all) if a.oversample <= 0 else
+                rng.choice(tr_all, size=len(tr_all), replace=True, p=SAMP_P))
         td = tp = n = 0.0
         for s in range(0, len(perm), a.batch):
             i = torch.from_numpy(perm[s:s + a.batch])
@@ -334,7 +363,8 @@ def main():
             ld = decode_loss(dec(z), i)                          # every frame, exit frames included
             ld = ld + a.w_trans * trans_loss(thead(z, A[i]), i)
             if a.unroll > 1:
-                zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)), replace=False))
+                zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)),
+                                                  replace=False, p=DEEP_P))
                 zz, lp, wsum = E(zi), torch.zeros(()), 0.0
                 for j in range(a.unroll):
                     zz = pred(torch.cat([zz, A[zi + j * K]], -1))

@@ -27,7 +27,7 @@ from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecode
                          featurise, hp_class, wants_v2)
 from scripts.train_bc_decode import DEFAULT_DATA, load_many  # noqa: E402
 
-HORIZONS = (1, 5, 10, 25, 50, 100, 300, 600, 1200, 1800)
+HORIZONS = (1, 2, 3, 5, 8, 12, 20, 30, 50, 100, 200, 400)
 
 
 def main():

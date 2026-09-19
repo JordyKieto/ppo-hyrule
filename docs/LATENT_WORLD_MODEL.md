@@ -1097,3 +1097,64 @@ head's responsiveness to held inputs, not the model's fidelity.
 **Stated plainly: the world model does not yet model walking to a location or interacting with an enemy.**
 Room exit, which §19–21 spent the most effort on, was the least important of the three — it is a terminal, not
 the dynamics.
+
+## 23. Event oversampling for the transition objective
+
+### The defect
+
+`transition_frames()` — the oversampler that took damage-event F1 from 0.458 to 0.746 for the decode heads —
+was wired only to the HP heads decoded from **real** latents (`train_joint.py` lines 203–204). Batches for the
+**transition** objective were drawn uniformly (`rng.permutation(tr_all)`), over data where an actor is hit on
+**0.13%** of steps, a row despawns on 0.05%, Link is hit on 0.35% and the room is left on 0.035%. So the
+predictor's loss was computed almost entirely on frames whose correct answer is "nothing changed", and three
+separate gradients all point there:
+
+| term | weight | minimised by |
+|---|---|---|
+| `w_pos` position | 6.0 | predict no movement (real per-step median is 0.0) |
+| latent MSE to `E(s_next)` | 1.0 | predict `z_{t+1} = z_t` |
+| event heads inside the decode loss | 1–3 | predict the 99.9% majority class |
+
+### The fix and its measured effect
+
+`--oversample K` weights rare-event frames by K and motion frames by sqrt(K), for both the batch sampler and
+the choice of unroll-window starts. At K=50 the composition of a batch changes from 0.571% rare events and
+17.1% motion to **14.9%** and **73.3%**.
+
+Validated on **event-rich windows** (`scripts/eval_event_windows.py`), which is the only place this shows,
+because whole held-out episodes are event-poor — identity scores 0.92–1.00 there, so a frozen model looks fine.
+Hit windows are selected so the real trajectory contains a Baba HP drop within the horizon, hence real
+detection is 100% by construction. Horizon 40, 4 epochs, unroll 8:
+
+| hit windows | v15 baseline | oversample off | **oversample ×50** | real |
+|---|---|---|---|---|
+| Baba HP removed | 0.04 | 0.40 | **1.15** | 1.25 |
+| event detected | 2% | 20% | **55%** | 100% |
+
+Detection 2% → 55% and near-correct magnitude, from four epochs. **Kept.**
+
+It did **not** help walking — travel over walk windows went 95.3 → 63.0 against a real 300.8 — despite motion
+rising to 73% of each batch. So walking is not a sampling problem, and the "poor sampling" diagnosis explained
+only the event half.
+
+### Objective table to fill in
+
+One row per reward-relevant quantity, each validated the same way: event-rich windows, dream vs real vs
+identity, before and after. Blank means not yet measured this way.
+
+| objective | window kind | metric | before | after oversample | real | status |
+|---|---|---|---|---|---|---|
+| enemy damage | `hit` | Baba HP removed / detection | 0.04 / 2% | **1.15 / 55%** | 1.25 / 100% | improved |
+| Link damage | `link_hit` | hearts lost / detection | — | — | — | metric buggy (see below) |
+| walking | `walk` | **position error over time** vs identity | — | — | — | metric wrong: measured path length, not trajectory |
+| kills | `kill` | despawn + HP 0 | — | — | — | window kind not implemented |
+| blocking | `block` | blocks + dodges | — | — | — | never audited; `r_blk` has been 0.00 in every run |
+| lock-on | `lockon` | acquisitions | — | — | — | never audited; tops out at 0.70 of a cap of 6 |
+
+Two known metric defects to fix before trusting their rows:
+
+1. **`link_hit` is inconsistent** — it reports real detection 0% on windows selected *for* containing a real
+   Link HP drop, so the window/endpoint comparison is wrong.
+2. **`walk` measures the wrong thing** — cumulative path length, not trajectory. Path length can match while
+   Link is in the wrong place entirely. Walking means *position over time*: the error between the dream's
+   position and the real position at each step, against the identity control.

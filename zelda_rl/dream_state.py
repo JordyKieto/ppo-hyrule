@@ -64,6 +64,7 @@ EXIT_POINTS = _load_exit_points()
 def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
                      calib: dict | None = None, rng=None, hp_per_hit: int = 8,
                      hp0_despawn_steps: int = 12, exit_thresh: float = 6.38, max_y_dev: float = 60.0,
+                     move_gate: str = "sample",
                      _timers: dict | None = None) -> list[CombatState]:
     """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
 
@@ -106,10 +107,19 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
         lg = np.log(np.clip(pe, 1e-6, 1 - 1e-6) / np.clip(1 - pe, 1e-6, 1 - 1e-6))
         return sig(a * lg + b)
 
-    gate = prob(q["tr_moved"].numpy()[:, 0], "moved")
+    # SAMPLE the move, do not scale by its probability. Scaling uses the expectation P*magnitude, which for
+    # a discrete event is systematically short: with a calibrated P(moved) ~ 0.12 every step came out ~8x too
+    # small, and the ground-truth rollout measured the dream travelling 0.5 world units where the game
+    # travelled 46.2 -- 100x too little on the FIRST step, before any drift. The magnitude head itself is
+    # fine (1.05x of true on truly-moving frames); it was the gate.
+    #
+    # Same error that kept kills at 0.00 when damage was thresholded rather than sampled. A discrete event
+    # has to fire or not; an expectation smears it into a permanent slow crawl.
+    p_moved = prob(q["tr_moved"].numpy()[:, 0], "moved")
+    moved = (rng.random(len(p_moved)) < p_moved) if move_gate == "sample" else p_moved
     d = q["tr_dir"].numpy().argmax(-1)
     mg = q["tr_mag"].numpy().argmax(-1)
-    step = uv[d] * (mc[mg] * gate)[:, None]
+    step = uv[d] * (mc[mg] * moved)[:, None]
     dy = q["tr_dy"].numpy()[:, 0]
     n_rows = q["tr_hit_row"].shape[1] - 1
     p_hit = prob(q["tr_hit_row"].numpy(), "hit", softmax_none=n_rows)
