@@ -700,3 +700,26 @@ camera** — the quantity a held stick direction actually controls. `camera_yaw_
 PPO's observation, so this **restores parity rather than adding to it**. All four datasets are being
 re-collected as v3; every version only appends, so v1/v2 indices stay valid and the encoder width is a
 constant 132 with zero-filled blocks for older states.
+
+### The camera is the right reference frame, measured on the data alone
+
+Before relying on state v3, the premise was checked directly on 12,260 moving steps of the v3 main
+collection — no model involved, just which reference frame makes the realised walk direction predictable
+(circular std, lower is better):
+
+| reference frame | all steps | Z held | no Z |
+|---|---|---|---|
+| raw world direction | 135.9° | 142.4° | 129.9° |
+| **minus CAMERA yaw** | **76.3°** | **75.2°** | **77.6°** |
+| minus Link world yaw | 147.0° | 151.8° | 139.5° |
+| minus Link shape yaw (body) | 158.6° | 187.9° | 142.3° |
+
+Camera-relative nearly halves the spread, and does so equally with and without lock-on (Z is held on 53% of
+moving steps). Link's own facing is **worse than raw**, so the camera is the correct frame and Link's facing
+is not — the opposite of the intuitive guess. `cam_yaw` also varies strongly in the collected data (std
+110.6°, 1,718 distinct values, heading-relative-to-camera std 90.9°), so it is not redundant with anything
+already recorded.
+
+The residual 76° is not explained by facing either; the likely remainder is turn/acceleration dynamics,
+since Link rotates toward a new stick direction over several frames rather than snapping to it. Recorded as
+the next thing to measure, not as something the camera was expected to fix.
