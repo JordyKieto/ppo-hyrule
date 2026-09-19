@@ -1142,11 +1142,13 @@ only the event half.
 One row per reward-relevant quantity, each validated the same way: event-rich windows, dream vs real vs
 identity, before and after. Blank means not yet measured this way.
 
-| objective | window kind | metric | before | after oversample | real | status |
+| objective | window kind | metric | before | after oversample | bar | status |
 |---|---|---|---|---|---|---|
-| enemy damage | `hit` | Baba HP removed / detection | 0.04 / 2% | **1.15 / 55%** | 1.25 / 100% | improved |
-| Link damage | `link_hit` | hearts lost / detection | — | — | — | metric buggy (see below) |
-| walking | `walk` | **position error over time** vs identity | — | — | — | metric wrong: measured path length, not trajectory |
+| enemy damage | `hit` | Baba HP removed / detection | 0.40 / 20% | **1.15 / 55%** | real 1.25 / 100% | improved |
+| trajectory, hit windows | `hit` | mean position error / identity | 1.21x | **1.11x** | identity 1.00x | improved, still worse than identity |
+| trajectory, Link-hit windows | `link_hit` | mean / END position error | 1.41x / — | **1.11x / 0.91x** | identity 1.00x | **end position beats identity** |
+| **walking** | `walk` | mean position error / identity | 1.37x | **1.38x** | identity 1.00x | **broken, and NOT a sampling problem** |
+| Link damage magnitude | `link_hit` | hearts lost | — | — | — | metric buggy (see below) |
 | kills | `kill` | despawn + HP 0 | — | — | — | window kind not implemented |
 | blocking | `block` | blocks + dodges | — | — | — | never audited; `r_blk` has been 0.00 in every run |
 | lock-on | `lockon` | acquisitions | — | — | — | never audited; tops out at 0.70 of a cap of 6 |
@@ -1155,6 +1157,17 @@ Two known metric defects to fix before trusting their rows:
 
 1. **`link_hit` is inconsistent** — it reports real detection 0% on windows selected *for* containing a real
    Link HP drop, so the window/endpoint comparison is wrong.
-2. **`walk` measures the wrong thing** — cumulative path length, not trajectory. Path length can match while
-   Link is in the wrong place entirely. Walking means *position over time*: the error between the dream's
-   position and the real position at each step, against the identity control.
+2. ~~`walk` measures the wrong thing~~ **FIXED.** It now reports position error at every step against the
+   real position, with identity being Link frozen at the window's start. On that metric the model is **1.38x
+   worse than not moving Link at all** over walk windows, and oversampling does not shift it (1.37 -> 1.38).
+   Cumulative path length, the old metric, was misleading in both directions: it can match while Link is
+   nowhere near the right place.
+
+### Where this leaves walking
+
+Confirmed on the correct metric: the model does not reproduce trajectories. Over windows where Link genuinely
+walks 120+ world units, the dream's position is 38% further from the truth than simply freezing him. Event
+oversampling raised event fidelity and trajectory-near-events, and did nothing here -- so the next lever is
+not sampling. The displacement head itself predicts magnitude at 1.05x of true and direction at 91% of its
+achievable ceiling (section 15), which means the per-step pieces are close to right and the error is in how
+they compose over time -- direction errors of ~27 deg median accumulate into a 3.3x tortuosity.

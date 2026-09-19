@@ -130,6 +130,7 @@ def main():
                 s_hp0 = start.hp
                 s_bhp0 = sum(e.hp for e in start.enemies.values())
                 trav = 0.0
+                path = []                            # the dream's position at every step
                 for j in range(a.horizon):
                     oh = torch.nn.functional.one_hot(torch.tensor([int(A[t0 + j])]), NA).float()
                     q = thead(z, oh) if thead is not None else None
@@ -140,7 +141,8 @@ def main():
                                                _timers=timers)
                     trav += math.hypot(nxt[0].pos[0] - cur[0].pos[0], nxt[0].pos[2] - cur[0].pos[2])
                     cur = nxt
-            outs.append((cur[0], trav, s_hp0, s_bhp0))
+                    path.append((cur[0].pos[0], cur[0].pos[2]))
+            outs.append((cur[0], trav, s_hp0, s_bhp0, np.asarray(path, np.float32)))
         return outs
 
     res = {}
@@ -148,6 +150,7 @@ def main():
         if not wins:
             continue
         d_hp, r_hp, d_bhp, r_bhp, d_tr, r_tr, i_tr = [], [], [], [], [], [], []
+        traj, traj_id, traj_end, traj_end_id = [], [], [], []
         for S, A, t0 in wins:
             H = a.horizon
             truth0, truthH = decoded_states_from_raw(S[t0:t0 + 1])[0], decoded_states_from_raw(S[t0 + H:t0 + H + 1])[0]
@@ -157,7 +160,17 @@ def main():
                                           np.diff(S[t0:t0 + H + 1, bc.LI["pos_z"]]))))
             sb0 = sum(e.hp for e in truth0.enemies.values())
             sbH = sum(e.hp for e in truthH.enemies.values())
-            for st, trav, s_hp0, s_bhp0 in roll(S, A, t0):
+            # WALKING IS A TRAJECTORY, not a distance. Compare position at every step against the real
+            # position at that step, and against identity (Link frozen at the window's start). Cumulative
+            # path length can match perfectly while Link is in completely the wrong place.
+            real_xz = S[t0 + 1:t0 + H + 1][:, [bc.LI["pos_x"], bc.LI["pos_z"]]]
+            start_xz = S[t0][[bc.LI["pos_x"], bc.LI["pos_z"]]]
+            for st, trav, s_hp0, s_bhp0, path in roll(S, A, t0):
+                n = min(len(path), len(real_xz))
+                err = np.linalg.norm(path[:n] - real_xz[:n], axis=1)
+                err_id = np.linalg.norm(start_xz[None, :] - real_xz[:n], axis=1)
+                traj.append(float(err.mean()));        traj_id.append(float(err_id.mean()))
+                traj_end.append(float(err[-1]));       traj_end_id.append(float(err_id[-1]))
                 # measure each trajectory against ITS OWN start: the decoded seed does not always match
                 # truth (a Baba at 1 HP can decode as 2), and mixing the two produced fake "healing"
                 d_hp.append(s_hp0 - st.hp);          r_hp.append(truth0.hp - truthH.hp)
@@ -170,16 +183,29 @@ def main():
                          detect_baba=float(np.mean(np.array(d_bhp) > 0)),
                          detect_baba_real=float(np.mean(np.array(r_bhp) > 0)),
                          detect_link=float(np.mean(np.array(d_hp) > 0)),
-                         detect_link_real=float(np.mean(np.array(r_hp) > 0)))
+                         detect_link_real=float(np.mean(np.array(r_hp) > 0)),
+                         traj_err=float(np.mean(traj)), traj_err_identity=float(np.mean(traj_id)),
+                         traj_end_err=float(np.mean(traj_end)),
+                         traj_end_err_identity=float(np.mean(traj_end_id)))
     print(f"EVENT-RICH WINDOWS, horizon {a.horizon}, {a.seeds} seeds "
           f"(identity = nothing changes = 0 on every row)\n")
-    print(f"{'window kind':<10} {'n':>4} | {'baba HP lost d/r':>20} {'detected d/r':>15} | "
-          f"{'hearts lost d/r':>18} | {'travel d/r':>16}")
+    print(f"{'window kind':<10} {'n':>4} | {'baba HP d/r':>16} {'detect d/r':>13} | "
+          f"{'hearts d/r':>13} | {'travel d/r':>14}")
     for k, v in res.items():
-        print(f"{k:<10} {v['n']:>4} | {v['baba_hp_lost_dream']:>8.2f}/{v['baba_hp_lost_real']:<11.2f} "
-              f"{v['detect_baba']:>6.0%}/{v['detect_baba_real']:<8.0%} | "
-              f"{v['link_hp_lost_dream']:>7.2f}/{v['link_hp_lost_real']:<10.2f} | "
-              f"{v['travel_dream']:>7.1f}/{v['travel_real']:<8.1f}")
+        print(f"{k:<10} {v['n']:>4} | {v['baba_hp_lost_dream']:>6.2f}/{v['baba_hp_lost_real']:<9.2f} "
+              f"{v['detect_baba']:>5.0%}/{v['detect_baba_real']:<7.0%} | "
+              f"{v['link_hp_lost_dream']:>5.2f}/{v['link_hp_lost_real']:<7.2f} | "
+              f"{v['travel_dream']:>6.1f}/{v['travel_real']:<7.1f}")
+    print("\nTRAJECTORY -- position at each step vs the real position. Identity = Link frozen at the start.")
+    print("  This is what 'walking' means; travel above is only path length and can match while being lost.")
+    print(f"{'window kind':<10} {'mean err':>10} {'identity':>10} {'ratio':>7} | "
+          f"{'end err':>9} {'identity':>10} {'ratio':>7}")
+    for k, v in res.items():
+        r1 = v["traj_err"] / max(v["traj_err_identity"], 1e-9)
+        r2 = v["traj_end_err"] / max(v["traj_end_err_identity"], 1e-9)
+        print(f"{k:<10} {v['traj_err']:>10.1f} {v['traj_err_identity']:>10.1f} {r1:>7.2f} | "
+              f"{v['traj_end_err']:>9.1f} {v['traj_end_err_identity']:>10.1f} {r2:>7.2f}"
+              f"{'   BETTER than identity' if r1 < 1 else ''}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps({"model": a.model, "horizon": a.horizon, "res": res}, indent=2))
     print(f"\n-> {a.out}")
