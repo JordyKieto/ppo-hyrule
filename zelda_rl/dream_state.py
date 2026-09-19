@@ -35,7 +35,7 @@ ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only
 
 
 def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
-                     hit_thresh: float = 0.5, link_hit_thresh: float = 0.0,
+                     hit_thresh: float = 0.5, link_hit_thresh: float = 0.5,
                      hp_per_hit: int = 8) -> list[CombatState]:
     """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
 
@@ -50,6 +50,10 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
 
     Reward PARITY is preserved: this edits the STATE, and `CombatTracker` still computes all 18 terms from
     states exactly as the emulator run does. Nothing here computes reward.
+
+    Both thresholds are PROBABILITIES in (0, 1), tuned on the tuning slots and carried in the checkpoint.
+    They must not default to 0: `link_hit_thresh=0.0` compared a sigmoid against zero, which is always true,
+    so Link took damage on every single step and sat a permanent 8 HP below the decoded value.
     """
     import torch as _t
     from zelda_rl.dynamics import dir_unit_vectors, mag_centers
@@ -72,7 +76,7 @@ def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
             e = cu.enemies.get(ptr)
             if e is not None and e.hp > 0:
                 e.hp = max(0, e.hp - 1)
-        if lhp[i] > link_hit_thresh and cu.hp > 0:
+        if lhp[i] > link_hit_thresh and cu.hp > 0:      # probability, not a logit -- see the docstring
             cu.hp = max(0, cu.hp - hp_per_hit)          # a Deku Baba lunge costs half a heart
         out.append(cu)
     return out

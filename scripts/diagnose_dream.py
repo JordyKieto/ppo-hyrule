@@ -68,6 +68,7 @@ def main():
     scale = ck["decode_scale"]
     MT = ck.get("moved_thresh", 0.0)
     MC = tuple(ck.get("moved_calib", (1.0, 0.0)))
+    HT, LHT = ck.get("hit_thresh", 0.5), ck.get("link_hit_thresh", 0.5)
 
     # first frame of each episode = a real savestate start state
     S, EP = [], []

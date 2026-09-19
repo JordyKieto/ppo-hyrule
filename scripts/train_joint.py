@@ -411,6 +411,31 @@ def main():
     moved_calib = (float(ca.item()), float(cb.item()))
     with torch.no_grad():
         pc = torch.sigmoid(ca * _lg + cb).numpy()
+    # Thresholds for the two damage-event heads, chosen on the TUNING slots by F1, never on test. They are
+    # PROBABILITIES: an earlier default of 0.0 compared a sigmoid against zero, which is always true, so the
+    # dream applied Link damage on every step.
+    with torch.no_grad():
+        qt = thead(E(torch.from_numpy(tu)), A[tu])
+    tmk = Y["tr_mask"][tu] > 0
+    def best_thresh(score, lab, name):
+        lab = lab & tmk
+        b, th = -1.0, 0.5
+        for q in np.unique(np.quantile(score[tmk], np.linspace(0.5, 0.9995, 150))):
+            pr = (score > q) & tmk
+            tp = float((pr & lab).sum())
+            if tp == 0:
+                continue
+            f1 = 2 * tp / (pr.sum() + lab.sum())
+            if f1 > b:
+                b, th = f1, float(q)
+        print(f"  {name} threshold {th:.4f} (tune F1 {b:.3f}, {int(lab.sum())} events in "
+              f"{int(tmk.sum()):,} tuning steps)")
+        return th
+    hit_thresh = best_thresh(1.0 - torch.softmax(qt["tr_hit_row"], -1).numpy()[:, N_ROWS],
+                             Y["tr_hit_row"][tu] != N_ROWS, "enemy-hit")
+    link_hit_thresh = best_thresh(torch.sigmoid(qt["tr_link_hit"]).numpy()[:, 0],
+                                  Y["tr_link_hit"][tu][:, 0] > 0.5, "link-hit")
+
     print(f"  moved calibration: P = sigmoid({moved_calib[0]:.3f}*logit {moved_calib[1]:+.3f}) | "
           f"mean P {pc.mean():.3f} vs true rate {tt.mean():.3f} "
           f"(uncalibrated sigmoid averaged {float((1 / (1 + np.exp(-pt))).mean()):.3f})")
@@ -622,7 +647,8 @@ def main():
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
                 "norm": norm.state_dict(), "split": split, "pred_residual": True,
-                "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib,
+                "hit_thresh": hit_thresh, "link_hit_thresh": link_hit_thresh, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)
