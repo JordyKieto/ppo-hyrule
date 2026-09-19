@@ -35,7 +35,8 @@ ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only
 
 
 def decoded_to_states(p: dict, scale: dict, prev: list[CombatState] | None = None,
-                      moved_thresh: float = 0.0) -> list[CombatState]:
+                      moved_thresh: float | None = None,
+                      moved_calib: tuple[float, float] = (1.0, 0.0)) -> list[CombatState]:
     """Decoder output (batched) -> one CombatState per batch element.
 
     With `prev`, Link's position is INTEGRATED (prev.pos + decoded displacement) instead of read from the
@@ -44,8 +45,16 @@ def decoded_to_states(p: dict, scale: dict, prev: list[CombatState] | None = Non
     the dream's motion was incoherent -- 12.11 units of jitter per step against a true 0.58, which averaged
     out to almost no net drift, so Link never reached the door and the -20 exit never fired in training.
 
-    `link_moved` gates it: Link is stationary on 95% of real steps, and a displacement head that cannot emit
-    an exact zero will always move him. The threshold is the one tuned on the tuning slots.
+    `link_moved` gates it, because Link is stationary on 95% of real steps and a displacement head that
+    cannot emit an exact zero will always move him. The gate is SOFT by default:
+
+        E[dpos] = P(moved) * E[dpos | moved]
+
+    which is just the expectation of the two-part model, and needs no threshold. That matters because a hard
+    threshold did not transfer: tuned on the tuning slots (moved base rate 0.182) it ran at precision 0.295
+    on the test slots (base rate 0.085). A soft gate is also self-scaling -- an uncertain frame contributes a
+    small step instead of a full one, which is what took predicted displacement from 2.52x of true to ~1x.
+    Pass `moved_thresh` to force the old hard gate instead.
     """
     lhp = np.asarray(LINK_HP_VALUES)[p["link_hp"].argmax(-1).numpy()]
     lpos = p["link_pos"].numpy() * scale["link_pos"][1] + scale["link_pos"][0]
@@ -53,7 +62,10 @@ def decoded_to_states(p: dict, scale: dict, prev: list[CombatState] | None = Non
         d = p["link_dpos"].numpy()
         if "link_dpos" in scale:
             d = d * scale["link_dpos"][1] + scale["link_dpos"][0]
-        gate = (p["link_moved"].numpy()[:, 0] > moved_thresh)[:, None]
+        mlog = p["link_moved"].numpy()[:, 0]
+        ca, cb = moved_calib                                    # Platt scaling fitted on the tuning slots
+        gate = ((mlog > moved_thresh) if moved_thresh is not None
+                else 1.0 / (1.0 + np.exp(-(ca * mlog + cb))))[:, None]
         lpos = np.asarray([list(s.pos) for s in prev], np.float32) + d * gate
     lyaw = p["link_yaw"].numpy()
     yaw = (np.arctan2(lyaw[:, 0], lyaw[:, 1]) / (2 * np.pi) * 65536.0).astype(np.int64) % 65536

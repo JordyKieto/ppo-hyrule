@@ -503,3 +503,51 @@ no reason to avoid the thing it then did 3/3 times in the emulator with V ≈ 3.
 - Residual displacement over-move of **2.52×**, down from 20.85× but not 1×.
 - `link_pos` MAE rose 9.43 → 12.46. The absolute head matters less now that the dream integrates, but it is
   still what grounds enemy distances in the reward.
+
+## 14. Calibrating the movement gate
+
+Three things were left open in §13. All three responded to techniques already used here.
+
+### The threshold did not transfer; the gate was uncalibrated
+
+The dream applies `E[dpos] = P(moved) · E[dpos | moved]`, which equals the truth only if **P is calibrated**.
+It was not: trained with `pos_weight 2.0` (needed for the class imbalance), raw `sigmoid(logit)` averaged
+**0.564** on the tuning slots where the true movement rate is **0.182** — 3× too high. That is why a soft gate
+over-moved by 2.85×, slightly *worse* than a hard threshold, and why a threshold tuned at base rate 0.182 ran
+at precision 0.295 where the base rate is 0.085.
+
+Two fixes, both the documented "calibrated score, threshold chosen on the tuning slots" step that took
+damage-event F1 from 0.746 to 0.906:
+
+1. **Platt scaling on the tuning slots.** `P = sigmoid(0.450·logit − 2.829)`, fitted unweighted (calibration,
+   not balance). Mean predicted P then matches the true rate exactly: **0.182 vs 0.182**.
+2. **Report average precision, which is threshold-free.** Any single operating point is the wrong thing to
+   quote when the base rate differs across slots. AP is what this repo already uses for rare events.
+
+### Results
+
+| | §13 | §14 |
+|---|---|---|
+| displacement ratio vs true | 2.85× | **1.93×** |
+| `link_pos` MAE | 12.46 | **9.76** (`--w-pos` 3 → 6) |
+| `MOVED` AP | 0.3464 | **0.4375** (5.1× base rate) |
+| tune skill | −1.379 | −0.998 |
+| `row_state` / `baba_count` / `link_hp` | 0.9874 / 0.9992 / 0.9857 | 0.9927 / 0.9996 / 0.9901 |
+| action recalls (roll/shield/airborne/hurt) | 1.00 / 0.98 / 0.98 / 1.00 | unchanged |
+
+### The residual 1.93× is slot shift, not a modelling bug
+
+Calibration fitted on the tuning slots is *exact there* (0.182 vs 0.182) but the test slots move at 0.085, so
+a calibration fitted elsewhere still over-predicts by about 2×. Slots differ in how much Link moves: the
+tuning slots carry more scripted walking, the test slots are combat-only where he is mostly stationary. The
+lever that would remove this is a better classifier — AP 0.4375 is weak — not more calibration.
+
+### Methodology note, recorded because it was got wrong
+
+`link_pos` MAE was reported as "rose 9.43 → 12.46". Three seeds of the same config give **12.46–17.23**
+(median 13.85), so 12.46 was the bottom of a wide distribution and the single-run comparison overstated its
+precision. Seed spread on this project has been as large as `shape_yaw` 0.7° → 5.3° between runs differing
+only by a class merge. **A one-run gap of this size is not evidence.** The earlier capacity sweep (§10) was
+single-seed and its between-config differences should be read with that caveat; its one load-bearing
+conclusion — that down-weighting the v2 heads does not recover action recoverability — rests on a gap far
+larger than the spread.

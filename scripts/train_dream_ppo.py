@@ -53,16 +53,17 @@ class Dream:
     """
 
     def __init__(self, pred, dec, scale, seed_z, seed_trk, n_actions, max_steps, combat_cfg,
-                 exit_persist=3, moved_thresh=0.0):
+                 exit_persist=3, moved_thresh=None, moved_calib=(1.0, 0.0)):
         self.pred, self.dec, self.scale = pred, dec, scale
         self.seed_z, self.seed_trk = seed_z, seed_trk       # latent + the tracker replayed to that frame
         self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
         self.exit_persist = exit_persist
-        self.moved_thresh = moved_thresh
+        self.moved_thresh, self.moved_calib = moved_thresh, moved_calib
 
     @torch.no_grad()
     def _states(self, z, prev=None):
-        return decoded_to_states(self.dec(z), self.scale, prev=prev, moved_thresh=self.moved_thresh)
+        return decoded_to_states(self.dec(z), self.scale, prev=prev, moved_thresh=self.moved_thresh,
+                                 moved_calib=self.moved_calib)
 
     def _pick(self, n, rng):
         """A seed is a real frame plus the real tracker replayed up to it -- kills already made, lock-ons
@@ -247,7 +248,8 @@ def main():
                     group="dream-deku-baba")
 
     env = Dream(pred, dec, ck["decode_scale"], starts, seed_trk, NA, a.max_steps, CombatConfig(),
-                moved_thresh=ck.get("moved_thresh", 0.0),
+                moved_thresh=None,      # soft gate: P(moved) * dpos, see decoded_to_states
+                moved_calib=ck.get("moved_calib", (1.0, 0.0)),
                 exit_persist=a.exit_persist)
     OBS = LAT + MEM_DIM
     model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy

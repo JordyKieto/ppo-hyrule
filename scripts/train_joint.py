@@ -344,6 +344,26 @@ def main():
     print(f"  moved threshold {moved_thresh:+.3f} chosen on {len(tu):,} tuning frames "
           f"(tune F1 {best_f1:.3f}, base rate {tt.mean():.3f})")
 
+    # PLATT SCALING of the moved logit on the tuning slots. The soft gate the dream applies is
+    # E[dpos] = P(moved) * E[dpos | moved], which only equals the truth if P is CALIBRATED. Trained with
+    # pos_weight 2.0 it is not -- raw sigmoid(logit) over-predicts, and the soft gate over-moved by 2.85x.
+    # This is the same "calibrated score" step that took damage-event F1 from 0.746 to 0.906.
+    ca, cb = torch.zeros(1, requires_grad=True), torch.zeros(1, requires_grad=True)
+    _lg, _y = torch.from_numpy(pt).float(), torch.from_numpy(tt.astype(np.float32))
+    _o = torch.optim.LBFGS([ca, cb], max_iter=120)
+    def _closure():
+        _o.zero_grad()
+        loss = F.binary_cross_entropy_with_logits(ca * _lg + cb, _y)   # unweighted: calibration, not balance
+        loss.backward()
+        return loss
+    _o.step(_closure)
+    moved_calib = (float(ca.item()), float(cb.item()))
+    with torch.no_grad():
+        pc = torch.sigmoid(ca * _lg + cb).numpy()
+    print(f"  moved calibration: P = sigmoid({moved_calib[0]:.3f}*logit {moved_calib[1]:+.3f}) | "
+          f"mean P {pc.mean():.3f} vs true rate {tt.mean():.3f} "
+          f"(uncalibrated sigmoid averaged {float((1 / (1 + np.exp(-pt))).mean()):.3f})")
+
     # ---------------- probes
     print("\n--- probes (test slots) ---")
     with torch.no_grad():
@@ -450,18 +470,28 @@ def main():
                   f"(n={int(sel.sum()):,})")
         # The metric that found the over-move: is the model's displacement DISTRIBUTION right, not just its
         # mean error. A regression head that cannot emit zero scored mean 12.11 against a true mean of 0.58.
-        mv_p = (p["link_moved"].numpy()[:, 0] > moved_thresh)[vmask]
+        mlog = p["link_moved"].numpy()[:, 0][vmask]
+        mv_p = mlog > moved_thresh          # one operating point, reported alongside AP
         mv_t = (Y["link_moved"][te][:, 0] > 0.5)[vmask]
+        # Average precision is threshold-FREE, which is the point: a threshold tuned on the tuning slots
+        # (moved base rate 0.182) gave precision 0.295 on the test slots (base rate 0.085), so any single
+        # operating point is the wrong thing to report. AP is what this repo already uses for rare events.
+        o = np.argsort(-mlog)
+        tp = np.cumsum(mv_t[o]); prec_c = tp / np.arange(1, len(o) + 1)
+        ap = float((prec_c * mv_t[o]).sum() / max(mv_t.sum(), 1))
         # link_dpos is standardised for training (it is in CONT), so undo that before reporting world units
         dp_p = (p["link_dpos"].numpy() * sc["link_dpos"][1] + sc["link_dpos"][0])[vmask]
         dp_t = Y["link_dpos"][te][vmask]
-        mag_p = np.linalg.norm(dp_p[:, [0, 2]], axis=1) * mv_p     # gated by the classifier, as the dream does
+        # the gate the dream actually applies: Platt-calibrated P(moved)
+        soft = 1.0 / (1.0 + np.exp(-(moved_calib[0] * mlog + moved_calib[1])))
+        mag_p = np.linalg.norm(dp_p[:, [0, 2]], axis=1) * soft
         mag_t = np.linalg.norm(dp_t[:, [0, 2]], axis=1)
         prec = float(mv_t[mv_p].mean()) if mv_p.any() else float("nan")
-        print(f"          MOVED: acc {float((mv_p == mv_t).mean()):.4f} recall "
-              f"{float(mv_p[mv_t].mean()) if mv_t.any() else float('nan'):.3f} precision {prec:.3f} "
-              f"(base rate {float(mv_t.mean()):.3f})")
-        print(f"          displacement per step: true mean {mag_t.mean():.2f} / model {mag_p.mean():.2f} "
+        print(f"          MOVED: AP {ap:.4f} (base rate {float(mv_t.mean()):.3f}, so AP/base = "
+              f"{ap / max(float(mv_t.mean()), 1e-9):.1f}x) | at the tuned threshold: acc "
+              f"{float((mv_p == mv_t).mean()):.4f} recall "
+              f"{float(mv_p[mv_t].mean()) if mv_t.any() else float('nan'):.3f} precision {prec:.3f}")
+        print(f"          displacement per step (SOFT-gated): true mean {mag_t.mean():.2f} / model {mag_p.mean():.2f} "
               f"-> ratio {mag_p.mean() / max(mag_t.mean(), 1e-9):.2f}x  "
               f"(std {mag_t.std():.2f} vs {mag_p.std():.2f}); "
               f"on truly-moving steps MAE {float(np.abs(mag_p - mag_t)[mv_t].mean()) if mv_t.any() else float('nan'):.2f}")
@@ -503,7 +533,7 @@ def main():
                 # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
-                "norm": norm.state_dict(), "split": split, "pred_residual": True, "moved_thresh": moved_thresh, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "norm": norm.state_dict(), "split": split, "pred_residual": True, "moved_thresh": moved_thresh, "moved_calib": moved_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)
