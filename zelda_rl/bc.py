@@ -424,9 +424,15 @@ def transition_targets(state: np.ndarray, epid: np.ndarray | None = None) -> dic
     dropped = (hp[nxt] < hp) & both                     # HP fell while the row stayed present
     hit_row = np.where(dropped.any(1), dropped.argmax(1), N_ROWS).astype(np.int64)
     link_hit = ((lk[nxt, LI["hp"]] < lk[:, LI["hp"]]) & (mask > 0)).astype(np.float32)
+    # Despawn: present now, absent next. A death/reload despawns EVERY enemy at once and is not a kill
+    # (combat.py documents that trap), so frames where more than half the live rows vanish are excluded.
+    vanished = present & ~present[nxt]
+    bulk = vanished.sum(1) > np.maximum(present.sum(1) * 0.5, 1)
+    vanished = vanished & ~bulk[:, None]
+    gone_row = np.where(vanished.any(1), vanished.argmax(1), N_ROWS).astype(np.int64)
     return {"tr_mask": mask, "tr_moved": moved[:, None], "tr_dir": sector, "tr_mag": mbin,
             "tr_dy": d[:, [1]].astype(np.float32), "tr_hit_row": hit_row, "tr_link_hit": link_hit[:, None],
-            "tr_mag_units": mag.astype(np.float32)}
+            "tr_gone_row": gone_row, "tr_mag_units": mag.astype(np.float32)}
 
 
 def _dpos_targets(lk: np.ndarray, epid: np.ndarray | None, n: int) -> dict[str, np.ndarray]:

@@ -770,3 +770,56 @@ corrected velocity into the state does not reach the next step's head. Two optio
 
 Option 1 is the larger change and would make the dream a decoded-state model with a latent observation, which
 is a different experiment from the one stated in §1. Not taken unilaterally.
+
+## 17. Decoding the prediction fixes every single-step metric and destroys the rollout
+
+§16 left the predictor supervised only by L2 to the true next latent. Reading the training loop showed why that
+was never going to give the dream usable velocity: **`dec()` was only ever called on `E(real state)`**. The
+predicted latent was never decoded, so nothing asked whether it decodes to the right velocity — and L2 in a
+128-d latent is dominated by the high-variance directions, while velocity and position are tiny components.
+The decoder had also never seen a predicted latent as input, which is all it is ever fed in a dream.
+
+An earlier proposal to re-encode each step (`z_{t+1} = E(edited state)`) was **withdrawn**: it routes around the
+problem and quietly removes the learned latent transition, which is the subject of the experiment.
+
+### The fix, and what it bought
+
+`L += w_decpred · decode_loss(dec(pred(z_t, a_t)), s_{t+1})`, plus training the transition head on predicted
+latents for the same exposure-bias reason. Every single-step number improved:
+
+| | §16 | + decode-the-prediction |
+|---|---|---|
+| enemy-hit AP (base 0.0002) | 0.3637 | **0.6270** |
+| Link-hit AP (base 0.0014) | 0.6141 | **0.6652** |
+| moved AP | 0.3976 | **0.4918** |
+| `baba_count` from the PREDICTED latent | — | **0.9895** (vs 0.9524 from the real latent) |
+| `dpos` MAE from the predicted latent | — | 0.6600 (vs 0.6815 from the real one) |
+
+Decode of the predicted latent beating decode of the real latent is the loss doing exactly its job.
+
+### And it made the rollout diverge
+
+Latent norm under a 120-step autoregressive rollout, fixed action:
+
+| step | without decode-the-prediction | with it |
+|---|---|---|
+| 1 | 12.8 | 16.4 |
+| 10 | 10.2 | 88.2 |
+| 50 | 10.8 | 23,817 |
+| 120 | **13.8** | **1.7 × 10¹⁴** |
+
+The audit went from "approach now earnable" to every one of the 63 actions giving `left% 100%`, distances of
+10¹⁰–10¹² world units and returns near −1900.
+
+The mechanism is exact: **to change a decoded field you must move the latent**, so the decode loss pushes
+`f(z, a)` to be large — and applied one step ahead, nothing ever penalises applying `f` repeatedly. The
+previous predictor was stable precisely because it was nearly the identity: bounded *and* useless. This one is
+useful for one step and compounds geometrically.
+
+So the two failure modes are the same coin. A predictor that ties identity is stable and cannot represent
+anything; a predictor with enough authority to change the decoded state diverges unless its own compounding is
+supervised. That is what `--unroll > 1` is for — it trains the predictor on its own output, and the
+decode-the-prediction term is applied at **every** unroll step. It has been off by default all along.
+
+Recorded as the clearest negative result of this line of work: **single-step decode quality and rollout
+stability are in direct tension, and optimising either alone produces a useless dream.**

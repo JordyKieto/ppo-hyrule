@@ -126,6 +126,11 @@ class TransitionHead(nn.Module):
     dy        1          vertical displacement, regressed (small and nearly always 0)
     hit_row   n_rows+1   which actor row loses HP this step, or "none" (the last index)
     link_hit  1 logit    Link loses HP this step
+    gone_row  n_rows+1   which actor row DESPAWNS this step, or "none"
+
+    `gone_row` exists because a Deku Baba that dies is removed from the actor list, and without it a killed
+    Baba lingers at HP 0 forever -- so `row_present` and `baba_count` disagree with the enemy dict, and the
+    room can never actually empty.
     """
 
     def __init__(self, latent: int, n_actions: int, n_rows: int = 16, hidden: int = 512):
@@ -139,8 +144,10 @@ class TransitionHead(nn.Module):
         self.dy = nn.Linear(hidden, 1)
         self.hit_row = nn.Linear(hidden, n_rows + 1)
         self.link_hit = nn.Linear(hidden, 1)
+        self.gone_row = nn.Linear(hidden, n_rows + 1)
 
     def forward(self, z: torch.Tensor, a_onehot: torch.Tensor) -> dict:
         h = self.trunk(torch.cat([z, a_onehot], -1))
         return {"tr_moved": self.moved(h), "tr_dir": self.dir(h), "tr_mag": self.mag(h),
-                "tr_dy": self.dy(h), "tr_hit_row": self.hit_row(h), "tr_link_hit": self.link_hit(h)}
+                "tr_dy": self.dy(h), "tr_hit_row": self.hit_row(h), "tr_link_hit": self.link_hit(h),
+                "tr_gone_row": self.gone_row(h)}

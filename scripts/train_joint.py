@@ -77,6 +77,11 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--w-decpred", type=float, default=1.0,
+                    help="weight on DECODING THE PREDICTED LATENT against the true next state. Without it the "
+                         "predictor is only ever supervised by L2 in latent space, so nothing asks whether "
+                         "the predicted latent decodes to the right velocity -- which is why momentum went "
+                         "stale in the dream. 0 disables, reproducing the old behaviour.")
     ap.add_argument("--w-trans", type=float, default=2.0,
                     help="weight on the action-conditioned transition head (motion + damage events). These "
                          "are what makes approach, damage and kills representable at all: the audit found "
@@ -208,6 +213,7 @@ def main():
     TRMAG = torch.from_numpy(Y["tr_mag"].astype(np.int64))
     TRDY = torch.from_numpy(Y["tr_dy"].astype(np.float32))
     TRHIT = torch.from_numpy(Y["tr_hit_row"].astype(np.int64))
+    TRGONE = torch.from_numpy(Y["tr_gone_row"].astype(np.int64))
     TRLH = torch.from_numpy(Y["tr_link_hit"].astype(np.float32))
     _m = (Y["tr_moved"][:, 0] > 0.5) & (Y["tr_mask"] > 0)
     _h = (Y["tr_hit_row"] != N_ROWS) & (Y["tr_mask"] > 0)
@@ -216,11 +222,14 @@ def main():
     PW_MV, PW_LH = pw(_m), pw(_l)
     # hit_row is a 17-way choice dominated by "none": weight the classes by inverse sqrt frequency, the same
     # square-rooting used for HP, because a raw inverse-frequency weight of 3633:1 collapsed a head before.
-    _hc = np.bincount(Y["tr_hit_row"][Y["tr_mask"] > 0], minlength=N_ROWS + 1).astype(float)
-    _hw = (_hc.sum() / np.maximum(_hc, 1)) ** 0.5
-    CW_HIT = torch.tensor((_hw / _hw.mean()).astype(np.float32))
+    def rowcw(key):
+        c = np.bincount(Y[key][Y["tr_mask"] > 0], minlength=N_ROWS + 1).astype(float)
+        w = (c.sum() / np.maximum(c, 1)) ** 0.5
+        return torch.tensor((w / w.mean()).astype(np.float32))
+    CW_HIT, CW_GONE = rowcw("tr_hit_row"), rowcw("tr_gone_row")
+    _g = (Y["tr_gone_row"] != N_ROWS) & (Y["tr_mask"] > 0)
     print(f"transition head: moves {_m.mean():.1%} of steps, an actor is hit on {_h.mean():.2%}, "
-          f"Link is hit on {_l.mean():.2%} (pos_weights {float(PW_MV):.1f} / {float(PW_LH):.1f})")
+          f"a row despawns on {_g.mean():.2%}, Link is hit on {_l.mean():.2%} (pos_weights {float(PW_MV):.1f} / {float(PW_LH):.1f})")
 
     def trans_loss(q, i):
         """All classification except dy. A mode does not shrink; a regressed magnitude did, 9.3x."""
@@ -231,6 +240,8 @@ def main():
         L = L + (F.binary_cross_entropy_with_logits(q["tr_link_hit"], TRLH[i], pos_weight=PW_LH,
                                                     reduction="none").squeeze(-1) * mk).sum() / den
         L = L + (F.cross_entropy(q["tr_hit_row"], TRHIT[i], weight=CW_HIT,
+                                 reduction="none") * mk).sum() / den
+        L = L + (F.cross_entropy(q["tr_gone_row"], TRGONE[i], weight=CW_GONE,
                                  reduction="none") * mk).sum() / den
         # direction and magnitude are only defined where Link actually moved
         mvk = mk * TRMV[i].squeeze(-1)
@@ -325,6 +336,8 @@ def main():
                         zt = E(zi + (j + 1) * K)                 # stop-gradient target, as in JEPA
                     w = a.unroll_decay ** j
                     lp = lp + w * F.mse_loss(zz, zt)
+                    if a.w_decpred > 0:                          # decode EVERY rollout step: momentum over time
+                        ld = ld + a.w_decpred * w * decode_loss(dec(zz), zi + (j + 1) * K)
                     wsum += w
                     if a.unroll_detach and (j + 1) % a.unroll_detach == 0:
                         zz = zz.detach()                         # bound backprop depth, keep the exposure
@@ -337,6 +350,18 @@ def main():
                         zt = E(zi + K)
                     zh = pred(torch.cat([zp, A[zi]], -1))
                     lp = F.mse_loss(zh, zt)
+                    # DECODE THE PREDICTION. Without this the predictor's only supervision is L2 to the true
+                    # next latent in 128-d space -- and L2 there is dominated by whatever directions carry the
+                    # most variance, while velocity and position are tiny components. So a prediction can be
+                    # "close" in L2 while the fields the reward reads decode to nonsense, and the decoder has
+                    # never seen a predicted latent as input at all (dec() was only ever called on E(real)).
+                    # That is why velocity went stale in the dream and the walk wandered: nothing ever
+                    # penalised the TRANSITION for getting velocity wrong.
+                    if a.w_decpred > 0:
+                        ld = ld + a.w_decpred * decode_loss(dec(zh), zi + K)
+                        # the transition head reads predicted latents from step 2 of a dream onward, so train
+                        # it on them too rather than only on real encoder outputs
+                        ld = ld + a.w_decpred * a.w_trans * trans_loss(thead(zh, A[zi + K]), zi + K)
                 else:
                     lp = torch.zeros((), requires_grad=True)
             loss = a.w_decode * ld + a.w_pred * lp
@@ -411,30 +436,42 @@ def main():
     moved_calib = (float(ca.item()), float(cb.item()))
     with torch.no_grad():
         pc = torch.sigmoid(ca * _lg + cb).numpy()
-    # Thresholds for the two damage-event heads, chosen on the TUNING slots by F1, never on test. They are
-    # PROBABILITIES: an earlier default of 0.0 compared a sigmoid against zero, which is always true, so the
-    # dream applied Link damage on every step.
+    # CALIBRATE the event heads on the TUNING slots. The dream SAMPLES these, so what has to be right is the
+    # probability, not an operating point: a threshold tuned to maximise F1 on a 0.02%-base-rate event is
+    # precision-heavy and fired ~0.9 times an episode, and a 2 HP Baba needs two hits, so kills stayed 0.00.
+    def platt(score_logit, lab, name):
+        ca, cb = torch.zeros(1, requires_grad=True), torch.zeros(1, requires_grad=True)
+        lg, y = torch.from_numpy(score_logit).float(), torch.from_numpy(lab.astype(np.float32))
+        o = torch.optim.LBFGS([ca, cb], max_iter=120)
+        def cl():
+            o.zero_grad()
+            l = F.binary_cross_entropy_with_logits(ca * lg + cb, y)
+            l.backward()
+            return l
+        o.step(cl)
+        with torch.no_grad():
+            pc = torch.sigmoid(ca * lg + cb).numpy()
+        print(f"  {name:<10} calibrated: mean P {pc.mean():.5f} vs true rate {lab.mean():.5f} "
+              f"(uncalibrated {float(1 / (1 + np.exp(-score_logit)).mean()):.5f}), "
+              f"{int(lab.sum())} events")
+        return (float(ca.item()), float(cb.item()))
+
     with torch.no_grad():
         qt = thead(E(torch.from_numpy(tu)), A[tu])
     tmk = Y["tr_mask"][tu] > 0
-    def best_thresh(score, lab, name):
-        lab = lab & tmk
-        b, th = -1.0, 0.5
-        for q in np.unique(np.quantile(score[tmk], np.linspace(0.5, 0.9995, 150))):
-            pr = (score > q) & tmk
-            tp = float((pr & lab).sum())
-            if tp == 0:
-                continue
-            f1 = 2 * tp / (pr.sum() + lab.sum())
-            if f1 > b:
-                b, th = f1, float(q)
-        print(f"  {name} threshold {th:.4f} (tune F1 {b:.3f}, {int(lab.sum())} events in "
-              f"{int(tmk.sum()):,} tuning steps)")
-        return th
-    hit_thresh = best_thresh(1.0 - torch.softmax(qt["tr_hit_row"], -1).numpy()[:, N_ROWS],
-                             Y["tr_hit_row"][tu] != N_ROWS, "enemy-hit")
-    link_hit_thresh = best_thresh(torch.sigmoid(qt["tr_link_hit"]).numpy()[:, 0],
-                                  Y["tr_link_hit"][tu][:, 0] > 0.5, "link-hit")
+    def none_logit(logits, k):
+        pe = 1.0 - torch.softmax(logits, -1).numpy()[:, k]
+        return np.log(np.clip(pe, 1e-6, 1 - 1e-6) / np.clip(1 - pe, 1e-6, 1 - 1e-6))
+    event_calib = {
+        "hit": platt(none_logit(qt["tr_hit_row"], N_ROWS)[tmk],
+                     (Y["tr_hit_row"][tu] != N_ROWS)[tmk], "enemy-hit"),
+        "gone": platt(none_logit(qt["tr_gone_row"], N_ROWS)[tmk],
+                      (Y["tr_gone_row"][tu] != N_ROWS)[tmk], "despawn"),
+        "link_hit": platt(qt["tr_link_hit"].numpy()[:, 0][tmk],
+                          (Y["tr_link_hit"][tu][:, 0] > 0.5)[tmk], "link-hit"),
+        "moved": platt(qt["tr_moved"].numpy()[:, 0][tmk],
+                       (Y["tr_moved"][tu][:, 0] > 0.5)[tmk], "moved"),
+    }
 
     print(f"  moved calibration: P = sigmoid({moved_calib[0]:.3f}*logit {moved_calib[1]:+.3f}) | "
           f"mean P {pc.mean():.3f} vs true rate {tt.mean():.3f} "
@@ -591,6 +628,29 @@ def main():
         true_xz = Y["tr_dpos_xz"][te] if "tr_dpos_xz" in Y else None
         tmag = Y["tr_mag_units"][te]
         rec = np.linalg.norm(step, axis=1) * gate
+        # Decode quality on the PREDICTED latent vs on the real one. This is the quantity the decode-the-
+        # prediction loss targets: in the dream every field the reward reads comes from a predicted latent,
+        # never from a real encoder output, so this -- not decode-on-real -- is what matters.
+        with torch.no_grad():
+            zhat = pred(torch.cat([Zte, A[te]], -1))
+            ph, pn = dec(zhat), dec(Zte2)
+        nxt = te + K
+        def cmp(key, fmt="{:.4f}"):
+            if key in ("baba_count", "row_state", "link_hp_c", "link_action"):
+                t = Y[{"link_hp_c": "link_hp_c"}.get(key, key)][nxt]
+                acc = lambda q: float((q[key].numpy().argmax(-1) == t).mean())
+                return fmt.format(acc(ph)), fmt.format(acc(pn))
+            e = lambda q: float(np.abs(q[key].numpy() - Yt[key][nxt].numpy()).mean())
+            return fmt.format(e(ph)), fmt.format(e(pn))
+        print("          DECODE OF THE PREDICTED LATENT (what the dream actually reads) vs of the real one:")
+        for key, lbl in (("baba_count", "baba_count acc"), ("link_hp_c", "link_hp acc"),
+                         ("link_pos", "link_pos MAE (std units)"), ("link_speed", "speed MAE"),
+                         ("link_dpos", "dpos MAE")):
+            try:
+                a_, b_ = cmp(key)
+                print(f"            {lbl:<28} predicted {a_}   real {b_}")
+            except Exception as _e:  # noqa: BLE001
+                print(f"            {lbl:<28} (n/a: {_e})")
         print(f"          TRANSITION HEAD: moved AP {mv_ap:.4f} (base {float(mvt[tk].mean()):.3f}) | "
               f"dir top-1 {dacc:.3f} (chance {1/N_DIR_SECTORS:.3f})  mag top-1 {macc:.3f} "
               f"(chance {1/N_MAG_BINS:.3f})")
@@ -648,7 +708,7 @@ def main():
                 # (train_dream_ppo, play_dream_policy, the probes).
                 "norm": norm.state_dict(), "split": split, "pred_residual": True,
                 "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib,
-                "hit_thresh": hit_thresh, "link_hit_thresh": link_hit_thresh, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "event_calib": event_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)

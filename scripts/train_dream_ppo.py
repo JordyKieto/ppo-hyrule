@@ -55,13 +55,15 @@ class Dream:
 
     def __init__(self, pred, dec, scale, seed_z, seed_trk, n_actions, max_steps, combat_cfg,
                  exit_persist=3, moved_thresh=None, moved_calib=(1.0, 0.0), thead=None,
-                 hit_thresh=0.5, link_hit_thresh=0.5):
+                 event_calib=None):
         self.pred, self.dec, self.scale = pred, dec, scale
         self.seed_z, self.seed_trk = seed_z, seed_trk       # latent + the tracker replayed to that frame
         self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
         self.exit_persist = exit_persist
         self.moved_thresh, self.moved_calib = moved_thresh, moved_calib
-        self.thead, self.hit_thresh, self.link_hit_thresh = thead, hit_thresh, link_hit_thresh
+        self.thead, self.event_calib = thead, dict(event_calib or {})
+        self.ev_rng = np.random.default_rng(0)
+        self.hp0_timers = {}
 
     @torch.no_grad()
     def _states(self, z, prev=None):
@@ -99,8 +101,8 @@ class Dream:
         if q is not None:
             # motion and damage from (z_t, a_t); the decoded state supplies everything else, and
             # CombatTracker still reads the STATE, so reward parity is untouched
-            nxt = apply_transition(self.cur, self._states(self.z), q, hit_thresh=self.hit_thresh,
-                                   link_hit_thresh=self.link_hit_thresh)
+            nxt = apply_transition(self.cur, self._states(self.z), q, calib=self.event_calib,
+                                   rng=self.ev_rng, _timers=self.hp0_timers)
         else:
             nxt = self._states(self.z, prev=self.cur)  # position accumulates from where Link actually is
         n = len(nxt)
@@ -268,7 +270,7 @@ def main():
     env = Dream(pred, dec, ck["decode_scale"], starts, seed_trk, NA, a.max_steps, CombatConfig(),
                 moved_thresh=None,      # soft gate: P(moved) * dpos, see decoded_to_states
                 moved_calib=ck.get("moved_calib", (1.0, 0.0)), thead=thead,
-                hit_thresh=ck.get("hit_thresh", 0.5), link_hit_thresh=ck.get("link_hit_thresh", 0.5),
+                event_calib=ck.get("event_calib"),
                 exit_persist=a.exit_persist)
     OBS = LAT + MEM_DIM
     model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy

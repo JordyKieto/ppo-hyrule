@@ -35,49 +35,80 @@ ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only
 
 
 def apply_transition(prev: list[CombatState], cur: list[CombatState], q: dict,
-                     hit_thresh: float = 0.5, link_hit_thresh: float = 0.5,
-                     hp_per_hit: int = 8) -> list[CombatState]:
+                     calib: dict | None = None, rng=None, hp_per_hit: int = 8,
+                     hp0_despawn_steps: int = 12, _timers: dict | None = None) -> list[CombatState]:
     """Edit the decoded next state with what the ACTION did, from `TransitionHead(z_t, a_t)`.
 
     The audit this answers: across all 63 constant actions the dream managed max 0.00 kills and max 0.70 of
-    6 available damage, and the damage it did show came from SHIELD actions, which cannot deal damage at all.
+    the 6 HP available, and the damage it did show came from SHIELD actions, which cannot deal damage at all.
     The reward reads HP out of a decoded state whose predictor ties the identity, so nothing changed and the
     only changes were decode noise -- billed as combat.
 
     Position comes from the classified direction and magnitude (a mode, so it does not shrink the way the
-    regressed magnitude did, 0.11x of true on moving steps). Damage comes from the event heads, applied as a
-    real HP decrement to the row the head names.
+    regressed magnitude did, 0.11x of true on moving steps).
+
+    Damage and despawn are SAMPLED from calibrated probabilities, not thresholded. A threshold tuned to
+    maximise F1 on a 0.02%-base-rate event is necessarily precision-heavy, so it fired ~0.9 times an episode
+    -- and a 2 HP Deku Baba needs TWO hits on the same row, so kills stayed at exactly 0.00 for every action.
+    Sampling a calibrated probability reproduces the real event RATE instead, which is what has to be right
+    for two hits to accumulate. The dream becomes stochastic, which PPO handles and the real game is anyway.
+
+    Despawn matters because a kill is booked when HP reaches 0 while the actor is still present, and the real
+    game then REMOVES it; without that a dead Baba lingers at HP 0 forever, so `baba_count` and `row_present`
+    disagree with the enemy dict and the room never empties. `hp0_despawn_steps` is a backstop: a row held at
+    0 HP longer than the dying animation is removed regardless of what the head says.
 
     Reward PARITY is preserved: this edits the STATE, and `CombatTracker` still computes all 18 terms from
     states exactly as the emulator run does. Nothing here computes reward.
-
-    Both thresholds are PROBABILITIES in (0, 1), tuned on the tuning slots and carried in the checkpoint.
-    They must not default to 0: `link_hit_thresh=0.0` compared a sigmoid against zero, which is always true,
-    so Link took damage on every single step and sat a permanent 8 HP below the decoded value.
     """
     import torch as _t
     from zelda_rl.dynamics import dir_unit_vectors, mag_centers
+    calib = calib or {}
+    rng = rng or np.random.default_rng()
     uv, mc = dir_unit_vectors(), mag_centers()
-    gate = _t.sigmoid(q["tr_moved"]).numpy()[:, 0]
+
+    def prob(logits, key, softmax_none=None):
+        """Platt-calibrated probability; identity when the checkpoint carries no calibration for this head."""
+        a, b = calib.get(key, (1.0, 0.0))
+        if softmax_none is None:
+            return 1.0 / (1.0 + np.exp(-(a * logits + b)))
+        p_none = _t.softmax(_t.as_tensor(logits), -1).numpy()[:, softmax_none]
+        pe = 1.0 - p_none
+        lg = np.log(np.clip(pe, 1e-6, 1 - 1e-6) / np.clip(1 - pe, 1e-6, 1 - 1e-6))
+        return 1.0 / (1.0 + np.exp(-(a * lg + b)))
+
+    gate = prob(q["tr_moved"].numpy()[:, 0], "moved")
     d = q["tr_dir"].numpy().argmax(-1)
     mg = q["tr_mag"].numpy().argmax(-1)
     step = uv[d] * (mc[mg] * gate)[:, None]
     dy = q["tr_dy"].numpy()[:, 0]
-    hitp = _t.softmax(q["tr_hit_row"], -1).numpy()
-    lhp = _t.sigmoid(q["tr_link_hit"]).numpy()[:, 0]
-    n_rows = hitp.shape[1] - 1
+    n_rows = q["tr_hit_row"].shape[1] - 1
+    p_hit = prob(q["tr_hit_row"].numpy(), "hit", softmax_none=n_rows)
+    p_gone = prob(q["tr_gone_row"].numpy(), "gone", softmax_none=n_rows)
+    hit_row = q["tr_hit_row"].numpy()[:, :n_rows].argmax(-1)
+    gone_row = q["tr_gone_row"].numpy()[:, :n_rows].argmax(-1)
+    p_lhit = prob(q["tr_link_hit"].numpy()[:, 0], "link_hit")
+    timers = _timers if _timers is not None else {}
+
     out = []
     for i, (pv, cu) in enumerate(zip(prev, cur)):
         cu.pos = (pv.pos[0] + float(step[i, 0]), pv.pos[1] + float(dy[i]), pv.pos[2] + float(step[i, 1]))
-        # enemy damage: the head names WHICH row, so the hit lands on a specific tracked actor
-        j = int(hitp[i, :n_rows].argmax())
-        if 1.0 - hitp[i, n_rows] > hit_thresh:
-            ptr = ROW_PTR_BASE + j * 0x100
-            e = cu.enemies.get(ptr)
+        if rng.random() < p_hit[i]:
+            e = cu.enemies.get(ROW_PTR_BASE + int(hit_row[i]) * 0x100)
             if e is not None and e.hp > 0:
                 e.hp = max(0, e.hp - 1)
-        if lhp[i] > link_hit_thresh and cu.hp > 0:      # probability, not a logit -- see the docstring
-            cu.hp = max(0, cu.hp - hp_per_hit)          # a Deku Baba lunge costs half a heart
+        if rng.random() < p_lhit[i] and cu.hp > 0:
+            cu.hp = max(0, cu.hp - hp_per_hit)      # a Deku Baba lunge costs half a heart
+        # despawn: the head's choice, or any row stuck at 0 HP past the dying animation
+        drop = {ROW_PTR_BASE + int(gone_row[i]) * 0x100} if rng.random() < p_gone[i] else set()
+        for ptr, e in list(cu.enemies.items()):
+            k = (i, ptr)
+            timers[k] = timers.get(k, 0) + 1 if e.hp <= 0 else 0
+            if timers[k] > hp0_despawn_steps:
+                drop.add(ptr)
+        for ptr in drop:
+            cu.enemies.pop(ptr, None)
+            timers.pop((i, ptr), None)
         out.append(cu)
     return out
 
