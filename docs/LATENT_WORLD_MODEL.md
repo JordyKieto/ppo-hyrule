@@ -1171,3 +1171,47 @@ oversampling raised event fidelity and trajectory-near-events, and did nothing h
 not sampling. The displacement head itself predicts magnitude at 1.05x of true and direction at 91% of its
 achievable ceiling (section 15), which means the per-step pieces are close to right and the error is in how
 they compose over time -- direction errors of ~27 deg median accumulate into a 3.3x tortuosity.
+
+## 24. Position and events compete for the latent, not for head capacity
+
+Weighting Link's position heavily in the decode-the-prediction loss (`--w-pos`) was A/B'd at 6 / 60 / 200,
+everything else fixed (oversample 50, unroll 8, 4 epochs), judged on event-rich windows at horizon 40.
+
+| `w_pos` | walk trajectory | hit trajectory | link_hit trajectory | damage detected | Baba HP removed |
+|---|---|---|---|---|---|
+| 6 | 1.38x | 1.11x | 1.11x | **55%** | **1.15** / 1.25 |
+| 60 | 1.20x | 1.07x | 1.11x | 25% | 0.35 |
+| **200** | **1.06x** | **1.00x / end 0.94x** | **0.93x / end 0.89x** | **0%** | **0.00** |
+
+(ratios are against identity = Link frozen at the window start; below 1.00 beats it)
+
+**Heavy position weighting fixes trajectory.** Walking goes 1.38x -> **1.06x**, and on both event window kinds
+it beats identity for the first time in this project (hit end 0.94x, link_hit 0.93x mean / 0.89x end).
+
+**And it destroys damage**: detection 55% -> 25% -> 0%, HP removed 1.15 -> 0.35 -> 0.00.
+
+### The contention is in `z`, not in the heads
+
+An earlier note in this log proposed "separating the position pathway from the event heads". That was wrong:
+they are **already** separate heads, and `TransitionHead` even has its own 2x512 trunk independent of
+`StateDecoder`. Nothing is shared at the output.
+
+What is shared is the **128-d latent and the single predictor**. `w_pos` applies to `link_pos` / `row_pos`
+inside `decode_loss`, which is computed on `dec(pred(z, a))` -- so that gradient flows back through the
+predictor *and the encoder* and changes what `z` encodes. At `w_pos 200` the latent becomes a position-accurate
+representation and the event structure that `TransitionHead(z_t, a_t)` reads out is no longer present. Damage
+detection collapses without a single event weight being touched.
+
+Both objectives are individually achievable on this data -- 1.15/1.25 HP removed at low `w_pos`, 0.93x
+trajectory at high `w_pos` -- just not simultaneously in one 128-d latent. So the loss weights are deciding
+what the latent is *about*, and separate heads cannot help when the representation they read has been
+repurposed.
+
+Two candidate fixes, neither yet tested:
+
+1. **Widen `z`.** The obvious one, but the evidence against it is stale: the width sweep in section 10 found
+   decode saturating at 128 and predictability degrading with width, and that was single-seed, predates the
+   decode-the-prediction objective, and was never evaluated on event-rich windows.
+2. **Detach the encoder for the position term**, so position is decoded *from* whatever `z` is rather than
+   dictating what `z` becomes. This isolates the mechanism: it tests whether the events need the capacity or
+   merely need it not taken away.
