@@ -56,11 +56,11 @@ def main():
     enc.load_state_dict(ck["encoder"]); enc.eval()
     dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
     # same construction and call convention as scripts/train_dream_ppo.py
-    pred = torch.nn.Sequential(torch.nn.Linear(LAT + NA, 512), torch.nn.ReLU(),
-                               torch.nn.Linear(512, 512), torch.nn.ReLU(), torch.nn.Linear(512, LAT))
-    pred.load_state_dict(ck["pred"]); pred.eval()
+    from zelda_rl.dynamics import load_predictor
+    pred = load_predictor(ck, LAT, NA)
     norm = Norm.load(ck["norm"])
     scale = ck["decode_scale"]
+    MT = ck.get("moved_thresh", 0.0)
 
     # first frame of each episode = a real savestate start state
     S, EP = [], []
@@ -111,7 +111,7 @@ def main():
                 obs = torch.cat([zz, torch.from_numpy(m)], -1)
                 act, _, _, _, h = pol.act(obs, h, torch.full((n,), 1.0 if t == 0 else 0.0))
                 zz = pred(torch.cat([zz, torch.nn.functional.one_hot(act, NA).float()], -1))
-                nxt = decoded_to_states(dec(zz), scale)
+                nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_thresh=MT)
                 for i, tr in enumerate(trs):
                     tr.step(cur[i], nxt[i])
                 cur = nxt
@@ -144,7 +144,7 @@ def main():
                 for _ in range(a.steps):
                     oh = torch.nn.functional.one_hot(torch.full((len(zz),), act_id), NA).float()
                     zz = pred(torch.cat([zz, oh], -1))
-                    nxt = decoded_to_states(dec(zz), scale)
+                    nxt = decoded_to_states(dec(zz), scale, prev=cur, moved_thresh=MT)
                     for i, t in enumerate(trs):
                         t.step(cur[i], nxt[i])
                     cur = nxt
@@ -179,7 +179,8 @@ def main():
             act = torch.from_numpy(rng.integers(0, NA, len(z)))
             z = pred(torch.cat([z, torch.nn.functional.one_hot(act, NA).float()], -1))
             p = dec(z)
-            states = decoded_to_states({k: v for k, v in p.items()}, scale)
+            states = decoded_to_states({k: v for k, v in p.items()}, scale,
+                                       prev=prev_states, moved_thresh=MT)
             bc_ = p["baba_count"].argmax(-1).numpy()
             rhp = np.asarray(ROW_HP_VALUES)[p["row_hp"].argmax(-1).numpy()]
             pres = (p["row_present"].numpy() > 0)

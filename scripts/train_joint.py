@@ -40,6 +40,7 @@ from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, N_LINK_ACTIONS, ROW
                          BCNet, Norm,
                          StateDecoder, decode_targets,
                          featurise, hp_class)
+from zelda_rl.dynamics import build_predictor  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
 
 DYING = 8
@@ -74,6 +75,9 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--w-dpos", type=float, default=2.0,
+                    help="weight on the zero-inflated displacement heads. These are what the dream "
+                         "integrates for motion, and over-moving by 20x was why it never reached the door.")
     ap.add_argument("--w-scene", type=float, default=2.0,
                     help="weight on the in-room / left-room head; it drives the -20 room-exit terminal")
     ap.add_argument("--whiten", action="store_true",
@@ -94,7 +98,7 @@ def main():
     meta, state, action, slot, epid, obs, has_obs = load_many([a.data, *a.extra_data])
     if a.extra_data:
         print(f"data: {a.data} + {len(a.extra_data)} extra run(s) -> {len(state):,} frames")
-    Y = decode_targets(state, obs)
+    Y = decode_targets(state, obs, epid=epid)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
     Fraw = featurise(state)
@@ -141,8 +145,7 @@ def main():
                 latent=a.latent, gru=0)
     dec = StateDecoder(latent=a.latent)
     NA = meta["n_actions"]
-    pred = nn.Sequential(nn.Linear(a.latent + NA, 512), nn.ReLU(), nn.Linear(512, 512), nn.ReLU(),
-                         nn.Linear(512, a.latent))
+    pred = build_predictor(a.latent, NA)          # RESIDUAL: z + f(z,a); see zelda_rl/dynamics.py
     A = F.one_hot(act, NA).float()
     params = list(enc.parameters()) + list(dec.parameters()) + list(pred.parameters())
     opt = torch.optim.Adam(params, lr=a.lr)
@@ -154,6 +157,12 @@ def main():
     V2M = torch.from_numpy(Y["v2_mask"].astype(np.float32))  # v1 episodes carry no Link body/collision state
     MELEE = torch.from_numpy(Y["link_melee"].astype(np.int64))
     LACT = torch.from_numpy(Y["link_action"].astype(np.int64))
+    DPOSM = torch.from_numpy(Y["dpos_mask"].astype(np.float32))
+    _mv = Y["link_moved"][:, 0] > 0.5
+    MOVED_PW = torch.tensor(float(np.sqrt(max((~_mv).sum(), 1) / max(_mv.sum(), 1))))  # sqrt: raw ratio collapsed before
+    print(f"displacement: Link moves on {_mv.mean():.1%} of frames "
+          f"(true per-step XZ mean {np.linalg.norm(Y['link_dpos'][:, [0, 2]], axis=1).mean():.2f} units); "
+          f"moved pos_weight {float(MOVED_PW):.2f}")
     print(f"obs available on {has_obs.mean():.1%} of frames (camera yaw + Link velocity come from it)")
     pos = Y["link_sf1"][tr_all].mean(0)
     SF1_PW = torch.from_numpy(((1 - pos) / np.maximum(pos, 1e-4)).clip(1, 50).astype(np.float32))
@@ -228,6 +237,16 @@ def main():
             L = L + (ce_m * vm).sum() / den
             ce_a = F.cross_entropy(p["link_action"], LACT[i], weight=CW["link_action"], reduction="none")
             L = L + (ce_a * vm).sum() / den
+            # Displacement, zero-inflated. "Did Link move" is a classifier (he does not, on 95% of steps);
+            # the magnitude is trained ONLY on frames where he did, so the 95% of zeros cannot drag the
+            # regression toward a constant. Positive class is weighted by its own rarity.
+            bce_m = F.binary_cross_entropy_with_logits(p["link_moved"], Yt["link_moved"][i],
+                                                      pos_weight=MOVED_PW, reduction="none").squeeze(-1)
+            L = L + a.w_dpos * (bce_m * vm).sum() / den
+            dm = DPOSM[i] * vm
+            if float(dm.sum()) > 0:
+                L = L + a.w_dpos * (((p["link_dpos"] - Yt["link_dpos"][i]) ** 2).mean(-1)
+                                    * dm).sum() / dm.sum().clamp(min=1)
         L = L + a.w_scene * F.cross_entropy(p["scene"], Yt["scene"][i], weight=CW["scene"])
         L = L + 0.1 * F.cross_entropy(p["room"], Yt["room"][i])
         L = L + a.w_hp * (hp_l + rh.sum() / (m * wr[i]).sum().clamp(min=1))
@@ -236,6 +255,7 @@ def main():
 
     mu = sd = None
     best_skill, best_pm, best_state, bad = -1e9, None, None, 0
+    best_obj = float('inf')
     t0 = time.time()
     for ep in range(1, a.epochs + 1):
         enc.train(); dec.train(); pred.train()
@@ -281,8 +301,14 @@ def main():
             f = (lambda x, y: F.mse_loss((x - mu) / sd, (y - mu) / sd)) if a.whiten else F.mse_loss
             pm, im = float(f(zh, zn)), float(f(zt, zn))
         skill = 1 - pm / im
-        if skill > best_skill + 1e-4:
-            best_skill, best_pm, bad = skill, pm, 0
+        # Select on the COMBINED tune objective, not on skill alone. Skill = 1 - pred_err/identity_err, and a
+        # zero-initialised residual predictor IS the identity, so skill = 0 at epoch 0 -- which beats every
+        # learned value (all are negative, the predictor does not beat "assume no change"). Selecting on
+        # skill therefore locked in the UNTRAINED predictor and froze the decoder at epoch 3 with it.
+        # The decode term is what the reward reads, so it has to keep improving regardless.
+        obj = (td / n) + a.w_pred * pm        # decode (train) + prediction (tune), the trained objective
+        if obj < best_obj - 1e-6:
+            best_obj, best_skill, best_pm, bad = obj, skill, pm, 0
             best_state = {"enc": {k: v.clone() for k, v in enc.state_dict().items()},
                           "dec": {k: v.clone() for k, v in dec.state_dict().items()},
                           "pred": {k: v.clone() for k, v in pred.state_dict().items()}}
@@ -290,13 +316,33 @@ def main():
             bad += 1
         if not a.quiet:
             print(f"  ep {ep:>3}/{a.epochs}  decode {td/n:.4f}  pred {tp/n:.5f} | tune pred {pm:.5f} "
-                  f"identity {im:.5f}  skill {skill:+.3f}{'  *' if bad == 0 else ''}  "
+                  f"identity {im:.5f}  skill {skill:+.3f}  obj {obj:.4f}{'  *' if bad == 0 else ''}  "
                   f"({time.time()-t0:.0f}s)", flush=True)
         if bad >= a.patience:
             break
     enc.load_state_dict(best_state["enc"]); dec.load_state_dict(best_state["dec"])
     pred.load_state_dict(best_state["pred"])
-    print(f"  best tune skill {best_skill:+.3f} (pred {best_pm:.5f})")
+    print(f"  selected on combined objective {best_obj:.4f}: tune skill {best_skill:+.3f} "
+          f"(pred {best_pm:.5f}). Skill 0.000 means the predictor exactly matches 'assume no change'.")
+
+    # Threshold for the "did Link move" head, chosen on the TUNING slots, never on test. Same recipe that
+    # took damage-event F1 from 0.746 to 0.906: a class-weighted logit at 0 is not calibrated, and here it
+    # gave recall 0.907 at precision 0.093.
+    with torch.no_grad():
+        pt = dec(E(torch.from_numpy(tu)))["link_moved"].numpy()[:, 0]
+    tt = Y["link_moved"][tu][:, 0] > 0.5
+    best_f1, moved_thresh = -1.0, 0.0
+    for q in np.unique(np.quantile(pt, np.linspace(0.50, 0.999, 120))):
+        pr = pt > q
+        tp = float((pr & tt).sum())
+        if tp == 0:
+            continue
+        prec, rec = tp / max(pr.sum(), 1), tp / max(tt.sum(), 1)
+        f1 = 2 * prec * rec / (prec + rec)
+        if f1 > best_f1:
+            best_f1, moved_thresh = f1, float(q)
+    print(f"  moved threshold {moved_thresh:+.3f} chosen on {len(tu):,} tuning frames "
+          f"(tune F1 {best_f1:.3f}, base rate {tt.mean():.3f})")
 
     # ---------------- probes
     print("\n--- probes (test slots) ---")
@@ -358,13 +404,14 @@ def main():
     # because most of these are rare: airborne is 10% of frames, a live swing 14%, knocked-airborne 0.1%.
     vmask = Y["v2_mask"][te] > 0
     if vmask.any():
-        from zelda_rl.bc import BG_BITS, LINK_ACTION_NAMES
-        bgn = ("ground", "grnd_touch", "grnd_leave", "wall", "ceiling", "water", "grnd_strict",
-               "crushed", "player_wall")
+        from zelda_rl.bc import BG_DECODE_BITS, LINK_ACTION_NAMES
+        # the 1-frame GROUND_TOUCH / GROUND_LEAVE bits are no longer decoded (landing is derived from the
+        # airborne transition instead, zelda_rl.combat.landed), nor is the redundant GROUND_STRICT
+        bgn = ("ground", "wall", "ceiling", "water", "crushed", "player_wall")
         bgp = (p["link_bg"].numpy() > 0)[vmask]; bgt = (Y["link_bg"][te] > 0.5)[vmask]
         bits = [f"{bgn[j]} {float((bgp[:, j] == bgt[:, j]).mean()):.3f}/"
                 f"{float(bgp[bgt[:, j], j].mean()) if bgt[:, j].any() else float('nan'):.2f}"
-                for j in range(len(BG_BITS)) if bgt[:, j].mean() > 0.0005]
+                for j in range(len(BG_DECODE_BITS)) if bgt[:, j].mean() > 0.0005]
         print(f"        COLLISION (acc/recall): {'  '.join(bits)}")
 
         def acc(key, tgt):
@@ -392,7 +439,7 @@ def main():
             e = float(np.abs(p[key].numpy()[vmask] - Y[key][te][vmask]).mean())
             print(f"          {lbl} MAE {e:.4f} ({unit})")
         for key, lbl, m in (("link_shape_yaw", "shape yaw", None),
-                            ("link_wall_yaw", "wall yaw", (Y["link_bg"][te][:, 3] > 0.5)),
+                            ("link_wall_yaw", "wall yaw", (Y["link_bg"][te][:, 1] > 0.5)),
                             ("link_parallel_yaw", "parallel yaw", (Y["link_ztarget"][te][:, 0] > 0.5))):
             sel = vmask if m is None else (vmask & m)     # wall yaw only means anything while touching one
             if not sel.any():
@@ -401,6 +448,23 @@ def main():
             _d = np.degrees(np.abs(np.arctan2(q[:, 0], q[:, 1]) - np.arctan2(qt[:, 0], qt[:, 1])))
             print(f"          {lbl} median err {float(np.median(np.minimum(_d, 360 - _d))):.1f} deg "
                   f"(n={int(sel.sum()):,})")
+        # The metric that found the over-move: is the model's displacement DISTRIBUTION right, not just its
+        # mean error. A regression head that cannot emit zero scored mean 12.11 against a true mean of 0.58.
+        mv_p = (p["link_moved"].numpy()[:, 0] > moved_thresh)[vmask]
+        mv_t = (Y["link_moved"][te][:, 0] > 0.5)[vmask]
+        # link_dpos is standardised for training (it is in CONT), so undo that before reporting world units
+        dp_p = (p["link_dpos"].numpy() * sc["link_dpos"][1] + sc["link_dpos"][0])[vmask]
+        dp_t = Y["link_dpos"][te][vmask]
+        mag_p = np.linalg.norm(dp_p[:, [0, 2]], axis=1) * mv_p     # gated by the classifier, as the dream does
+        mag_t = np.linalg.norm(dp_t[:, [0, 2]], axis=1)
+        prec = float(mv_t[mv_p].mean()) if mv_p.any() else float("nan")
+        print(f"          MOVED: acc {float((mv_p == mv_t).mean()):.4f} recall "
+              f"{float(mv_p[mv_t].mean()) if mv_t.any() else float('nan'):.3f} precision {prec:.3f} "
+              f"(base rate {float(mv_t.mean()):.3f})")
+        print(f"          displacement per step: true mean {mag_t.mean():.2f} / model {mag_p.mean():.2f} "
+              f"-> ratio {mag_p.mean() / max(mag_t.mean(), 1e-9):.2f}x  "
+              f"(std {mag_t.std():.2f} vs {mag_p.std():.2f}); "
+              f"on truly-moving steps MAE {float(np.abs(mag_p - mag_t)[mv_t].mean()) if mv_t.any() else float('nan'):.2f}")
         zp = (p["link_ztarget"].numpy()[:, 0] > 0)[vmask]; zt_ = (Y["link_ztarget"][te][:, 0] > 0.5)[vmask]
         ap_ = (p["link_airborne"].numpy()[:, 0] > 0)[vmask]; at_ = (Y["link_airborne"][te][:, 0] > 0.5)[vmask]
         print(f"          z_target acc {float((zp == zt_).mean()):.4f} recall {float(zp[zt_].mean()):.3f} | "
@@ -439,7 +503,7 @@ def main():
                 # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
-                "norm": norm.state_dict(), "split": split, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "norm": norm.state_dict(), "split": split, "pred_residual": True, "moved_thresh": moved_thresh, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)

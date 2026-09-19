@@ -425,3 +425,81 @@ the trained policy inside the dream moves Link **250 world units in 100 steps**,
 emulator covers enough ground to leave the room in **21–91 steps**. So the dream never puts Link near the
 door, `left%` stays 0.0% through training, and the −20 exit terminal is unreachable — while in the emulator
 the policy leaves 3/3 times with the value function still reading V≈3.2 one step before the −20.
+
+## 13. The predictor over-moved by 20x, and fixing it made room exit reachable
+
+The dream's failure was diagnosed as Link moving too *little* (250 world units in 100 steps, against a real
+policy that exits in 21–91 steps). Measuring the per-step distribution on held-out slots inverted that:
+
+| per-step XZ displacement (100 ms) | mean | std | p50 | p90 |
+|---|---|---|---|---|
+| TRUE (real state) | **0.58** | 3.09 | **0.00** | **0.00** |
+| decode round-trip, no prediction | 1.79 | 7.32 | 0.00 | 0.00 |
+| PREDICTED | **12.11** | 6.79 | 12.52 | 20.88 |
+
+Link is stationary on **95% of real steps**. The predictor moved him ~12 units on *every* step — 20.9× too
+far — in incoherent directions, so net drift stayed near zero. Both observations are the same bug.
+
+And the reason no predictor tuning could fix it: **absolute `link_pos` decodes to ~12 units of error while a
+real step is 0.58 units**. The signal is ~20× smaller than the noise it was being measured through.
+
+### Three changes, each an already-proven technique
+
+1. **Residual predictor** `z + f(z, a)`, in the new `zelda_rl/dynamics.py` (five scripts had each
+   constructed the predictor by hand). The old one mapped `(z, a) → z_{t+1}` directly, rebuilding all 128
+   dims every step, so any reconstruction error became motion. The output layer is zero-initialised, so an
+   untrained predictor is exactly the identity. The dynamics sweep had measured this on the frozen-BC latent
+   as skill −7.24 → −1.73 and it had never been carried into the joint model.
+2. **Zero-inflated displacement heads.** `link_moved` (classifier) + `link_dpos` (magnitude, trained *only*
+   where Link moved). This is the HP treatment — regression → classification → tuned threshold, which took
+   damage F1 0.286 → 0.906 — applied to a quantity that is 95% exact zeros. A regression head cannot emit
+   zero; a gated one can.
+3. **The dream integrates position** (`pos_t + dpos`, gated by `link_moved`) instead of reading the absolute
+   head, so motion accumulates coherently.
+
+### Two bugs the changes exposed
+
+- **The selection metric became degenerate.** `skill = 1 − pred_err/identity_err`, and a zero-initialised
+  residual predictor *is* the identity, so skill = 0 at epoch 0 — better than every learned value, which are
+  all negative. Early stopping locked in the untrained predictor and froze the decoder at epoch 3 with it.
+  Selection now uses the combined objective (decode + `w_pred`·pred); skill is reported, not optimised.
+  Worth stating plainly: **the predictor ties identity, it does not beat it.**
+- **`link_dpos` was unstandardised.** In raw world units (steps up to 44), its MSE swamped every other head —
+  decode loss ran at ~450 instead of ~0.2 and absolute position regressed to MAE 29.5. Added to `CONT`.
+
+### Result (`joint_v9_resid`)
+
+| | before | after |
+|---|---|---|
+| per-step displacement vs true | **20.85×** | **2.52×** |
+| `left%` reachable in the dream, any constant action | **0%** | **100%** (holding E / N / SE) |
+| `hurt` recall | 0.71 (n=34) | **1.00** (n=160) |
+| `link_pos` MAE | 9.43 | 12.46 |
+| baba_count / row_state / link_hp | 0.9998 / 0.9961 / 0.9910 | 0.9992 / 0.9874 / 0.9857 |
+| left-room recall (held-out exits) | 1.000 | 1.000, FP 0.00099 |
+| inverse dynamics | 0.0878 | 0.0846 |
+
+Room exit becoming reachable is the point: the −20 terminal could not fire during training, so the policy had
+no reason to avoid the thing it then did 3/3 times in the emulator with V ≈ 3.2 one step before the penalty.
+
+### Fixes 2 and 3
+
+- **GROUND_TOUCH (recall 0.02) is no longer decoded.** The decomp comments it "only active for 1 frame" and
+  the env samples at 10 Hz, so ~5 of 6 occurrences are not in the recorded state. Landing is derived instead
+  from the airborne transition (`zelda_rl.combat.landed`), a field that decodes at 1.000/1.000 — the
+  documented pattern that recovered blocks from lunge→pull_back cycles. GROUND_LEAVE and the redundant
+  GROUND_STRICT dropped with it; collision decode is now ground/wall/ceiling/water/crushed/player_wall, all
+  at ≥ 0.99 recall.
+- **`hurt` fixed by merging, not by more data.** `hurt_still` and `hurt_airborne` are the same semantic state,
+  and merged the class went 0.71 (n=34) → **1.00** (n=160). The planned extra `suicide` collection was not
+  needed. Nothing in the reward depends on it anyway: the DAMAGED stateFlags1 bit decodes at 1.000/1.00.
+
+### Still open
+
+- **`MOVED` precision 0.295** at recall 0.797 — it over-predicts movement ~3.4×. The threshold was tuned on
+  the tuning slots, where the moved base rate is **0.182**, but on the test slots it is **0.085**: the
+  threshold does not transfer because the slots differ in how much Link moves. Tuning per-slot, or on a
+  base-rate-matched subset, is the next step.
+- Residual displacement over-move of **2.52×**, down from 20.85× but not 1×.
+- `link_pos` MAE rose 9.43 → 12.46. The absolute head matters less now that the dream integrates, but it is
+  still what grounds enemy distances in the reward.

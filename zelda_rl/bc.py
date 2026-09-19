@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from zelda_rl.combat import BG_BITS, BG_GROUND, BG_WALL
+from zelda_rl.combat import BG_BITS, BG_DECODE_BITS, BG_GROUND, BG_WALL
 from zelda_rl.state_layout import (ENEMY_FIELDS as ROW_F, LINK_FIELDS_V1, LINK_FIELDS_V2, N_ROWS, ROW_DIM,
                                   link_dim)
 
@@ -107,7 +107,7 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
     sf3 = col("sf3").astype(np.int64)
     return np.concatenate([
         (col("speed") / 10.0)[:, None], vel / 10.0, (np.linalg.norm(vel, axis=1) / 10.0)[:, None],
-        np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),
+        np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),   # input: all 9 bits
         (wys * touching_wall)[:, None], (wyc * touching_wall)[:, None],
         ((col("floor_height") - col("pos_y")) / 100.0)[:, None],
         sys_[:, None], syc[:, None], tus[:, None], tuc[:, None],
@@ -297,7 +297,8 @@ OBS_CAM_YAW = slice(12, 14)     # GLOBAL_FIELDS_V2: camera_yaw_sin_cos
 OBS_LINK_VEL = slice(14, 17)    # GLOBAL_FIELDS_V2: link_vel
 
 
-def decode_targets(state: np.ndarray, obs: np.ndarray | None = None) -> dict[str, np.ndarray]:
+def decode_targets(state: np.ndarray, obs: np.ndarray | None = None,
+                   epid: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """Raw state (v1 335-d or v2 358-d) -> the fields CombatTracker.step() reads. Continuous fields stay in raw units.
 
     `obs` is the 483-d observation the demonstrator saw, stored alongside every transition. Camera yaw and
@@ -348,7 +349,36 @@ def decode_targets(state: np.ndarray, obs: np.ndarray | None = None) -> dict[str
         out["cam_yaw"] = np.asarray(obs[:, OBS_CAM_YAW], np.float32)
         out["link_vel"] = np.asarray(obs[:, OBS_LINK_VEL], np.float32)
     out.update(_v2_targets(lk, v2, n))
+    out.update(_dpos_targets(lk, epid, n))
     return out
+
+
+MOVED_THRESH = 1.0          # world units of XZ travel in one 100 ms step that counts as "moved"
+
+
+def _dpos_targets(lk: np.ndarray, epid: np.ndarray | None, n: int) -> dict[str, np.ndarray]:
+    """Displacement INTO this frame, plus whether Link moved at all.
+
+    Absolute position is decoded to ~9-13 world units of error while the true per-step step is 0.58, so the
+    signal is ~20x smaller than the noise it is measured through and no predictor improvement can show up in
+    it. This head learns the step directly instead. The dream integrates it (pos_t + dpos) rather than
+    reading the absolute head, so motion accumulates coherently.
+
+    First frame of each episode has no predecessor: marked not-moved with zero displacement and excluded
+    from the magnitude loss by `dpos_mask`.
+    """
+    pos = lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]]
+    d = np.zeros_like(pos)
+    d[1:] = pos[1:] - pos[:-1]
+    valid = np.ones(n, np.float32)
+    valid[0] = 0.0
+    if epid is not None:
+        boundary = np.r_[True, epid[1:] != epid[:-1]]
+        d[boundary] = 0.0
+        valid[boundary] = 0.0
+    moved = ((np.linalg.norm(d[:, [0, 2]], axis=1) > MOVED_THRESH) & (valid > 0)).astype(np.float32)
+    return {"link_dpos": d.astype(np.float32), "link_moved": moved[:, None],
+            "dpos_mask": (valid * moved).astype(np.float32)}   # magnitude learned only where it moved
 
 
 def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
@@ -360,7 +390,7 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
     """
     if not v2:
         z = lambda *s: np.zeros((n, *s), np.float32)                        # noqa: E731
-        return {"v2_mask": z(), "link_bg": z(len(BG_BITS)),
+        return {"v2_mask": z(), "link_bg": z(len(BG_DECODE_BITS)),
                 "link_melee": np.zeros(n, np.int64) + MELEE_STATE_VALUES.index(0),
                 "link_action": np.full(n, N_LINK_ACTIONS - 1, np.int64),
                 "link_speed": z(1), "link_wall_yaw": z(2), "link_floor_dy": z(1), "link_shape_yaw": z(2),
@@ -376,7 +406,7 @@ def _v2_targets(lk: np.ndarray, v2: bool, n: int) -> dict[str, np.ndarray]:
                 - np.asarray(MELEE_STATE_VALUES)).argmin(-1)
     return {
         "v2_mask": np.ones(n, np.float32),
-        "link_bg": np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_BITS], 1),
+        "link_bg": np.stack([((bg >> b) & 1).astype(np.float32) for b in BG_DECODE_BITS], 1),
         "link_melee": ms.astype(np.int64),
         "link_action": np.array([_ACTION_INDEX.get(int(v), N_LINK_ACTIONS - 1)
                                  for v in col("action_fn_rel")], np.int64),
@@ -461,7 +491,10 @@ assert len(LINK_ACTION_NAMES) == N_LINK_ACTIONS
 # behaviours have two routine values (e.g. two idle, two dying). Merge them into one semantic state."
 # 3146184 is a 1-2 frame transition inside a sidehop -- it is airborne like 3159404, and as its own class it
 # scored recall 0.12 on 32 test frames even after the `moves` scenario raised its density 30x.
-LINK_ACTION_MERGE = {3146184: 3159404}
+# `hurt_still` and `hurt_airborne` are the same semantic state as `hurt` -- reacting to damage -- and split
+# three ways `hurt` scored recall 0.71 on 34 test frames. Merged, per the same rule that fixed the sidehop
+# transition. Nothing in the reward needs the distinction: the DAMAGED stateFlags1 bit decodes at 1.000/1.00.
+LINK_ACTION_MERGE = {3146184: 3159404, 3157620: 3157388, 3156912: 3157388}
 _ACTION_INDEX = {v: i for i, v in enumerate(LINK_ACTION_VALUES)}
 _ACTION_INDEX.update({src: _ACTION_INDEX[dst] for src, dst in LINK_ACTION_MERGE.items()
                       if dst in _ACTION_INDEX})
@@ -504,9 +537,15 @@ class StateDecoder(nn.Module):
         self.link_vel = _layer(latent, 3, 0.1)         # Link's momentum, which a jump attack depends on
         # --- v2: what Link is DOING and what he is TOUCHING. Without these the dream cannot tell a jump
         # from a roll from a whiffed swing, which is why an action left almost no trace in the latent.
-        self.link_bg = _layer(latent, len(BG_BITS), 0.1)        # ground / wall / ceiling / water / crushed
+        self.link_bg = _layer(latent, len(BG_DECODE_BITS), 0.1)        # ground / wall / ceiling / water / crushed
         self.link_melee = _layer(latent, N_MELEE_STATES, 0.1)   # a sword swing is live
         self.link_action = _layer(latent, N_LINK_ACTIONS, 0.1)  # Link's action state machine
+        # Displacement is ZERO-INFLATED: Link does not move at all on 95% of real steps (true per-step XZ
+        # mean 0.58, median 0.00). A regression head cannot emit an exact zero, so it emitted 12.11 every
+        # step -- 20.9x too much, in incoherent directions. Split it the way HP was split (0.286 -> 0.906):
+        # a classifier for "did it change", and a magnitude trained ONLY where it did.
+        self.link_moved = _layer(latent, 1, 0.1)
+        self.link_dpos = _layer(latent, 3, 0.1)
         self.link_body = _layer(latent, 11, 0.1)   # speed, wall_yaw(2), floor_dy, shape_yaw(2),
         #                                            parallel_yaw(2), fall_distance, ztarget, airborne
         self.row_expand = _layer(latent, n_rows * row_hidden)
@@ -525,6 +564,7 @@ class StateDecoder(nn.Module):
                 "link_sf1": self.link_sf1(z), "cam_yaw": self.cam_yaw(z), "link_vel": self.link_vel(z),
                 "link_bg": self.link_bg(z), "link_melee": self.link_melee(z),
                 "link_action": self.link_action(z),
+                "link_moved": self.link_moved(z), "link_dpos": self.link_dpos(z),
                 **dict(zip(V2_BODY, self.link_body(z).split(V2_BODY_SPLIT, dim=-1))),
                 "row_present": r[..., 0], "row_is_baba": r[..., 1], "row_hp": r[..., 2:j],
                 "row_pos": r[..., j:j + 3],

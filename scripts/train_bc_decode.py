@@ -30,7 +30,9 @@ from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecode
 
 DEFAULT_DATA = "datasets/transitions/deku-baba/20260918-134229"
 DYING = 8                    # index of "dying" in dataset.json["baba_states"]
-CONT = ("link_pos", "link_yaw", "row_pos")
+# link_dpos is in RAW world units (steps up to 44), so unstandardised its MSE swamped every other
+# head -- the decode loss ran at ~450 instead of ~0.2 and absolute position regressed to MAE 29.
+CONT = ("link_pos", "link_yaw", "row_pos", "link_dpos")
 
 
 def load_many(dirs):

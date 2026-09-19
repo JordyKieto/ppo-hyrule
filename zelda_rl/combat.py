@@ -191,6 +191,27 @@ BG_GROUND, BG_GROUND_TOUCH, BG_GROUND_LEAVE, BG_WALL, BG_CEILING = 0, 1, 2, 3, 4
 BG_WATER, BG_WATER_TOUCH, BG_GROUND_STRICT, BG_CRUSHED, BG_PLAYER_WALL = 5, 6, 7, 8, 9
 BG_BITS = [BG_GROUND, BG_GROUND_TOUCH, BG_GROUND_LEAVE, BG_WALL, BG_CEILING,
            BG_WATER, BG_GROUND_STRICT, BG_CRUSHED, BG_PLAYER_WALL]
+# Bits worth DECODING. GROUND_TOUCH and GROUND_LEAVE are commented "only active for 1 frame" in the decomp,
+# and the env samples every 6 VI frames (10 Hz), so ~5 of 6 occurrences are not in the recorded state at all
+# -- GROUND_TOUCH scored recall 0.02. Per docs/ADDING_OBSERVATIONS.md ("a flag that flickers for 1-2 frames
+# is invisible at 10 Hz; derive the event from a slower signal instead", which is how blocks were recovered
+# from lunge -> pull_back cycles), landing is derived from the airborne transition instead: see `landed()`.
+# GROUND_STRICT is dropped as well: it tracks GROUND almost exactly, so it adds a head and no information.
+BG_DECODE_BITS = [BG_GROUND, BG_WALL, BG_CEILING, BG_WATER, BG_CRUSHED, BG_PLAYER_WALL]
+
+
+def landed(prev_airborne, cur_airborne):
+    """Touched down this step: was off the ground, now on it.
+
+    Replaces decoding BGCHECKFLAG_GROUND_TOUCH. `airborne` (the GROUND bit) decodes at 1.000 accuracy /
+    1.000 recall, so a transition on it is reliable where the 1-frame flag is not.
+    """
+    return (prev_airborne > 0.5) & (cur_airborne <= 0.5)
+
+
+def left_ground(prev_airborne, cur_airborne):
+    """Took off this step. Replaces BGCHECKFLAG_GROUND_LEAVE, same reasoning as `landed`."""
+    return (prev_airborne <= 0.5) & (cur_airborne > 0.5)
 
 
 def _read_link_body(ram, player: int) -> dict:

@@ -34,10 +34,27 @@ FN_BY_STATE = [_FN_FOR_STATE.get(i, 0) for i in range(N_BABA_STATES)]
 ROW_PTR_BASE = 0x80300000          # synthetic, stable per row: the tracker only uses pointers as identity
 
 
-def decoded_to_states(p: dict, scale: dict) -> list[CombatState]:
-    """Decoder output (batched) -> one CombatState per batch element."""
+def decoded_to_states(p: dict, scale: dict, prev: list[CombatState] | None = None,
+                      moved_thresh: float = 0.0) -> list[CombatState]:
+    """Decoder output (batched) -> one CombatState per batch element.
+
+    With `prev`, Link's position is INTEGRATED (prev.pos + decoded displacement) instead of read from the
+    absolute head. Absolute position decodes to ~12 world units of error while a real step is 0.58, so the
+    per-step signal is ~20x smaller than the noise it would be measured through; reading it absolutely is why
+    the dream's motion was incoherent -- 12.11 units of jitter per step against a true 0.58, which averaged
+    out to almost no net drift, so Link never reached the door and the -20 exit never fired in training.
+
+    `link_moved` gates it: Link is stationary on 95% of real steps, and a displacement head that cannot emit
+    an exact zero will always move him. The threshold is the one tuned on the tuning slots.
+    """
     lhp = np.asarray(LINK_HP_VALUES)[p["link_hp"].argmax(-1).numpy()]
     lpos = p["link_pos"].numpy() * scale["link_pos"][1] + scale["link_pos"][0]
+    if prev is not None and "link_dpos" in p and "link_moved" in p:
+        d = p["link_dpos"].numpy()
+        if "link_dpos" in scale:
+            d = d * scale["link_dpos"][1] + scale["link_dpos"][0]
+        gate = (p["link_moved"].numpy()[:, 0] > moved_thresh)[:, None]
+        lpos = np.asarray([list(s.pos) for s in prev], np.float32) + d * gate
     lyaw = p["link_yaw"].numpy()
     yaw = (np.arctan2(lyaw[:, 0], lyaw[:, 1]) / (2 * np.pi) * 65536.0).astype(np.int64) % 65536
     bits = (p["link_bits"].numpy() > 0)
