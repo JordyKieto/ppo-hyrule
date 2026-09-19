@@ -67,6 +67,16 @@ LINK_FEAT_DIM, ROW_FEAT_DIM = len(LINK_FEAT_NAMES), len(ROW_FEAT_NAMES)
 LINK_V2_FEAT_DIM = len(LINK_V2_FEAT_NAMES)
 
 
+def wants_v2(link_dim_of_checkpoint: int) -> bool:
+    """Whether a checkpoint's encoder was trained with the v2 Link block, from the width it stored."""
+    if link_dim_of_checkpoint == LINK_FEAT_DIM:
+        return True
+    if link_dim_of_checkpoint == LINK_FEAT_DIM_V1:
+        return False
+    raise ValueError(f"checkpoint link_dim {link_dim_of_checkpoint} is neither "
+                     f"{LINK_FEAT_DIM_V1} (pre-v2) nor {LINK_FEAT_DIM} (v2)")
+
+
 def _sincos(units):
     a = units.astype(np.float32) * (2.0 * np.pi / TURNS)
     return np.sin(a), np.cos(a)
@@ -114,8 +124,16 @@ def _link_v2_feats(lk: np.ndarray, v2: bool, n: int) -> np.ndarray:
     ], 1).astype(np.float32)
 
 
-def featurise(state: np.ndarray) -> dict[str, np.ndarray]:
-    """state: (N, 335) v1 or (N, 358) v2 float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16)."""
+LINK_FEAT_DIM_V1 = LINK_FEAT_DIM - LINK_V2_FEAT_DIM      # 45: the width checkpoints before state v2 expect
+
+
+def featurise(state: np.ndarray, link_v2: bool = True) -> dict[str, np.ndarray]:
+    """state: (N, 335) v1 or (N, 358) v2 float32 -> dict of link (N, Dl), rows (N, 16, Dr), ids (N, 16) int64, mask (N, 16).
+
+    `link_v2=False` omits the Link body/collision/action block, giving the 45-wide link vector that every
+    checkpoint trained before state v2 expects. Pass it when loading such a checkpoint -- its encoder's first
+    layer is 45 wide and cannot consume the 122-d vector. `link_feat_dim(ckpt["link_dim"])` picks for you.
+    """
     state = np.asarray(state, dtype=np.float32)
     n = len(state)
     lk, rows, v2 = _split(state)
@@ -136,8 +154,7 @@ def featurise(state: np.ndarray) -> dict[str, np.ndarray]:
         (lk[:, [LI["arrow_row"]]] >= 0).astype(np.float32),
         present.sum(1, keepdims=True), is_baba.sum(1, keepdims=True),
         bits,
-        _link_v2_feats(lk, v2, n),
-    ], 1).astype(np.float32)
+    ] + ([_link_v2_feats(lk, v2, n)] if link_v2 else []), 1).astype(np.float32)
 
     rpos = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
     d = rpos - lpos[:, None, :]

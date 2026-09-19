@@ -1,40 +1,15 @@
 {
-  "model": "checkpoints/dynamics/joint_v6_state2.pt",
+  "model": "/tmp/sweep/lat192.pt",
   "dirs": [
-    "datasets/transitions/deku-baba-v2/20260919-031134/",
-    "datasets/transitions/deku-baba-scenarios/20260919-032846/"
+    "datasets/transitions/deku-baba-v2/20260919-031134/"
   ],
-  "pooled_top1": 0.20827709086982343,
+  "pooled_top1": 0.07716201558031752,
   "by_source": [
     {
       "source": "policy",
-      "n": 22240,
-      "top1": 0.0689748201438849,
-      "marginal": 0.06115107913669065
-    },
-    {
-      "source": "flail",
-      "n": 7220,
-      "top1": 0.055401662049861494,
-      "marginal": 0.018421052631578946
-    },
-    {
-      "source": "suicide",
-      "n": 2643,
-      "top1": 0.957623912220961,
-      "marginal": 0.687097994702989
-    },
-    {
-      "source": "walkout",
-      "n": 2043,
-      "top1": 0.6632403328438571,
-      "marginal": 0.2956436612824278
-    },
-    {
-      "source": "wall",
-      "n": 2896,
-      "top1": 0.6543508287292817,
-      "marginal": 0.22272099447513813
+      "n": 20282,
+      "top1": 0.07716201558031752,
+      "marginal": 0.04481806527955823
     }
   ]
 }

@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.bc import BCNet, Norm, featurise  # noqa: E402
+from zelda_rl.bc import BCNet, Norm, featurise, wants_v2  # noqa: E402
 
 
 def load_runs(dirs):
@@ -56,6 +56,10 @@ def main():
     ap.add_argument("--data", nargs="*", default=None)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--hidden", type=int, default=256)
+    ap.add_argument("--only", default=None,
+                    help="restrict to one source (e.g. 'policy'), so the probe is TRAINED and tested on the "
+                         "same generating process. Mixing sources trains the probe partly on uniform-random "
+                         "`flail` actions, which makes it a worse probe for the policy frames.")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     torch.set_num_threads(6)
@@ -73,8 +77,11 @@ def main():
     norm = Norm.load(mk["norm"])
     NA = mk["n_actions"]
 
+    # A checkpoint from before state v2 has a 45-wide link encoder and cannot consume the v2 block.
+    v2 = wants_v2(mk["link_dim"])
+    print(f"encoder link_dim {mk['link_dim']} -> {'v2' if v2 else 'legacy pre-v2'} feature block")
     with torch.no_grad():
-        f = norm.apply(featurise(S))
+        f = norm.apply(featurise(S, link_v2=v2))
         Z = torch.cat([enc.encode(torch.from_numpy(f["link"][i:i + 8192]),
                                   torch.from_numpy(f["rows"][i:i + 8192]),
                                   torch.from_numpy(f["ids"][i:i + 8192]),
@@ -91,6 +98,13 @@ def main():
     aidx = np.concatenate(acts)
     y = torch.from_numpy(A[aidx].astype(np.int64))
     X = torch.cat([Z[pair], Z[pair + 1], Z[pair + 1] - Z[pair]], -1)
+    if a.only:
+        keep = np.where(src == a.only)[0]
+        if not len(keep):
+            raise SystemExit(f"no frames with source {a.only!r}; have {sorted(set(src.tolist()))}")
+        pair, src, y, X = pair[keep], src[keep], y[keep], X[keep]
+        print(f"restricted to source {a.only!r}: {len(pair):,} transitions "
+              f"(probe trained AND tested on this process only)")
     print(f"{len(pair):,} transitions | sources {dict(Counter(src.tolist()))}\n")
 
     # Split by EPISODE, not by frame. A random frame split puts neighbouring frames of the same episode in

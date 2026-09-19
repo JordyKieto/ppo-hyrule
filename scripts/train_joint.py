@@ -71,6 +71,9 @@ def main():
     ap.add_argument("--w-pred", type=float, default=1.0)
     ap.add_argument("--w-hp", type=float, default=3.0)
     ap.add_argument("--w-pos", type=float, default=3.0)
+    ap.add_argument("--w-v2", type=float, default=1.0,
+                    help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
+                         "fixed-width latent is spending capacity on them at the expense of the transition.")
     ap.add_argument("--w-scene", type=float, default=2.0,
                     help="weight on the in-room / left-room head; it drives the -20 room-exit terminal")
     ap.add_argument("--whiten", action="store_true",
@@ -213,8 +216,8 @@ def main():
         # v2: what Link is DOING and TOUCHING. Masked to v2 episodes, so a v1 episode contributes nothing
         # to these heads rather than teaching them zeros.
         vm = V2M[i]
-        if float(vm.sum()) > 0:
-            den = vm.sum().clamp(min=1)
+        if float(vm.sum()) > 0 and a.w_v2 > 0:
+            den = vm.sum().clamp(min=1) / a.w_v2
             for k, w in (("link_speed", 1.0), ("link_wall_yaw", 1.0), ("link_floor_dy", 0.5),
                          ("link_shape_yaw", 1.0), ("link_parallel_yaw", 0.5), ("link_fall", 0.3)):
                 L = L + w * (((p[k] - Yt[k][i]) ** 2).mean(-1) * vm).sum() / den

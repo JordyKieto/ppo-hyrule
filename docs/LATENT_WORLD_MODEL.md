@@ -280,3 +280,64 @@ carrying the action. 3.5× chance is what the latent actually reveals.
 `train_joint.py` wrote `ref["norm"]` — the *reference* checkpoint's normaliser — instead of the one used for
 training. Harmless while the widths matched; with the v2 feature block it would have silently
 mis-normalised every consumer of the checkpoint (`train_dream_ppo.py`, `play_dream_policy.py`, the probes).
+
+## 10. The "regression" did not exist, and the capacity hypothesis was wrong
+
+§9 recorded action recoverability falling 0.139 → 0.069 and offered a hypothesis: a fixed 128-d latent
+spending capacity on the richer v2 state. Both parts were wrong.
+
+**The sweep falsified the hypothesis** (`scripts/sweep_capacity.sh`, 7 configs, 25 epochs each):
+
+| config | tune skill | inv-dyn (pooled) | link_action | link_pos MAE |
+|---|---|---|---|---|
+| latent 128 (base) | **−0.711** | 0.0679 | 0.9308 | 12.04 |
+| latent 192 | −1.137 | **0.0814** | **0.9810** | **6.32** |
+| latent 256 | −1.095 | 0.0769 | 0.9330 | 7.94 |
+| latent 384 | −1.289 | 0.0802 | 0.9408 | 9.52 |
+| w_pred 3.0 | −0.814 | 0.0710 | 0.9275 | 9.15 |
+| **w_v2 0.3** | −0.761 | **0.0726** | 0.9269 | 8.86 |
+| latent 256 + w_pred 3 | −1.076 | 0.0685 | 0.9334 | 8.30 |
+
+Down-weighting the v2 decode heads to 0.3 moved action recoverability 0.0679 → 0.0726, nowhere near 0.139.
+So the v2 heads are not consuming the capacity, and the stated hypothesis is rejected.
+
+**The comparison itself was invalid.** `joint_v3`'s 0.139 came from a probe trained on a different frame
+population, on different data. A second explanation offered — that the v2 policy episodes have a more spread
+action distribution — was also checked and **also wrong**: the two collections are nearly identical
+(entropy 4.042 vs 4.032 nats, perplexity 56.9 vs 56.4, most-common action 0.078 vs 0.067).
+
+The decisive test is available because v2 only *appends* columns, so a pre-v2 encoder can read a v2 state
+through the legacy 45-wide feature path (`featurise(..., link_v2=False)`, selected by `wants_v2(link_dim)`).
+Running all three encoders on **identical frames, identical episode split, identical probe protocol**:
+
+| model | state | policy top-1 | most-common baseline |
+|---|---|---|---|
+| `joint_v3` | v1 | 0.0678 | 0.0448 |
+| **`joint_v6_state2`** | v2 | **0.0767** | 0.0448 |
+| `lat192` | v2 | 0.0772 | 0.0448 |
+
+**There is no regression.** On the same frames the v2 model is 13% better than `joint_v3`. The apparent drop
+was an artifact of comparing numbers measured on different data with different probe-training populations —
+the same class of error as comparing raw MSE across latent spaces.
+
+The independent measurement that does not depend on any of this is the `flail` row of §9: uniform-random
+actions, so no state prior can contribute, and **0.0554 = 3.5× chance (1/63)** is what the latent transition
+reveals about which action was taken.
+
+## 11. Rollout stability picks the model, and single-step decode would have picked wrong
+
+`scripts/eval_rollout.py`, 24 held-out episodes of ≥ 400 steps, autoregressive on the model's own output.
+
+| h = 300 | behaviour | baba_count | link_hp | link_pos MAE |
+|---|---|---|---|---|
+| `joint_v6_state2` (latent 128) | 0.562 | 0.667 | 0.292 | **91.1** |
+| `lat192` | 0.406 | 0.125 | 0.542 | **104,310** |
+| *identity (assume no change)* | *0.891* | *0.833* | *0.792* | *30.4* |
+
+`lat192` has the better single-step decode of the two by a wide margin (link_pos MAE 6.32 vs 12.04,
+link_action 0.981 vs 0.931) and **diverges** under autoregression — position error reaches 10^5 world units.
+Choosing on single-step decode would have selected it. Latent 128 is used for the dream.
+
+Recorded without softening: **both models remain worse than identity** on behaviour, live-Baba count and
+Link HP at every horizon ≥ 10. The predictor still has not learned dynamics that beat assuming nothing
+changes. What state v2 changed is what the model can *represent* (§9), not yet what it can *predict*.

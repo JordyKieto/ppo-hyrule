@@ -23,7 +23,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, decode_targets,  # noqa: E402
-                         featurise, hp_class)
+                         featurise, hp_class, wants_v2)
 from scripts.train_bc_decode import DEFAULT_DATA, load_many  # noqa: E402
 
 HORIZONS = (1, 5, 10, 25, 50, 100, 300, 600, 1200, 1800)
@@ -53,7 +53,7 @@ def main():
     Y = decode_targets(state, obs)
     Y["link_hp_c"] = hp_class(Y["link_hp"][:, 0], LINK_HP_VALUES)
     Y["row_hp_c"] = hp_class(Y["row_hp"], ROW_HP_VALUES)
-    Fn = norm.apply(featurise(state))
+    Fn = norm.apply(featurise(state, link_v2=wants_v2(ck['link_dim'])))
     A = F.one_hot(torch.from_numpy(action), NA).float()
 
     test = set(ck["split"]["val_slots"])
