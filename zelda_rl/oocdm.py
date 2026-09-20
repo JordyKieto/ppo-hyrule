@@ -333,6 +333,68 @@ import torch.nn as nn                                          # noqa: E402
 import torch.nn.functional as Fn                               # noqa: E402
 
 
+
+# --------------------------------------------------------------------------------------------------------
+# The Object-Oriented Causal Graph (paper section 4.1, ../oocdm/core/causal_graph.py).
+#
+# Two kinds of edge and nothing else:
+#   local_matrices[C][j, i]  field i of an object affects field j of THAT SAME object   (C.U -> V')
+#   global_matrix[J, I]      field I of ANY OTHER object affects field J of any object  (Cl.U -> Ck.V')
+#
+# Indices are class-level, so the graph does not grow when an actor spawns. `edge_budget()` in oomdp.py
+# measures 1,741 local + 6,545 global = 8,286 candidates against 132,132 for a flat CDL over the same state.
+# --------------------------------------------------------------------------------------------------------
+class OOCGraph:
+    def __init__(self, order: Sequence[ObjClass], field_names: dict, target_names: dict, full: bool = True):
+        self.order = list(order)
+        self.field_names, self.target_names = field_names, target_names
+        # global index space: every (class, field) flattened in class order
+        self.gin, self.gout = {}, {}
+        for c in self.order:
+            for f in self.field_names[c.name]:
+                self.gin[(c.name, f)] = len(self.gin)
+            for t in self.target_names[c.name]:
+                self.gout[(c.name, t)] = len(self.gout)
+        self.n_in, self.n_out = len(self.gin), len(self.gout)
+        v = bool(full)
+        self.global_matrix = np.full((self.n_out, self.n_in), v)
+        self.local = {c.name: np.full((len(self.target_names[c.name]), len(self.field_names[c.name])), v)
+                      for c in self.order}
+
+    def n_edges(self) -> int:
+        return int(self.global_matrix.sum() + sum(m.sum() for m in self.local.values()))
+
+    def set_local(self, cls: str, target: str, parents: Sequence[str]) -> None:
+        j = self.target_names[cls].index(target)
+        self.local[cls][j, :] = False
+        for pnt in parents:
+            self.local[cls][j, self.field_names[cls].index(pnt)] = True
+
+    def set_global(self, cls: str, target: str, parents: Sequence[tuple[str, str]] | None) -> None:
+        J = self.gout[(cls, target)]
+        self.global_matrix[J, :] = False
+        for cn, fn in (parents or ()):
+            self.global_matrix[J, self.gin[(cn, fn)]] = True
+
+    def local_mask(self, cls: str, device) -> torch.Tensor:
+        return torch.as_tensor(self.local[cls], dtype=torch.bool, device=device)
+
+    def global_mask(self, cls: str, device) -> torch.Tensor:
+        """(n_out_total, n_field_of_this_class) -- the columns of the global matrix this class supplies."""
+        cols = [self.gin[(cls, f)] for f in self.field_names[cls]]
+        return torch.as_tensor(self.global_matrix[:, cols], dtype=torch.bool, device=device)
+
+    def describe(self, top: int = 12) -> str:
+        lines = [f"OOCG: {self.n_edges()} of {self.n_out * self.n_in + sum(m.size for m in self.local.values())}"
+                 f" candidate edges active"]
+        for c in self.order:
+            for j, t in enumerate(self.target_names[c.name]):
+                par = [self.field_names[c.name][i] for i in np.nonzero(self.local[c.name][j])[0]]
+                if len(par) < len(self.field_names[c.name]):
+                    lines.append(f"  local  {c.name}.{t}' <- {par}")
+        return "\n".join(lines[: top + 1])
+
+
 class MultiLinear(nn.Module):
     """n independent Linear layers applied along a named axis. The paper's parameter sharing device: the
     weight is indexed by FIELD, and the object axis is a batch dim, so every instance of a class shares it."""
@@ -358,21 +420,51 @@ class HeteroEmbed(nn.Module):
         return torch.stack([l(x) for l, x in zip(self.lins, xs)], -2)       # (B, n_obj, n_field, d)
 
 
+class MaskedFieldLinear(nn.Module):
+    """The paper's masked flatten+linear, with the mask FOLDED INTO THE WEIGHT.
+
+    `masked_retain(x, attrmask)` zeroes the embeddings of non-parent fields, flattens (n_field, d) and applies
+    a per-target-field Linear. Done literally that needs a (B, n_obj, n_target, n_field, d) intermediate,
+    which for our 77 global state fields is hundreds of MB. Since the mask is the same for every batch
+    element (it comes from the graph, not from the data), folding it into the weight is algebraically
+    identical and allocates nothing:
+
+        out[b,o,n,e] = sum_{f,k} x[b,o,f,k] * mask[n,f] * W[n,f,k,e]
+
+    A per-batch-element mask -- which the paper's RandomMaskGenerator produces -- cannot be folded and will
+    need the expanded path. That is P1; this is P0.
+    """
+
+    def __init__(self, n_target: int, n_field: int, d: int, d_out: int):
+        super().__init__()
+        self.w = nn.Parameter(torch.empty(n_target, n_field, d, d_out))
+        self.b = nn.Parameter(torch.zeros(n_target, d_out))
+        nn.init.kaiming_uniform_(self.w.view(n_target, n_field * d, d_out), a=5 ** 0.5)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """x (B, n_obj, n_field, d); mask (n_target, n_field) -> (B, n_obj, n_target, d_out)."""
+        w = self.w * mask[:, :, None, None]         # b=batch o=object f=field k=embed n=target e=out
+        return torch.einsum("bofk,nfke->bone", x, w) + self.b
+
+
 class ClassModule(nn.Module):
-    """Everything owned by one class: field embeddings, the object encoding, and one head per state field."""
+    """Everything owned by one class: field embeddings, the masked local and global encodings, and one head
+    per state field. `f_global` produces an encoding of each object FOR EACH global state field, because
+    masking is per target field -- Stage 1 collapsed this to one encoding per object and that simplification
+    is incompatible with a graph."""
 
     def __init__(self, cls: ObjClass, codecs: dict[str, FieldCodec], fields: Sequence[str],
-                 targets: Sequence[str], d: int, d_h: int, d_k: int, d_v: int, d_dec: int):
+                 targets: Sequence[str], n_out_total: int, d: int, d_h: int, d_g: int,
+                 d_k: int, d_v: int, d_dec: int):
         super().__init__()
         self.cls_name, self.fields, self.targets = cls.name, list(fields), list(targets)
         self.embed = HeteroEmbed([codecs[f].input_dim if f in codecs else 2 if f == "stick" else 1
                                   for f in self.fields], d)
-        flat = len(self.fields) * d
-        n_t = len(self.targets)
-        self.f_local = MultiLinear(n_t, flat, d_h)              # per TARGET FIELD: the query's source
-        self.f_obj = nn.Linear(flat, d_h)                       # per OBJECT: what other classes attend to
-        self.fq, self.fk, self.fv = MultiLinear(n_t, d_h, d_k), nn.Linear(d_h, d_k), nn.Linear(d_h, d_v)
-        self.dec = nn.Sequential()
+        n_f, n_t = len(self.fields), len(self.targets)
+        self.f_local = MaskedFieldLinear(n_t, n_f, d, d_h)
+        self.f_global = MaskedFieldLinear(n_out_total, n_f, d, d_g)
+        self.fq, self.fk, self.fv = MultiLinear(n_t, d_h, d_k), MultiLinear(n_t, d_g, d_k), \
+            MultiLinear(n_t, d_g, d_v)
         self.dec1, self.dec2 = MultiLinear(n_t, d_h + d_v, d_dec), MultiLinear(n_t, d_dec, d_dec)
         self.heads = nn.ModuleList()
         for t in self.targets:                                  # zero-init: an untrained head is do-nothing
@@ -380,107 +472,106 @@ class ClassModule(nn.Module):
             nn.init.zeros_(h.weight), nn.init.zeros_(h.bias)
             self.heads.append(h)
 
-    def encode(self, xs: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-        e = self.embed(xs).flatten(-2)                          # (B, n_obj, n_field*d)
-        local = self.f_local(e.unsqueeze(-2).expand(*e.shape[:-1], len(self.targets), e.shape[-1]))
-        return Fn.leaky_relu(local), Fn.leaky_relu(self.f_obj(e))
+    def encode(self, xs: Sequence[torch.Tensor], local_mask: torch.Tensor, global_mask: torch.Tensor):
+        x = self.embed(xs)                                              # (B, n_obj, n_field, d)
+        return (Fn.leaky_relu(self.f_local(x, local_mask)),             # (B, n_obj, n_t, d_h)
+                Fn.leaky_relu(self.f_global(x, global_mask)))           # (B, n_obj, n_out_total, d_g)
 
 
 class OOCDM(nn.Module):
-    """p(S' | S, A) factored over (class, field), with class-shared parameters and inter-object attention.
+    """p(S' | S, A) factored over (class, field), class-shared parameters, inter-object attention, and a
+    causal graph that masks non-parents (paper sections 4.1-4.2).
 
-    Deviation from the paper, recorded deliberately: its `f_global` produces a separate encoding of each
-    object FOR EACH of the 77 global state fields, so that masking can give every target field its own
-    parents. At the full graph G1 there is no masking, so Stage 1 uses ONE encoding per object as the
-    attention key/value and keeps the per-target-field projection only on the query side. That is ~77x less
-    compute for the question Stage 1 is asking; Stage 2 needs the full form and will restore it.
+    The graph enters exactly where the paper puts it: as a boolean broadcast over the FIELD axis before the
+    flatten+linear, once for the local encoding (own fields -> own next field) and once for the global
+    encoding (this object's fields, as seen by every target field of every class). Attention masks self out,
+    which is the paper's `j != i`, so the ONLY route from an object's own field to its own next field is the
+    local path -- that is the local causality C.U -> V'.
     """
 
     def __init__(self, codecs: dict[str, dict[str, FieldCodec]], capacity: dict[str, int],
                  schema: Schema = SCHEMA_V3, targets: dict[str, list[str]] | None = None,
-                 d: int = 16, d_h: int = 64, d_k: int = 32, d_v: int = 64, d_dec: int = 128,
-                 ):
+                 d: int = 16, d_h: int = 64, d_g: int = 32, d_k: int = 32, d_v: int = 64, d_dec: int = 128,
+                 graph: "OOCGraph | None" = None):
         super().__init__()
         self.schema, self.codecs, self.capacity = schema, codecs, capacity
         self.order = [c for c in schema.classes if capacity.get(c.name, 0) > 0]
         self.field_names, self.target_names = {}, {}
-        mods = {}
         for c in self.order:
-            fs = [f.name for f in c.fields if f.name in codecs[c.name] or f.role == "action"]
-            ts = list(targets[c.name]) if targets else [f.name for f in c.state_fields()
-                                                        if f.name in codecs[c.name]]
-            self.field_names[c.name], self.target_names[c.name] = fs, ts
-            mods[c.name] = ClassModule(c, codecs[c.name], fs, ts, d, d_h, d_k, d_v, d_dec)
-        self.mods = nn.ModuleDict(mods)
+            self.field_names[c.name] = [f.name for f in c.fields
+                                        if f.name in codecs[c.name] or f.role == "action"]
+            self.target_names[c.name] = (list(targets[c.name]) if targets else
+                                         [f.name for f in c.state_fields() if f.name in codecs[c.name]])
+        self.graph = graph or OOCGraph(self.order, self.field_names, self.target_names, full=True)
+        n_out_total = self.graph.n_out
+        self.mods = nn.ModuleDict({
+            c.name: ClassModule(c, codecs[c.name], self.field_names[c.name], self.target_names[c.name],
+                                n_out_total, d, d_h, d_g, d_k, d_v, d_dec) for c in self.order})
         self.log_scale = nn.ParameterDict({
             f"{c.name}|{t}": nn.Parameter(torch.zeros(codecs[c.name][t].n_out))
             for c in self.order for t in self.target_names[c.name]
             if codecs[c.name][t].kind in ("real", "count")})
 
-    def forward(self, batch: dict) -> dict[str, dict[str, torch.Tensor]]:
-        """batch['x'][cls][field] (B, n_obj, in_dim); batch['mask'][cls] (B, n_obj);
-        batch['raw'][cls][field] (B, n_obj, size) for the identity residual.
+    def set_graph(self, g: "OOCGraph") -> None:
+        self.graph = g
 
-        Returns {'Cls|field': (B, n_obj, n_out)}.
-        """
-        local, keys, vals, obj_mask = {}, [], [], []
+    def forward(self, batch: dict) -> dict[str, torch.Tensor]:
+        """batch['x'][cls][field] (B, n_obj, in_dim); 'mask'[cls] (B, n_obj); 'raw'[cls][field] for the
+        identity residual. Returns {'Cls|field': (B, n_obj, n_out)}."""
+        dev = batch["mask"][self.order[0].name].device
+        g = self.graph
+        local, glob, obj_mask = {}, [], []
         for c in self.order:
             m = self.mods[c.name]
-            l, o = m.encode([batch["x"][c.name][f] for f in self.field_names[c.name]])
+            l, gl = m.encode([batch["x"][c.name][f] for f in self.field_names[c.name]],
+                             g.local_mask(c.name, dev), g.global_mask(c.name, dev))
             local[c.name] = l
-            keys.append(m.fk(o)), vals.append(m.fv(o))
+            glob.append(gl)                                    # (B, n_obj_c, n_out_total, d_g)
             obj_mask.append(batch["mask"][c.name])
-        K, V = torch.cat(keys, 1), torch.cat(vals, 1)                     # (B, n_obj_all, d)
-        M = torch.cat(obj_mask, 1)                                        # (B, n_obj_all)
+        G = torch.cat(glob, 1)                                 # (B, n_obj_all, n_out_total, d_g)
+        M = torch.cat(obj_mask, 1)                             # (B, n_obj_all)
 
-        out: dict[str, torch.Tensor] = {}
-        base = 0
+        out, base = {}, 0
         for c in self.order:
             m, n_obj = self.mods[c.name], self.capacity[c.name]
-            q = m.fq(local[c.name])                                       # (B, n_obj_c, n_t, d_k)
-            att = torch.einsum("botk,bjk->botj", q, K) / q.shape[-1] ** 0.5
+            cols = [g.gout[(c.name, t)] for t in self.target_names[c.name]]
+            Gc = G[:, :, cols, :]                              # (B, n_obj_all, n_t, d_g)
+            q = m.fq(local[c.name])                            # (B, n_obj_c, n_t, d_k)
+            k, v = m.fk(Gc), m.fv(Gc)                          # (B, n_obj_all, n_t, d_k/d_v)
+            att = torch.einsum("botk,bjtk->botj", q, k) / q.shape[-1] ** 0.5
             idx = torch.arange(n_obj, device=att.device)
             self_edge = torch.zeros(n_obj, M.shape[1], dtype=torch.bool, device=att.device)
-            self_edge[idx, base + idx] = True                             # object i is its own key
-            vis = M[:, None, None, :] & ~self_edge[None, :, None, :]      # no attention to itself
-            vis = vis.expand_as(att)
+            self_edge[idx, base + idx] = True                  # no attention to itself (paper's j != i)
+            vis = (M[:, None, None, :] & ~self_edge[None, :, None, :]).expand_as(att)
             att = att.masked_fill(~vis, float("-inf"))
             att = torch.where(vis.any(-1, keepdim=True), att.softmax(-1), torch.zeros_like(att))
-            h = torch.cat([local[c.name], torch.einsum("botj,bjv->botv", att, V)], -1)
-            h = Fn.leaky_relu(m.dec2(Fn.leaky_relu(m.dec1(h))))           # (B, n_obj_c, n_t, d_dec)
+            h = torch.cat([local[c.name], torch.einsum("botj,bjtv->botv", att, v)], -1)
+            h = Fn.leaky_relu(m.dec2(Fn.leaky_relu(m.dec1(h))))
             for i, t in enumerate(self.target_names[c.name]):
-                key = f"{c.name}|{t}"
-                out[key] = self._identity(c.name, t, m.heads[i](h[:, :, i]), batch["raw"][c.name][t])
+                out[f"{c.name}|{t}"] = self._identity(c.name, t, m.heads[i](h[:, :, i]),
+                                                      batch["raw"][c.name][t])
             base += n_obj
         return out
 
-
     def _identity(self, cname: str, t: str, raw_out: torch.Tensor, cur: torch.Tensor) -> torch.Tensor:
-        """Add the residual-from-identity offset, so a zero-init head predicts EXACTLY no change."""
+        """Residual-from-identity offset, so a zero-init head predicts EXACTLY no change."""
         cod = self.codecs[cname][t]
         k = cod.kind
         if k in ("real", "count"):
             return raw_out
         if k == "angle":
             bias = torch.zeros_like(raw_out)
-            bias[..., 0] = 1.0                                            # (cos, sin) = (1, 0) => delta 0
+            bias[..., 0] = 1.0
             return raw_out + bias
         if k == "bits":
             b = ((cur.long() >> torch.arange(cod.field.vtype.n, device=cur.device)) & 1).float()
             return raw_out + IDENTITY_LOGIT * (2 * b - 1)
         vals = torch.as_tensor(cod.values, device=cur.device)
-        eq = (cur == vals).float()                                        # (B, n_obj, n_values)
-        # Codecs are fitted on TRAIN ONLY, so a value first seen at test time matches no slot. The identity
-        # bias then has nowhere to go and the head falls back to class 0 -- which is how an untrained model
-        # scored skill -33 on Link.hp. `FieldCodec.apply` already maps the UNKNOWN slot back to the current
-        # value, so that slot is where the identity belongs whenever nothing else matches.
+        eq = (cur == vals).float()
         unknown = (1.0 - eq.sum(-1, keepdim=True)).clamp(0.0, 1.0)
         return raw_out + IDENTITY_LOGIT * torch.cat([eq, unknown], -1)
 
 
-# --------------------------------------------------------------------------------------------------------
-# Batching and the per-field loss
-# --------------------------------------------------------------------------------------------------------
 def make_batch(p: Packed, codecs: dict[str, dict[str, FieldCodec]], model: "OOCDM",
                idx: np.ndarray, device) -> dict:
     """Frames t -> the tensors `OOCDM.forward` and `field_losses` consume. Targets are read at t+1.

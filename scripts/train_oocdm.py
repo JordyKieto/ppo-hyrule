@@ -51,8 +51,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.oocdm import (OOCDM, assert_identity_init, field_losses, fit_codecs,  # noqa: E402
-                            make_batch, pack, predict_raw, velocity_baseline)
+from zelda_rl.oocdm import (OOCDM, OOCGraph, assert_identity_init, field_losses,  # noqa: E402
+                            fit_codecs, make_batch, pack, predict_raw, velocity_baseline)
 from zelda_rl.oomdp import (SCHEMA_V3, assert_partition, assert_roundtrip, decompose,  # noqa: E402
                             err, prep, unit)
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
@@ -215,6 +215,9 @@ def main():
     ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
     ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
     ap.add_argument("--wandb-group", default="stage1-G1")
+    ap.add_argument("--hand-graph", action="store_true",
+                    help="P0 gate (docs section 16): mask Link.pos' to the parents the ridge probe says it "
+                         "needs, leave every other field at the full graph. One variable.")
     args = ap.parse_args()
 
     name = args.name or f"oocdm-stage1-{datetime.now():%Y%m%d-%H%M%S}"
@@ -252,6 +255,17 @@ def main():
     dev = torch.device(args.device)
     torch.manual_seed(args.seed)
     model = OOCDM(codecs, cap).to(dev)
+    if args.hand_graph:
+        # Ridge on the model's own input: vel alone +0.219, all 38 Link fields -0.066 (section 16). If
+        # masking is the mechanism the paper says it is, restricting THIS ONE target to those parents should
+        # recover most of that. Everything else stays at G1, so exactly one thing differs from the baseline.
+        g = OOCGraph(model.order, model.field_names, model.target_names, full=True)
+        g.set_local("Link", "pos", ["pos", "vel", "speed", "stick", "bg_flags"])
+        g.set_global("Link", "pos", None)
+        model.set_graph(g)
+        LOGGER.info("P0 hand graph: Link.pos' <- local %s, global {} | %d of %d edges active",
+                    ["pos", "vel", "speed", "stick", "bg_flags"], g.n_edges(),
+                    g.n_out * g.n_in + sum(m.size for m in g.local.values()))
     n_par, n_head = sum(x.numel() for x in model.parameters()), sum(len(v) for v in model.target_names.values())
     LOGGER.info("params: %.2fM, %d field heads", n_par / 1e6, n_head)
 

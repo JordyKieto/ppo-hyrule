@@ -9,8 +9,10 @@ what each change was a response to. Not an argument for a conclusion.
 in Object-Oriented Environments*, ICML 2024. Paper PDF and the authors' reference implementation are local
 (`~/Downloads/yu24j.pdf`, `~/Documents/dev/oocdm`).
 
-**Status:** Stage 0 COMPLETE. Stage 1 TRAINED BUT UNDER-CONTROLLED. Stage 2 (causal discovery, the paper's
-actual contribution) NEVER STARTED. Section 14 is the field-by-field result table and the list of gaps.
+**Status:** Stage 0 COMPLETE. Stage 1 trained at `G1` and section 16 shows WHY that cannot work. The plan of
+record is **section 17 (P0-P3)** -- porting the paper's discovery loop. Section 14 is the field-by-field
+result table, section 16 is the diagnosis, section 17 is what happens next and nothing outside it is in
+scope.
 
 **The code was restored to the paper in commit `<this one>`.** A change gate, per-field `pos_weight`
 oversampling, binned direction/magnitude heads and threshold calibration were added in one session, none of
@@ -856,3 +858,90 @@ the random-mask term (`p_edge=0.9`), the current-graph term, the full-graph term
 `Link.pos'` from the ridge table (`{pos, vel, speed, stick, bg_flags}`), train the existing model with every
 other edge masked, and check whether `Link.pos` reaches ~+0.22. If it does not, masking is not sufficient
 and discovery will not save us either. That is one 4-minute run and it gates the whole of Stage 2.
+
+
+---
+
+## 17. Plan of record: port the paper's discovery loop (P0 - P3)
+
+This section supersedes section 12 as the plan. Section 12 was a backlog of ideas, several of which were
+deviations from the paper and are now removed (AGENTS.md section 13). **Nothing outside P0-P3 is in scope.**
+Anything else is proposed in a message first.
+
+### 17.1 Components, and where each one lives in the reference implementation
+
+Everything is a port of `~/Documents/dev/oocdm`. Nothing is invented.
+
+| # | component | paper source | status |
+|---|---|---|---|
+| 1 | `OOCGraph` -- `local_matrices[C]` + `global_matrix` | `core/causal_graph.py` | **P0 BUILT** |
+| 2 | `FullMaskGenerator` | `alg/model/mask_generator.py` | implicit (it is what `G1` means) |
+| 3 | `RandomMaskGenerator(p_edge=0.9)` | same | P1 |
+| 4 | `GraphMaskGenerator` | same | **P0 BUILT** |
+| 5 | `DroppedMaskGenerator` (drop one field) | same | P2 |
+| 6 | `masked_retain`, **per target field** | `object_oriented_model.py` | **P0 BUILT** |
+| 7 | 3-term loss `-(ll_graph + ll_full + ll_random)/3` | `train_ooc.py:90` | P1 |
+| 8 | CMI edge test, `causal_threshold = 0.1` | `train_ooc.py:get_causal_graph` | P2 |
+| 9 | graph update + `n_iter_stable` stopping | `train_ooc.py:update` | P2 |
+
+**One Stage 1 deviation had to be reverted in P0, and was.** `f_global` had been collapsed to one encoding per
+object instead of one per `(object, target state field)`, on the argument that at `G1` there is no masking so
+it cannot matter. Masking is per target field, so that simplification is incompatible with having a graph at
+all. The model went 4.66M -> 8.14M parameters restoring it.
+
+### 17.2 P0 -- masking, and the falsification gate
+
+Build (1), (4), (6); revert the `f_global` deviation. Then hand-set `Link.pos'`'s parents to
+`{pos, vel, speed, stick, bg_flags}` -- the set section 16's ridge probe says it needs -- leave every other
+field at `G1`, and train. One variable against `runs/paper-fast-s0`.
+
+**Gate: does `Link.pos` reach ~+0.22?**
+- **Yes** -> masking is the mechanism section 16 claims, and P1-P3 are justified.
+- **No** -> masking is not sufficient, discovery will not save it either, and P1-P3 are NOT built. Say so.
+
+Reference points for reading the answer: trained model at `G1` **+0.064**; ridge given only the right parents
+**+0.219**; zero-parameter `pos + 1.67*vel` **+0.257**.
+
+Asserted before the gate was run, so the gate means something: perturbing a masked-out field moves the output
+by **exactly 0.000e+00**, perturbing a kept parent moves it, and identity-init still holds under both the full
+and the masked graph.
+
+### 17.3 P1 -- the paper's objective
+
+Add (2), (3), (7). Train with `-(ll_graph + ll_full + ll_random)/3`, graph empty at init, `p_edge = 0.9`.
+This is what teaches the model to answer "what would you predict WITHOUT this parent?", which is the question
+discovery asks it. Without it, CMI is measuring a model that has never seen a masked input.
+
+Note for the implementer: `MaskedFieldLinear` folds the mask into the weight, which is only valid because a
+graph mask is identical for every batch element. `RandomMaskGenerator` produces a **per-batch-element** mask
+and needs the expanded path.
+
+### 17.4 P2 -- discovery
+
+Add (5), (8), (9). For each class-level edge, compare log-likelihood under the full graph against the graph
+with that one edge dropped; keep the edge if the difference exceeds `causal_threshold = 0.1`. Recompute the
+graph each iteration; stop when it has been stable for `n_iter_stable`.
+
+Cost: one graph update needs roughly `n_field` forward passes for the global edges plus `n_field` per class
+for the local ones -- about 180 passes over a batch set, once per update rather than per batch.
+
+### 17.5 P3 -- the paper's own controls
+
+These are the results the paper reports, and the only ones that say whether any of this works.
+
+| control | question it answers |
+|---|---|
+| `G-hat` vs `G1` vs the EMPTY graph | does the discovered graph beat both "everything is a parent" and "nothing is"? |
+| **shuffled-class** | assign instances to classes at random so each class holds a MIX. If that scores the same, class sharing contributed nothing. The paper does not run this one; we must |
+| >= 3 seeds, edge-set Jaccard | is the graph stable, or is `epsilon` deciding rather than the data? (AGENTS.md section 7) |
+| multi-step rollout | the barometer (AGENTS.md section 8). Section 15 is the `G1` reading: 4% of real travel |
+
+### 17.6 Out of scope
+
+Recorded so it cannot drift back in. All four were built once, none is in Yu et al., all are removed, and
+none may return without an explicit decision first: the per-field **change gate**, per-field **`pos_weight`
+oversampling**, **binned direction/magnitude** heads, and firing **threshold calibration**.
+
+The schema defects of 14.2 (`En_Dekubaba.vel` a dead input, `Link.y_dist_to_ledge` a sentinel typed `Real`,
+`Link.dist_interact_wall`) are real but are **not** deviations and **not** P0-P3. They are fixed after P2, or
+earlier only if discovery names them as parents of something that matters.
