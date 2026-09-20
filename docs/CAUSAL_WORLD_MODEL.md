@@ -1072,6 +1072,47 @@ three iterations is thin for a convergence claim: the paper runs to `n_iter=100`
 stopping rule, so the honest statement is "trending to stability over three iterations", not "converged".
 The loop supports `--resume`, so extending it is cheap.
 
+### 17.4e Event oversampling: KEPT. Buys the event fields, costs graph stability
+
+Not from Yu et al. -- their environments have no rare events, `mouse.hunger` decreases by 2.0 on EVERY step
+and the reward is a function of `delta_hunger` and `delta_health`. Ours is the opposite: enemy HP changes on
+0.02% of scored steps. Ported from section 23 of LATENT_WORLD_MODEL.md, which measured hit-window detection
+going 2% -> 55% with `1 + K*rare + sqrt(K)*move` on the BATCH SAMPLER.
+
+`runs/p2-loop` vs `runs/p2-loop-oversample`, K=50, identical otherwise. Batch composition moved from 4.4%
+rare / 34% motion to **44.7% / 83.5%**. Scored on all 81 test episodes:
+
+| field | n changed | baseline | **oversample** | power |
+|---|---|---|---|---|
+| **`En_Dekubaba.state_idx`** | 553 | +0.000 | **+0.067** | OK |
+| **`Link.sf1`** | 956 | +0.194 | **+0.419** | OK |
+| `Link.pos` | 3897 | +0.135 | **+0.144** | OK |
+| `En_Dekubaba.pos` | 3181 | +0.074 | +0.074 | OK |
+| `Link.yaw` | 1892 | +0.000 | +0.000 | OK |
+| `Link.hp` / `is_targeted` | 84 / 145 | +0.000 | +0.000 | thin |
+| `hp` / `present` / `scene` | 27 / 25 / 12 | +0.000 | +0.000 | **NONE** |
+
+**`En_Dekubaba.state_idx` moved off zero for the first time**, and it is in the rare set the sampler weights
+toward. `Link.sf1` -- which carries the shield and dead bits -- more than doubled. Fields at exactly zero went
+6/10 -> 5/10. **The motion cost did not materialise**: `En_Dekubaba.pos` is identical and `Link.pos` is
+slightly better, unlike section 23 where oversampling hurt walking.
+
+**The cost is graph stability.** Jaccard at iteration 3: 0.740 baseline vs **0.450** oversampled, with a
+larger and churnier edge set (55 vs 48). Training is reweighted while CMI is still measured on the natural
+distribution -- which is correct, and matches the paper, but it means the model is tuned for a batch that is
+45% rare events while its graph is estimated on data that is 4% rare events.
+
+**DECISION: KEPT.** The event fields are the point -- they are what `CombatTracker.step()` pays out on -- and
+the graph instability is a sample-size problem with a known fix (more CMI transitions, section 17.4c measured
+Jaccard rising with sample size). Losing event fields to protect a graph number is the wrong trade.
+
+**Method failure recorded.** For three consecutive updates during this run the per-iteration watch line was
+reported as the result, and it said oversampling was LOSING (17/47 fields vs 23/47, `En_Dekubaba.pos` +0.025
+vs +0.134). That line is computed on a subsampled TUNE split and does not contain `state_idx`, the field with
+enough power to decide the question. The full test-set comparison reverses the conclusion. Progress
+instrumentation is not a result, and a decision metric has to be chosen -- with its statistical power
+checked -- before the run, not after.
+
 ### 17.5 P3 -- the paper's own controls
 
 These are the results the paper reports, and the only ones that say whether any of this works.

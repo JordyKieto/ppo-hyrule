@@ -117,6 +117,31 @@ That is the phase working as intended: better links make a better model, which f
 determine Link's position, from a separate analysis. The links the model discovered by itself did better --
 84% of the "simple formula" benchmark against our hand-picked 75%. We are no longer better than it at this.
 
+## Teaching it about rare events
+
+The reward is built almost entirely from things that hardly ever happen -- a Deku Baba losing health occurs
+on 0.02% of moments. The model was learning nothing about any of them, because in a random handful of
+gameplay they essentially never appear.
+
+The fix is old and proven here: when picking which moments to learn from, pick the interesting ones far more
+often. We shifted batches from 4% "something happened" to 45%.
+
+| what it measures | before | after |
+|---|---|---|
+| Baba behaviour state | nothing | **works a little** |
+| Link's status flags (shield, dead) | some | **more than double** |
+| where Link moves | some | slightly better |
+| where a Baba moves | some | unchanged |
+
+First time the behaviour-state field has ever been above zero. The cost: the discovered cause-and-effect map
+became less stable between runs (74% agreement down to 45%), because we changed what the model practises on
+without changing what we measure it with. We kept the change -- the rare events are the whole point, and the
+stability problem has a known fix.
+
+**A mistake worth recording:** for three updates I reported this experiment as failing, reading a
+progress-tracking number that did not include the field that mattered. The proper measurement said the
+opposite.
+
 ## The honest caveats
 
 - **Damage is still not modelled at all.** Whether a Deku Baba loses health scores exactly zero, as it has
