@@ -1,5 +1,8 @@
 # Causal object-oriented world model: background, schema, and the Stage 0 field census
 
+**Plain-English companion: [`CAUSAL_PLAIN_ENGLISH.md`](CAUSAL_PLAIN_ENGLISH.md)** -- same facts, no jargon.
+This file is the record of authority; if the two ever disagree, this one is right.
+
 A second methodology trail, started where [`LATENT_WORLD_MODEL.md`](LATENT_WORLD_MODEL.md) stops. That
 document records thirty sections of work on `z_{t+1} = M(z_t, a_t)` and ends with six consecutive negatives.
 This one records what replaces it and why, and it follows the same rule: what was built, what was measured,
@@ -997,6 +1000,39 @@ log-probability. Ours is too for real/count (Gaussian), categorical/boolean (sof
 but the ANGLE head emits a direction and its `1 - cos` is a monotone surrogate. Differences stay correctly
 signed per field, but the nats scale is wrong for angles, so `causal_threshold` does not mean the same thing
 for them. The clean fix is a von Mises head, which is a change to the model and therefore a proposal.
+
+### 17.4c P2 stability: the graph is not yet reproducible
+
+Run against the **P1** checkpoint -- the one the method specifies, trained with the random-mask term that
+makes CMI well-posed -- with two independent gameplay samples of 256 transitions each:
+
+    seed 0:  37 edges
+    seed 1:  37 edges
+    shared:  12          Jaccard 0.194
+
+**Two discovery passes agree on a third of their edges.** At 256 transitions against a 0.1-nat threshold,
+roughly two thirds of the discovered graph is sampling noise: `epsilon` is deciding rather than the data,
+which is the failure AGENTS.md section 7 names.
+
+It shows in the edges. Alongside real ones (`Link.vel -> pos'`, `Link.btn_A -> vel'`,
+`En_Dekubaba.has_arrow -> Link.sf1'`) sit `Link.floor_height -> En_Dekubaba.pos'` (+0.2034) and
+`En_St.vel -> Link.vel'` (+0.3199). Link's floor height does not move a Deku Baba and a Skulltula's sway does
+not drive Link. Those are coincidences of a small sample.
+
+**A real and expected effect that complicates the threshold.** CMI values are COMPRESSED on the P1 checkpoint
+relative to P0: `Link.vel -> pos'` +0.5228 -> +0.2513, `bg_flags -> pos'` +0.2526 -> +0.1149. That is correct
+behaviour -- P1 trained under random masks, so the model is more robust to losing any single parent, which
+shrinks every CMI. But it means a FIXED `causal_threshold = 0.1` sits at a different point on the scale than
+it does in the paper, and is doing more of the deciding than it should.
+
+**The update loop is NOT being wired on this.** Feeding a 19%-reproducible graph back into training would
+bake the noise in and look like progress, which is worse than failing loudly.
+
+**The paper-faithful fix is more samples, not a new criterion**, so `scripts/eval_cmi_stability.py` sweeps the
+CMI sample size at 2x, 4x and 8x and reports Jaccard at each. If agreement climbs toward ~0.8 the estimator is
+sample-starved and we size there. If it plateaus low, these effects are not identifiable at this threshold on
+the data we have -- a finding about the method here, and one that would mean recording more gameplay rather
+than spending more compute.
 
 **Two open questions before the update loop (component 9).** Whether 31 edges is too aggressive -- sparsity
 is the goal but a graph this thin could starve fields that genuinely need parents -- and whether CMI is
