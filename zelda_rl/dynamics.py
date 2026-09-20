@@ -55,7 +55,10 @@ class FlatPredictor(nn.Module):
         return self.net(za)
 
 
-def build_predictor(latent: int, n_actions: int, residual: bool = True, hidden: int = 512) -> nn.Module:
+def build_predictor(latent: int, n_actions: int, residual: bool = True, hidden: int = 512,
+                    factored: bool = False) -> nn.Module:
+    if factored:
+        return FactoredPredictor(latent, n_actions, hidden)
     return (ResidualPredictor if residual else FlatPredictor)(latent, n_actions, hidden)
 
 
@@ -67,6 +70,10 @@ def load_predictor(ck: dict, latent: int, n_actions: int) -> nn.Module:
     shape rather than trusting the flag to be present, so old artefacts keep working.
     """
     sd = ck["pred"]
+    if ck.get("pred_factored") or any(k == "table" for k in sd):
+        m = FactoredPredictor(latent, n_actions)
+        m.load_state_dict(sd); m.eval()
+        return m
     residual = ck.get("pred_residual")
     if residual is None:
         residual = any(k.startswith("net.") for k in sd)
@@ -158,3 +165,57 @@ class TransitionHead(nn.Module):
         return {"tr_moved": self.moved(h), "tr_dir": self.dir(h), "tr_mag": self.mag(h),
                 "tr_dy": self.dy(h), "tr_hit_row": self.hit_row(h), "tr_link_hit": self.link_hit(h),
                 "tr_gone_row": self.gone_row(h), "tr_exit": self.exit(h)}
+
+
+# --- Factored control input, instead of a flat one-hot over the whole action set --------------------------
+#
+# The predictor was fed `one_hot(a)` over the 63 (or 90) combined actions, which are the cross product of 9
+# stick directions and 7 button combos. Nothing in that encoding says action 5 and action 12 share a stick
+# direction, so the model has to rediscover the factorisation from data for every pair. Factoring it means a
+# direction seen with one button generalises to the same direction with another.
+#
+# Camera is deliberately absent: this action space has no camera control (the game drives it), so camera
+# reaches the model through the v3 state instead.
+FACTORED_NAMES = ("stick_x", "stick_z", "stick_none", "btn_A", "btn_B", "btn_Z", "btn_R", "btn_slingshot",
+                  "btn_nut")
+FACTORED_DIM = len(FACTORED_NAMES)
+
+
+def factor_actions(n_actions: int) -> "np.ndarray":
+    """(n_actions, FACTORED_DIM) lookup: stick direction as a unit vector plus one flag per button pressed."""
+    import numpy as np
+    from zelda_rl.env import COMBAT_ACTIONS_V5, COMBAT_BUTTONS_V5
+    T = np.zeros((n_actions, FACTORED_DIM), np.float32)
+    for a in range(n_actions):
+        d, b = COMBAT_ACTIONS_V5[a]
+        if d is None:
+            T[a, 2] = 1.0                                  # neutral stick
+        else:
+            T[a, 0], T[a, 1] = np.cos(d), np.sin(d)        # direction as a vector, so nearby dirs are nearby
+        held = COMBAT_BUTTONS_V5[b]
+        for nm, col in (("A", 3), ("B", 4), ("L", 5), ("R", 6), ("CD", 7), ("CL", 8)):
+            if nm in held:
+                T[a, col] = 1.0
+    return T
+
+
+class FactoredPredictor(nn.Module):
+    """z_{t+1} = z_t + f(z_t, factored(a_t)). Residual, and the action arrives structured.
+
+    Same contract as ResidualPredictor -- call it with cat([z, one_hot(a)], -1) -- so every existing caller
+    works unchanged; the one-hot is converted to the factored form internally via a fixed lookup.
+    """
+
+    def __init__(self, latent: int, n_actions: int, hidden: int = 512):
+        super().__init__()
+        import numpy as np
+        self.latent, self.n_actions = latent, n_actions
+        self.register_buffer("table", torch.from_numpy(factor_actions(n_actions)))
+        self.net = nn.Sequential(nn.Linear(latent + FACTORED_DIM, hidden), nn.ReLU(),
+                                 nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, latent))
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)          # untrained == identity == the skill metric's control
+
+    def forward(self, za: torch.Tensor) -> torch.Tensor:
+        z, oh = za[..., :self.latent], za[..., self.latent:]
+        return z + self.net(torch.cat([z, oh @ self.table], -1))

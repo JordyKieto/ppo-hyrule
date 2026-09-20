@@ -673,3 +673,63 @@ class StateDecoder(nn.Module):
                 "row_timer": r[..., j + 5 + self.n_states:j + 6 + self.n_states],
                 "row_vel": r[..., j + 6 + self.n_states:j + 9 + self.n_states],
                 "link_facing_target": r[..., j + 9 + self.n_states:j + 11 + self.n_states]}
+
+
+# --- One decoder, heterogeneous targets, differentiated by output activation ------------------------------
+#
+# StateDecoder grew into ~18 separate nn.Linear heads hanging off z, plus a per-row branch. That is a lot of
+# independent output layers competing for the same latent, and nothing shares structure between, say, Link's
+# position and an actor's position. This replaces them with ONE trunk and ONE output layer, sliced by a spec
+# that records each field's width and what kind of quantity it is; the activation is what differentiates them:
+#
+#   logits  raw, cross-entropy applies the softmax        (HP classes, behaviour state, action state)
+#   bits    raw, BCE applies the sigmoid                  (stateFlags, collision flags, moved)
+#   unit    TANH, because these are sin/cos pairs and belong in [-1, 1]
+#   real    raw                                           (positions, velocities, displacements)
+#
+# Output keys are identical to StateDecoder's, so every consumer -- decoded_to_states, the training losses, the
+# probes -- works unchanged.
+def _decode_spec(n_rows=N_ROWS):
+    g = [("link_hp", len(LINK_HP_VALUES), "logits"), ("link_pos", 3, "real"), ("link_yaw", 2, "unit"),
+         ("link_bits", 3, "bits"), ("targeted", n_rows + 1, "logits"), ("scene", 2, "logits"),
+         ("room", MAX_ROOM, "logits"), ("baba_count", N_BABA_COUNT, "logits"),
+         ("link_sf1", len(SF1_NAMED), "bits"), ("cam_yaw", 2, "unit"), ("link_vel", 3, "real"),
+         ("link_bg", len(BG_DECODE_BITS), "bits"), ("link_melee", N_MELEE_STATES, "logits"),
+         ("link_action", N_LINK_ACTIONS, "logits"), ("link_moved", 1, "bits"), ("link_dpos", 3, "real"),
+         ("link_speed", 1, "real"), ("link_wall_yaw", 2, "unit"), ("link_floor_dy", 1, "real"),
+         ("link_shape_yaw", 2, "unit"), ("link_parallel_yaw", 2, "unit"), ("link_fall", 1, "real"),
+         ("link_ztarget", 1, "bits"), ("link_airborne", 1, "bits")]
+    r = [("row_present", 1, "bits"), ("row_is_baba", 1, "bits"), ("row_hp", len(ROW_HP_VALUES), "logits"),
+         ("row_pos", 3, "real"), ("row_state", N_BABA_STATES, "logits"), ("row_facing_link", 2, "unit"),
+         ("row_timer", 1, "real"), ("row_vel", 3, "real"), ("link_facing_target", 2, "unit")]
+    return g, r
+
+
+class UnifiedDecoder(nn.Module):
+    """z -> every decoded field, from one trunk and one output layer, sliced by `_decode_spec`."""
+
+    def __init__(self, latent: int = 128, hidden: int = 512, n_rows: int = N_ROWS):
+        super().__init__()
+        self.n_rows = n_rows
+        self.gspec, self.rspec = _decode_spec(n_rows)
+        self.gw = sum(w for _, w, _ in self.gspec)
+        self.rw = sum(w for _, w, _ in self.rspec)
+        self.trunk = nn.Sequential(_layer(latent, hidden), nn.ReLU(), _layer(hidden, hidden), nn.ReLU())
+        self.out = _layer(hidden, self.gw + n_rows * self.rw, 0.1)
+
+    def forward(self, z):
+        h = self.out(self.trunk(z))
+        g, r = h[:, :self.gw], h[:, self.gw:].reshape(-1, self.n_rows, self.rw)
+        o, i = {}, 0
+        for name, w, kind in self.gspec:
+            v = g[:, i:i + w]
+            o[name] = torch.tanh(v) if kind == "unit" else v
+            i += w
+        j = 0
+        for name, w, kind in self.rspec:
+            v = r[..., j:j + w]
+            if kind == "unit":
+                v = torch.tanh(v)
+            o[name] = v.squeeze(-1) if w == 1 and name in ("row_present", "row_is_baba") else v
+            j += w
+        return o

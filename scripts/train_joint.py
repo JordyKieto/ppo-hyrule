@@ -39,7 +39,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, N_LINK_ACTIONS, ROW_HP_VALUES,  # noqa: E402
                          BCNet, Norm,
-                         StateDecoder, decode_targets,
+                         StateDecoder, UnifiedDecoder, decode_targets,
                          featurise, hp_class)
 from zelda_rl.dynamics import (MAG_EDGES, N_DIR_SECTORS, N_MAG_BINS, TransitionHead,  # noqa: E402
                                build_predictor, dir_unit_vectors, mag_centers)
@@ -78,6 +78,14 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--factored-action", action="store_true",
+                    help="feed the predictor a STRUCTURED control (stick direction as a unit vector plus one "
+                         "flag per button) instead of a flat one-hot over the 63 combined actions, so a "
+                         "direction seen with one button generalises to the same direction with another.")
+    ap.add_argument("--unified-decoder", action="store_true",
+                    help="one decoder trunk and one output layer sliced by a spec, with the activation "
+                         "differentiating the target kinds (logits / bits / tanh for sin-cos / real), instead "
+                         "of ~18 separate heads hanging off the latent.")
     ap.add_argument("--enc-from", default=None,
                     help="load the encoder from a behaviour-cloning checkpoint and FREEZE it. The world-model "
                          "objective is then purely: current latent + action -> next latent, under pressure "
@@ -205,9 +213,9 @@ def main():
         for q in enc.parameters():
             q.requires_grad_(False)
         enc.eval()
-    dec = StateDecoder(latent=a.latent)
+    dec = (UnifiedDecoder(latent=a.latent) if a.unified_decoder else StateDecoder(latent=a.latent))
     NA = meta["n_actions"]
-    pred = build_predictor(a.latent, NA)          # RESIDUAL: z + f(z,a); see zelda_rl/dynamics.py
+    pred = build_predictor(a.latent, NA, factored=a.factored_action)
     # Action-conditioned transition head. Motion and combat events are read from (z_t, a_t) directly rather
     # than decoded out of z_{t+1}, because the action barely survives into the latent (inverse dynamics
     # 0.089 vs a 0.220 ceiling) and these are exactly the quantities that depend on it.
@@ -784,7 +792,8 @@ def main():
                 # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
-                "norm": norm.state_dict(), "split": split, "pred_residual": True,
+                "norm": norm.state_dict(), "split": split, "pred_residual": True, "pred_factored": a.factored_action,
+                "unified_decoder": a.unified_decoder,
                 "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib,
                 "event_calib": event_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},

@@ -1357,3 +1357,44 @@ cleaner reason than was known at the time.
 
 Caveat: 12 epochs, single seed. Section 25 established this harness cannot resolve small differences, but
 6.49x against ~1.4x is far outside that band.
+
+## 27. Factored control input and one unified decoder: the best world model so far
+
+Two changes, both answering "is the world model actually shaped like a world model".
+
+**1. The control was a flat one-hot.** The predictor was fed `one_hot(a)` over the 63 combined actions, which
+are the cross product of 9 stick directions and 7 button combos. Nothing in that encoding says action 5 and
+action 12 share a stick direction, so the factorisation had to be rediscovered for every pair.
+`--factored-action` feeds the stick direction as a **unit vector** plus **one flag per button**
+(`zelda_rl.dynamics.FactoredPredictor`, 9 inputs), so a direction seen with one button generalises to the same
+direction with another. Camera is deliberately not an action input -- this action space has no camera control,
+so camera reaches the model through the v3 state.
+
+**2. ~18 separate decode heads became one.** `--unified-decoder` (`zelda_rl.bc.UnifiedDecoder`) uses one trunk
+and one output layer sliced by a spec, with the **activation** differentiating target kinds: `logits` raw for
+cross-entropy, `bits` raw for BCE, **tanh** for sin/cos pairs so they are bounded to [-1, 1], raw for
+continuous. Output keys are identical to `StateDecoder`'s so every consumer works unchanged.
+
+### Result, 12 epochs, frozen nothing, oversample 50, unroll 8
+
+| | frozen BC encoder | joint v15 (one-hot, multi-head) | **factored + unified** |
+|---|---|---|---|
+| tune skill | -5.345 | -1.428 | **-0.621** |
+| walk trajectory vs identity | 6.49x | 1.38x - 3.43x (6-seed range) | **1.14x** (end **1.07x**) |
+| hit trajectory | 4.96x | 1.11x | 1.20x (end 1.14x) |
+| **collision trajectory** | — | 0.92x | **0.96x / end 0.92x** |
+| jump trajectory (end) | — | — | **0.99x** |
+| block trajectory (end) | — | 1.09x | **1.03x** |
+| lockon / roll (end) | — | — | 1.07x / 1.06x |
+
+Skill **-0.621** is roughly twice as good as any previous model, and every trajectory ratio is now <= 1.24x with
+several at or below 1.0. Crucially, section 25 measured the old config's walk ratio across six seeds as
+1.38x-3.43x, and 1.14x sits **below that entire range** -- so this is not a lucky draw.
+
+Caveats: single seed, 12 epochs with the loss still falling, and the `hit` / `kill` rows still rest on 8 and 7
+windows so they are not evidence. `roll` detection fell 75% -> 42% and `jump` 50% -> 30%, but section 26
+established those were largely the action echoing back through the conditioning, so a drop there is not clearly
+a regression.
+
+All rollout and dream consumers now honour the checkpoint's decoder kind (`unified_decoder`) and predictor kind
+(`pred_factored`), so old checkpoints still load.

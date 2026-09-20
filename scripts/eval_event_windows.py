@@ -63,7 +63,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import zelda_rl.bc as bc  # noqa: E402
-from zelda_rl.bc import BCNet, Norm, StateDecoder, decode_targets, featurise, wants_v2  # noqa: E402
+from zelda_rl.bc import BCNet, Norm, StateDecoder, UnifiedDecoder, decode_targets, featurise, wants_v2  # noqa: E402
 from zelda_rl.combat import (BG_DECODE_BITS, BG_GROUND, BG_WALL, CombatConfig,  # noqa: E402
                              CombatTracker)
 from zelda_rl.dynamics import TransitionHead, load_predictor  # noqa: E402
@@ -288,7 +288,8 @@ def main():
     LAT, NA = ck["latent"], ck["n_actions"]
     enc = BCNet(link_dim=ck["link_dim"], row_dim=ck["row_dim"], n_actions=NA, latent=LAT, gru=0)
     enc.load_state_dict(ck["encoder"]); enc.eval()
-    dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
+    dec = (UnifiedDecoder(latent=LAT) if ck.get("unified_decoder") else StateDecoder(latent=LAT))
+    dec.load_state_dict(ck["decoder"]); dec.eval()
     pred = load_predictor(ck, LAT, NA)
     thead = None
     if ck.get("thead") is not None:

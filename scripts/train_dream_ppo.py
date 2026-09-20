@@ -35,7 +35,7 @@ from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, decode_targ
 from zelda_rl.ppo import gae, ppo_update_recurrent  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
 from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
-from zelda_rl.bc import StateDecoder  # noqa: E402
+from zelda_rl.bc import StateDecoder, UnifiedDecoder  # noqa: E402
 from zelda_rl.dynamics import TransitionHead, load_predictor  # noqa: E402
 from zelda_rl.combat import CombatConfig, CombatTracker  # noqa: E402
 from zelda_rl.dream_state import (MEM_DIM, DreamPolicy, DreamTracker, apply_transition,  # noqa: E402
@@ -197,7 +197,8 @@ def main():
         for q in thead.parameters():
             q.requires_grad_(False)
         print("transition head: motion and damage come from (z_t, a_t), not from differencing decoded state")
-    dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
+    dec = (UnifiedDecoder(latent=LAT) if ck.get("unified_decoder") else StateDecoder(latent=LAT))
+    dec.load_state_dict(ck["decoder"]); dec.eval()
     for p in list(enc.parameters()) + list(pred.parameters()) + list(dec.parameters()):
         p.requires_grad_(False)
 

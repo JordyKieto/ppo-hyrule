@@ -26,7 +26,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, decode_targets,  # noqa: E402
+from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, StateDecoder, UnifiedDecoder, decode_targets,  # noqa: E402
                          featurise, hp_class, wants_v2)
 from zelda_rl.combat import BABA_STATES, CombatConfig, DEKU_BABA  # noqa: E402
 from zelda_rl.dream_state import (DreamTracker, apply_transition, decoded_states_from_raw,  # noqa: E402
@@ -55,7 +55,8 @@ def main():
     LAT, NA = ck["latent"], ck["n_actions"]
     enc = BCNet(link_dim=ck["link_dim"], row_dim=ck["row_dim"], n_actions=NA, latent=LAT, gru=0)
     enc.load_state_dict(ck["encoder"]); enc.eval()
-    dec = StateDecoder(latent=LAT); dec.load_state_dict(ck["decoder"]); dec.eval()
+    dec = (UnifiedDecoder(latent=LAT) if ck.get("unified_decoder") else StateDecoder(latent=LAT))
+    dec.load_state_dict(ck["decoder"]); dec.eval()
     # same construction and call convention as scripts/train_dream_ppo.py
     from zelda_rl.dynamics import TransitionHead, load_predictor
     pred = load_predictor(ck, LAT, NA)
