@@ -227,8 +227,11 @@ def main():
                 len(data["test"]), time.time() - t0)
     assert_roundtrip(*data["train"][0])
 
-    gs = [decompose(st, a) for st, a in data["train"][:64]]
-    codecs = fit_codecs(gs)                                   # TRAIN ONLY -- no test leakage into a scale
+    # 160 rather than 64: codec scales for rare fields need episodes that actually contain a change.
+    gs = [decompose(st, a) for st, a in data["train"][:160]]
+    # TRAIN ONLY (no test leakage into a scale), and the delta scale is measured over the same steps the
+    # value head is trained on -- changed steps when the gate is on, all steps when it is off.
+    codecs = fit_codecs(gs, changed_only=args.gate)
     packs = {k: pack(v) for k, v in data.items() if v}
     cap = {c: max(p.capacity[c] for p in packs.values()) for c in packs["train"].capacity}
     packs = {k: p.pad_to(cap) for k, p in packs.items()}      # one capacity for every split
@@ -258,8 +261,9 @@ def main():
 
     base = evaluate(model, packs["test"], codecs, dev, cap=20000)
     worst = max(((abs(r["skill"]), k) for k, r in base.items()), default=(0.0, "-"))
-    LOGGER.info("control -- untrained test skill: worst |skill| %.2e on %s (nonzero only through the float "
-                "round-trip of the angle codec)", worst[0], worst[1])
+    LOGGER.info("control -- untrained test skill: worst |skill| %.2e on %s%s", worst[0], worst[1],
+                "" if worst[0] == 0 else "  (nonzero only through the float round-trip of the angle codec; "
+                                         "with the gate on it should be exactly 0)")
     log.update({"control/untrained_worst_abs_skill": worst[0], "control/permutation_ok": float("OK" in perm_msg),
                 "control/params_m": n_par / 1e6, "control/field_heads": n_head}, 0)
 

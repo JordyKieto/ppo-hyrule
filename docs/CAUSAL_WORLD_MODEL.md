@@ -109,9 +109,12 @@ One thing the code answers differently than the paper's framing suggests: `EnvOb
 
 ## 4. What this dissolves, failure by failure
 
-- **§24 (capacity contention) dissolves structurally.** `Link.pos'` and `En_Dekubaba.hp'` are separate heads
-  with separate parents and separate loss terms in different units. There is nothing for them to compete
-  over. §24's own numbers say both objectives are individually achievable on this data.
+- **§24 (capacity contention) is reduced, NOT dissolved.** `Link.pos'` and `En_Dekubaba.hp'` are separate
+  heads with separate parents and separate loss terms in different units. **This was originally written as
+  "dissolves structurally" and that was too strong** -- section 13 measured the same contention reappearing
+  in the shared TRUNK: a gate loss weighted 200x collapsed every value head that reads it. Separate heads do
+  not help when what they read is shared and one loss is weighted far harder than the others. The contention
+  moved; it did not disappear.
 - **§30 (identity is the global optimum) changes character.** There is no `z` to copy. Per-field "predict no
   change" is still a strong baseline — §6 quantifies exactly how strong — but it moves from *unavoidable
   capacity contention* to *a per-field loss weight*, which is a tunable.
@@ -375,7 +378,7 @@ a regression problem into the imbalanced-classification problem this project alr
 Ordered by (measured defect) / (cost), not by appeal. Every item names the evidence that motivates it, so
 none can be argued for or against from taste.
 
-### 12.1 Per-field change gate -- IN PROGRESS
+### 12.1 Per-field change gate -- RESOLVED, see section 13
 
 **Evidence:** section 11. 1.41 world units of spurious `Link.pos` motion on static steps; 7 heads at exactly
 0.000; 30 of 49 fields win on changed steps but pay on static ones.
@@ -462,3 +465,85 @@ needs the paper's per-target-field `f_global` restored (see the `OOCDM` docstrin
   every field on every batch (~70% CPU with MPS as the device, 170s/epoch). Pre-encode once.
 - **Single seed.** AGENTS.md section 7. Section 25 measured seed spread larger than most effects in the
   latent trail; nothing in section 11 has been repeated.
+
+
+---
+
+## 13. The change gate: three reversals, and what the 3-minute loop was worth
+
+Section 12.1's gate took four experiments to get right, and the first three conclusions were all wrong. The
+method failure is worth more than the result: the first attempt shipped the gate, its `pos_weight` and a
+changed-steps-only value loss in ONE commit and then spent 30 minutes per iteration unable to attribute the
+outcome to any of them. That is AGENTS.md section 9 exactly.
+
+Two of the three never needed a training run at all. **The firing threshold is applied at evaluation time**,
+so one trained model yields every threshold; and **gate quality is a property of a classifier**, measured with
+AP. `scripts/probe_gate.py` trains once on a random 120-episode subset and reports the three questions
+separately in **186 seconds**.
+
+### 13.1 Two things the probe had to fix about itself first
+
+- **The subset was not representative.** Taking the first 60 episodes of `v3-main` gave `Link.pos` a 0.629%
+  change rate against 8.3% on the real test split: `v3-main` is combat, where Link often stands still, while
+  `v3-approach` and `v3-moves` are where he walks. A probe whose target event is 13x rarer is measuring a
+  different problem. It now samples at random across all four collections and PRINTS its realised change
+  rates against the census before anything else in the table can be believed.
+- **A constant cannot stand in for a missing gate.** The ungated arm filled gate logits with a constant, and
+  AP over constant scores ranks by array order, which is temporal, and changes cluster in time -- producing a
+  bogus "40/47 gate informative". Now filled with NaN, which reads as NaN.
+
+### 13.2 The measurements, all at matched epochs on one subset
+
+| arm | value heads beating do-nothing given a change | `Link.pos` val\|chg | mag ratio | gate AP |
+|---|---|---|---|---|
+| no gate | **28/47** | **+0.066** | 0.418 | -- |
+| gate, value on changed steps only | 16/47 | -0.106 | 0.238 | 0.834 |
+| gate, value on all steps | **14/47** | -0.051 | **0.119** | 0.870 |
+| **gate detached from the trunk** | **28/47** | **+0.064** | **0.410** | 0.648 |
+
+**Reversal 1.** The gate was blamed for finding a degenerate never-fire optimum. Wrong: the gate is an
+excellent classifier -- 47/47 fields above 2x base rate, `Link.pos` AP 0.839 against section 29's `moved` AP
+of 0.435 for the same question -- and the calibrator was correctly declining to fire value heads that made
+things worse. `bestThr = never` tracked `val|chg < 0` almost exactly.
+
+**Reversal 2.** Restricting the value loss to changed steps was then blamed, and it IS harmful (28 -> 16).
+But holding that fixed and merely ADDING the gate loss gave 14/47, worse than either. So the restriction was
+not the mechanism.
+
+**Reversal 3, and the actual cause.** The gate's BCE carries `pos_weight` up to 200x and backpropagates
+through the SHARED trunk. It repurposes the representation the value heads read: predicted magnitude collapses
+to 0.119 of the truth. Detaching -- the gate READS the trunk, never shapes it -- recovers the value head
+completely (28/47, `Link.pos` +0.064 vs the ungated +0.066) for a gate AP cost of 0.870 -> 0.648. **And for
+the first time the calibrator fires on `Link.pos` and reduces error, 0.4773 -> 0.4448.**
+
+### 13.3 Settled design
+
+Gate head on a `detach()`ed trunk; value head trained on ALL steps; threshold calibrated per field on tune and
+applied unchanged to test. `--gate-attached` and `--value-on-changed` keep both measured-harmful variants
+runnable so they can be re-tested rather than argued about.
+
+### 13.4 Two bugs this found in committed code
+
+- `field_losses` and `predict_raw` decided whether to unwrap `forward`'s output by testing for the `"gate"`
+  key rather than `"value"`, so with the gate off they passed the whole wrapper through as the values dict.
+  **`--no-gate` -- the matched baseline arm named in its own commit message -- was never runnable.** A flag
+  that exists to be the control must be executed when it is written.
+- The delta scale `dstd` was measured over all steps while the value head trained on changed steps only,
+  where deltas are 3.4x-50x larger (`Link.pos` 2.70 -> 9.11, `y_dist_to_ledge` 7.9 -> 400). Targets reached
+  |152| under a Gaussian NLL. The first fix fell back per episode, which silently reinstated the bug for
+  exactly the rare fields that needed it, since most episodes contain no changed step at all.
+
+### 13.5 Still open
+
+Direction remains the weak axis: `Link.pos` sits at ~105 deg median error with 24.8% of predictions within
+45 deg, and magnitude at 0.41 of the truth. Section 29 hit the same wall and its fix was binning -- "direction
+and magnitude are binned, and a mode does not shrink" -- after regression to the mean made displacement 9.3x
+too small. That is 12.2's next experiment, and the median is the wrong summary for it: a median direction
+error above 90 deg coexists with a POSITIVE `val|chg`, because the model gets direction right on the large
+displacements that dominate the error. It needs magnitude-weighting.
+
+Ground truth for that work, measured on the raw data with no model involved: `Link.vel[t]` sits **11.3 deg**
+from the next displacement in the XZ plane (62% within 30 deg), so the directional signal is present and
+already an input. The commanded stick direction sits at **66.2 deg** with only 31% within 30 deg -- a single
+10 Hz step is dominated by momentum and collision, not by what was pressed, which is consistent with section
+16's direction accuracy stalling at 0.532 over 16 sectors.

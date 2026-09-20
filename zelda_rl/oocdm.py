@@ -42,8 +42,12 @@ regression optimum. Section 29 of the latent trail already had the evidence that
 `TransitionHead`'s `moved` logit reached AP 0.435, 6.8x base.
 
 Three consequences, each deliberate:
-  - the VALUE loss is computed only on steps where the field truly changed, so it learns "how much, given it
-    moved" instead of being dominated by zeros;
+  - the VALUE loss is computed on ALL steps by default. Restricting it to changed steps was the original
+    design and `scripts/probe_gate.py` measured it as HARMFUL on its own terms: at matched epochs on one
+    subset it took the fields whose value head beats do-nothing GIVEN A CHANGE from 28/47 down to 16/47, and
+    flipped Link.pos from +0.066 to -0.106. The zeros are apparently teaching the head something about scale
+    and direction that it does not recover from changed steps alone. `value_on_changed=True` restores the
+    old behaviour for anyone who wants to re-test it;
   - the GATE loss is a per-field BCE with `pos_weight` taken from that field's MEASURED change rate, which is
     where rare-event supervision now lives (section 23 of the latent trail, applied per field);
   - at init the gate bias is GATE_INIT_BIAS, so p(changed) ~ 3e-4 and the untrained model is do-nothing
@@ -176,11 +180,22 @@ def pack_bits(b: np.ndarray) -> np.ndarray:
 
 
 def fit_codecs(groups: Iterable[dict[str, ObjectGroup]], schema: Schema = SCHEMA_V3,
-               ) -> dict[str, dict[str, FieldCodec]]:
+               changed_only: bool = True) -> dict[str, dict[str, FieldCodec]]:
     """Measure every codec's constants from decomposed episodes. Returns {class: {field: codec}}.
 
     Scales come from the data the model will see, restricted to steps where the object EXISTS -- a despawned
     actor's zeroed row must not drag a position mean toward the origin.
+
+    `changed_only` sets WHICH steps `dstd` is measured over, and it must match how the value head is trained.
+    With the change gate on, the value head only ever sees steps where the field changed, and the delta std
+    there is 3.4x to 50x larger than over all steps (Link.pos 2.70 -> 9.11, y_dist_to_ledge 7.9 -> 400).
+    Measuring it over all steps -- which are ~90% zeros -- left targets reaching |152| and a Gaussian NLL in
+    the thousands, which is exactly what the first gated run did before this was fixed. With the gate off the
+    value head sees every step, so the all-steps scale is the right one.
+
+    The scale is `max(std, mean|delta|)` rather than std alone: a field that always changes by the same
+    amount (Link.grass, always +/-5) has std 0 on changed steps, and dividing by the 1e-3 floor would
+    reintroduce the same blow-up from the other direction.
     """
     acc: dict[str, dict[str, list]] = {}
     for g in groups:
@@ -191,11 +206,18 @@ def fit_codecs(groups: Iterable[dict[str, ObjectGroup]], schema: Schema = SCHEMA
                 v = grp.attrs[f.name]
                 both = grp.mask[:-1] & grp.mask[1:]
                 cur, nxt = v[:-1][both], v[1:][both]
-                a = acc.setdefault(cname, {}).setdefault(f.name, [[], [], []])
+                a = acc.setdefault(cname, {}).setdefault(f.name, [[], [], [], []])
                 if len(a[0]) < 64:                                     # 64 episodes is plenty for a scale
                     a[0].append(v[grp.mask])
                     if f.vtype.kind in ("real", "count"):
-                        a[1].append(nxt - cur)
+                        dl = nxt - cur
+                        a[1].append(dl)
+                        if len(dl):
+                            # Changed deltas are pooled ACROSS episodes before any fallback. Falling back
+                            # per episode was the bug: a field that changes on 0.08% of steps has no changed
+                            # step in most episodes, so the fallback filled the pool with zeros and the
+                            # scale came out as the all-steps one after all (y_dist_to_ledge 7.8, not 400).
+                            a[3].append(dl[err(f, prep(f, nxt), prep(f, cur)) > 0])
                     elif f.vtype.kind in ("categorical", "boolean"):
                         a[2].append(np.unique(v[grp.mask]))
 
@@ -203,12 +225,18 @@ def fit_codecs(groups: Iterable[dict[str, ObjectGroup]], schema: Schema = SCHEMA
     for cname, fields in acc.items():
         c = next(k for k in schema.classes if k.name == cname)
         out[cname] = {}
-        for fname, (vals, deltas, seen) in fields.items():
+        for fname, (vals, deltas, seen, deltas_chg) in fields.items():
             f = c.field(fname)
             v = np.concatenate(vals) if vals else np.zeros((1, f.vtype.size), np.float32)
             mean, std = v.mean(0), v.std(0)
-            d = np.concatenate(deltas) if deltas else np.zeros((1, f.vtype.size), np.float32)
-            dstd = d.std(0)
+            dc = np.concatenate(deltas_chg) if deltas_chg else np.zeros((0, f.vtype.size), np.float32)
+            d = dc if (changed_only and len(dc)) else (
+                np.concatenate(deltas) if deltas else np.zeros((1, f.vtype.size), np.float32))
+            dstd = np.maximum(d.std(0), np.abs(d).mean(0)) if len(d) else np.zeros(f.vtype.size)
+            # A field with no changed example in the fitting subset (Link.grass changes on 0.026% of steps)
+            # would otherwise land on the 1e-3 floor, and any prediction it made would be enormous. Fall back
+            # to the field's own spread, which is a sane bound on "how much could this change".
+            dstd = np.maximum(dstd, 0.01 * std)
             values = np.unique(np.concatenate(seen)) if seen else np.zeros(0, np.float32)
             out[cname][fname] = FieldCodec(cname, f, mean.astype(np.float32),
                                            np.maximum(std, 1e-3).astype(np.float32),
@@ -392,9 +420,10 @@ class OOCDM(nn.Module):
     def __init__(self, codecs: dict[str, dict[str, FieldCodec]], capacity: dict[str, int],
                  schema: Schema = SCHEMA_V3, targets: dict[str, list[str]] | None = None,
                  d: int = 16, d_h: int = 64, d_k: int = 32, d_v: int = 64, d_dec: int = 128,
-                 use_gate: bool = True):
+                 use_gate: bool = True, value_on_changed: bool = False, gate_detach: bool = True):
         super().__init__()
         self.schema, self.codecs, self.capacity, self.use_gate = schema, codecs, capacity, use_gate
+        self.value_on_changed, self.gate_detach = value_on_changed, gate_detach
         self.pos_weight: dict[str, torch.Tensor] = {}      # filled by set_change_rates()
         self.order = [c for c in schema.classes if capacity.get(c.name, 0) > 0]
         self.field_names, self.target_names = {}, {}
@@ -446,7 +475,13 @@ class OOCDM(nn.Module):
             for i, t in enumerate(self.target_names[c.name]):
                 key = f"{c.name}|{t}"
                 out[key] = self._identity(c.name, t, m.heads[i](h[:, :, i]), batch["raw"][c.name][t])
-                gate[key] = m.gates[i](h[:, :, i])[..., 0]
+                # The gate READS the representation but must not SHAPE it. Its BCE carries pos_weight up
+                # to 200x, and backpropagating that through the shared trunk collapsed the value head:
+                # at matched epochs, adding the gate loss took value heads beating do-nothing from 28/47 to
+                # 14/47 and Link.pos's predicted magnitude from 0.418 to 0.119 of the truth. Detaching keeps
+                # the classifier (AP 0.839 on Link.pos) without letting it repurpose the trunk.
+                gh = h[:, :, i].detach() if self.gate_detach else h[:, :, i]
+                gate[key] = m.gates[i](gh)[..., 0]
             base += n_obj
         return {"value": out, "gate": gate} if self.use_gate else {"value": out}
 
@@ -531,8 +566,11 @@ def field_losses(model: "OOCDM", out: dict, batch: dict) -> dict[str, torch.Tens
     field's measured change rate, and a value term computed ONLY on the steps where it truly changed.
     """
     losses = {}
-    gates = out.get("gate") if isinstance(out, dict) and "value" in out else None
-    vals = out["value"] if gates is not None else out
+    # `forward` always wraps in {"value": ...} and adds "gate" only when the gate is on. Keying the unwrap
+    # off the PRESENCE OF "gate" rather than off "value" passed the whole wrapper through as the values dict
+    # when the gate was off, and --no-gate died with KeyError on the first field.
+    vals = out["value"] if (isinstance(out, dict) and "value" in out) else out
+    gates = out.get("gate") if isinstance(out, dict) else None
     for c in model.order:
         for t in model.target_names[c.name]:
             key = f"{c.name}|{t}"
@@ -545,9 +583,10 @@ def field_losses(model: "OOCDM", out: dict, batch: dict) -> dict[str, torch.Tens
                 pw = model.pos_weight.get(key)
                 losses[f"gate:{key}"] = Fn.binary_cross_entropy_with_logits(
                     gates[key][v], ch[v], pos_weight=pw.to(gates[key].device) if pw is not None else None)
-                v = v & (ch > 0.5)             # the value head learns "how much, GIVEN it moved"
-                if not bool(v.any()):
-                    continue
+                if model.value_on_changed:
+                    v = v & (ch > 0.5)         # "how much, GIVEN it moved" -- MEASURED HARMFUL, see below
+                    if not bool(v.any()):
+                        continue
             k = cod.kind
             if k in ("real", "count"):
                 s = model.log_scale[f"{c.name}|{t}"]
@@ -573,8 +612,11 @@ def predict_raw(model: "OOCDM", out: dict, batch: dict,
     is then exactly do-nothing for that (object, step), which is what stops a near-zero delta being smeared
     across the ~90% of steps on which nothing happens.
     """
-    gates = out.get("gate") if isinstance(out, dict) and "value" in out else None
-    vals = out["value"] if gates is not None else out
+    # `forward` always wraps in {"value": ...} and adds "gate" only when the gate is on. Keying the unwrap
+    # off the PRESENCE OF "gate" rather than off "value" passed the whole wrapper through as the values dict
+    # when the gate was off, and --no-gate died with KeyError on the first field.
+    vals = out["value"] if (isinstance(out, dict) and "value" in out) else out
+    gates = out.get("gate") if isinstance(out, dict) else None
     res = {}
     for c in model.order:
         for t in model.target_names[c.name]:
