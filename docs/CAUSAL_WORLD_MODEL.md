@@ -802,3 +802,57 @@ The 6-epoch full-data arm (section 14) scored `Link.pos` aggregate -2.617, i.e. 
 than too little, so the inertness here may be undertraining. That is a testable difference and it is not yet
 tested -- but a model that must be trained to the point of over-moving before it moves at all is not
 obviously on a path to a usable dream either.
+
+
+---
+
+## 16. Why nothing works: we trained at G1, and G1 is the problem
+
+The question that produced this was "did you frame it so the Link object can affect itself?". The wiring was
+checked in the trained weights and it is correct -- Link's 38 own input fields (including `vel`, `stick` and
+the buttons) reach Link's 30 own targets through `f_local`, which is the paper's LOCAL causality
+`C.U -> V'`, and attention masks self out, which is the paper's GLOBAL causality `j != i`. So the
+object-oriented framing is right.
+
+The experiment that followed is the most important measurement in this document. RIDGE REGRESSION -- closed
+form, no capacity limit, no optimisation difficulty -- predicting Link's XZ displacement on changed steps,
+from nested subsets of exactly what the model receives:
+
+| ridge feature set | dims | val\|chg |
+|---|---|---|
+| `vel` only | 3 | **+0.219** |
+| `vel + speed` | 4 | +0.214 |
+| `vel + speed + stick` | 6 | +0.210 |
+| `+ yaw + bg_flags` | 18 | +0.191 |
+| **ALL 38 Link fields -- what the model actually gets** | 178 | **-0.066** |
+| `pos + 1.70*vel`, closed form | 3 | +0.247 |
+
+**Monotonic degradation as irrelevant fields are added.** A linear model loses the entire signal purely by
+being handed 175 extra input dimensions. This is not architecture, not capacity, not epochs, and not data
+volume -- it happens to a closed-form fit on the same data.
+
+**So the paper's masking is not an optimisation, it is the mechanism.** `Link.pos'` needs roughly
+`{pos, vel, speed, stick, bg_flags}`; causal discovery exists to find that set and mask the other ~8,280
+candidate edges away. Every result in sections 11-15 was produced by a model reading 8,286 potential parents
+for every head:
+
+- the inert dream (section 15, 4% of real travel),
+- the 41 heads that learned nothing (section 13.5),
+- the value head losing to `pos + k*vel` (section 13.7),
+- `Link.pos` at +0.064 against a zero-parameter baseline's +0.257.
+
+All are consistent with one cause, and it is the one the paper removes.
+
+**This also explains why the head-tuning of section 13 was doomed.** A gate, oversampling, binning and
+calibration all operate on the OUTPUT of a trunk that is reading 175 irrelevant dimensions. None of them can
+recover a signal that has already been drowned on the input side.
+
+**Consequence for the plan.** Stage 2 is not the next phase after Stage 1 is polished; Stage 1 cannot be
+made to work without it. The missing pieces are listed in 14.3 and are all in `../oocdm/scripts_/train_ooc.py`:
+the random-mask term (`p_edge=0.9`), the current-graph term, the full-graph term, the 3-term objective
+`-(ll_graph + ll_full + ll_random)/3`, and the CMI edge test at `causal_threshold=0.1`.
+
+**Cheap prediction to falsify this first.** Before implementing discovery, hand-specify the parent set for
+`Link.pos'` from the ridge table (`{pos, vel, speed, stick, bg_flags}`), train the existing model with every
+other edge masked, and check whether `Link.pos` reaches ~+0.22. If it does not, masking is not sufficient
+and discovery will not save us either. That is one 4-minute run and it gates the whole of Stage 2.
