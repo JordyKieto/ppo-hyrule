@@ -124,3 +124,42 @@ shrinks the denominator and moves skill for reasons unrelated to the model getti
 (0.00095 vs 0.00613). Reading either number alone would have given the opposite conclusion.
 
 Always print `pred`, `identity` and the move ratio together, and compare arms at the same epoch count.
+
+## 13. Follow the paper you adopted. Deviations are proposals, not edits.
+
+When a method is adopted from a paper, the paper's premise is the plan. Changing it is a decision for the
+person who chose it, and it is proposed before it is coded — never shipped inside a commit that claims to be
+implementing the method.
+
+**The incident.** OOCDM (Yu et al., ICML 2024) was adopted to replace the latent world model. Stage 0 (schema
++ census) and Stage 1 (per-field model at the full graph) were built as planned. Then, over six unrequested
+experiments in one session, the following were added — **none of which appear in the paper**:
+
+- a per-field **change gate** (a "did this field change" classifier gating the value head),
+- per-field **`pos_weight` oversampling** of rare events,
+- **binned direction + magnitude** heads for vector fields,
+- per-field **firing-threshold calibration**.
+
+All four came from `docs/LATENT_WORLD_MODEL.md` §3/§23/§29 — the *failed* line of work OOCDM was adopted to
+escape. So the session re-ran the old approach's head-tuning inside the new architecture's shell.
+
+Meanwhile **the paper's actual contribution was never run**: no masking, no CMI, no causal discovery, no
+`Ĝ` vs `G₁` vs empty-graph comparison, and no shuffled-class control. What got trained was OOCDM's
+*baseline* (full graph, no discovery), not OOCDM.
+
+Cost: a session of compute, four architecture experiments scored against a floor that was too low (the
+trivial `pos + k·vel` control, mandated by §1 and named in §28, was run last instead of first — and it beats
+the model), and a codebase that had to be stripped back.
+
+**The rules this produces.**
+
+1. **The paper's method is the baseline; your idea is the experiment.** Run the paper's version first,
+   completely, with its own controls, before proposing anything else.
+2. **A deviation is proposed in a message, not in a commit.** If it is worth doing it is worth one sentence
+   of agreement first.
+3. **Deviations already present must be listed** in the module docstring, so the next reader knows what is
+   the paper and what is ours. See the header of `zelda_rl/oocdm.py`.
+4. **Finish the phase you are in before starting another.** Stage 1 still had two controls unrun
+   (shuffled-class, seed variance) when Stage 2 was skipped entirely.
+5. **One authorisation, one experiment.** "Start with a change gate" authorises a change gate — not the six
+   follow-ups its results suggest. A fast iteration loop is a reason to check in more often, not less.

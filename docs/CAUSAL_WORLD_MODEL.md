@@ -9,8 +9,12 @@ what each change was a response to. Not an argument for a conclusion.
 in Object-Oriented Environments*, ICML 2024. Paper PDF and the authors' reference implementation are local
 (`~/Downloads/yu24j.pdf`, `~/Documents/dev/oocdm`).
 
-**Status:** Stage 0 complete. Stage 1 first run complete and **it does not beat do-nothing** (section 11).
-Open work is section 12; nothing there is a nice-to-have, each item has a measured defect behind it.
+**Status:** Stage 0 COMPLETE. Stage 1 TRAINED BUT UNDER-CONTROLLED. Stage 2 (causal discovery, the paper's
+actual contribution) NEVER STARTED. Section 14 is the field-by-field result table and the list of gaps.
+
+**The code was restored to the paper in commit `<this one>`.** A change gate, per-field `pos_weight`
+oversampling, binned direction/magnitude heads and threshold calibration were added in one session, none of
+them are in Yu et al., and all have been removed. See AGENTS.md section 13.
 
 ---
 
@@ -639,3 +643,127 @@ from the next displacement in the XZ plane (62% within 30 deg), so the direction
 already an input. The commanded stick direction sits at **66.2 deg** with only 31% within 30 deg -- a single
 10 Hz step is dominated by momentum and collision, not by what was pressed, which is consistent with section
 16's direction accuracy stalling at 0.532 over 16 sectors.
+
+---
+
+## 14. What actually works, field by field
+
+The only arm that is PAPER-SHAPED -- per-field heads, class sharing, attention, full graph G1, no
+gate, no binning, no oversampling -- is the 6-epoch run `runs/oocdm-stage1-g1` (wandb `xq6yb719`).
+**That is the number of record.** The gated runs are not OOCDM and are excluded here.
+
+TEST slots {7,9}, 46,926 held-out transitions. `AGG` = `1 - model_MAE/identity_MAE` over all scored
+(object, step) pairs, which is what a rollout accumulates. `CHG` = the same restricted to steps where
+the field changed, which is what copying cannot win. PASS requires BOTH.
+
+| entity.field | chg% | AGG | CHG | verdict |
+|---|---:|---:|---:|---|
+| `Link.melee_state` | 1.00 | -4.205 | +0.558 | PARTIAL (CHG only) |
+| `Link.fall_distance` | 1.55 | -1.220 | +0.554 | PARTIAL (CHG only) |
+| `Link.sf1` | 2.04 | -21.612 | +0.473 | PARTIAL (CHG only) |
+| `Link.sf3` | 0.97 | +0.413 | +0.459 | **PASS** |
+| `Link.bg_flags` | 0.84 | -0.764 | +0.454 | PARTIAL (CHG only) |
+| `Link.speed` | 3.15 | -1.850 | +0.421 | PARTIAL (CHG only) |
+| `Link.grass` | 0.03 | +0.324 | +0.407 | **PASS** |
+| `Link.ztarget_timer` | 2.32 | -15.713 | +0.404 | PARTIAL (CHG only) |
+| `Link.floor_height` | 0.74 | -1.085 | +0.384 | PARTIAL (CHG only) |
+| `Link.pos` | 8.30 | -2.617 | +0.268 | PARTIAL (CHG only) |
+| `Link.melee_anim` | 0.43 | +0.069 | +0.261 | **PASS** |
+| `Link.sf2` | 3.72 | -0.361 | +0.214 | PARTIAL (CHG only) |
+| `Link.y_dist_to_ledge` | 0.08 | -0.586 | +0.189 | PARTIAL (CHG only) |
+| `Link.shape_yaw` | 3.62 | -0.365 | +0.155 | PARTIAL (CHG only) |
+| `Link.vel` | 5.98 | -3.194 | +0.115 | PARTIAL (CHG only) |
+| `Link.action_fn_rel` | 2.61 | -22.236 | +0.088 | PARTIAL (CHG only) |
+| `Link.yaw` | 4.03 | -0.216 | +0.012 | PARTIAL (CHG only) |
+| `Link.parallel_yaw` | 0.25 | -0.403 | +0.003 | PARTIAL (CHG only) |
+| `Link.wall_yaw` | 0.12 | -0.228 | +0.000 | PARTIAL (CHG only) |
+| `Link.nuts` | 0.00 | -0.039 | +0.000 | PARTIAL (CHG only) |
+| `Link.hp` | 0.18 | +0.000 | +0.000 | FAIL |
+| `Link.held_item` | 0.04 | +0.000 | +0.000 | FAIL |
+| `Link.floor_pitch` | 0.42 | -0.965 | -0.001 | FAIL |
+| `Link.dist_interact_wall` | 0.56 | -0.528 | -0.007 | FAIL |
+| `Camera.yaw` | 6.73 | -0.053 | +0.013 | PARTIAL (CHG only) |
+| `Camera.pitch` | 7.82 | -0.171 | -0.003 | FAIL |
+| `Camera.eye` | 10.78 | -1.302 | -0.020 | FAIL |
+| `Room.scene` | 0.03 | +0.333 | +0.333 | **PASS** |
+| `En_Dekubaba.vel` | 0.02 | -1.061 | +0.342 | PARTIAL (CHG only) |
+| `En_Dekubaba.state_idx` | 0.43 | +0.150 | +0.150 | **PASS** |
+| `En_Dekubaba.timer` | 2.72 | -4.806 | +0.115 | PARTIAL (CHG only) |
+| `En_Dekubaba.pos` | 2.50 | -0.976 | +0.109 | PARTIAL (CHG only) |
+| `En_Dekubaba.focus` | 2.50 | -5.733 | +0.100 | PARTIAL (CHG only) |
+| `En_Dekubaba.fn_rel` | 0.45 | +0.090 | +0.090 | **PASS** |
+| `En_Dekubaba.is_targeted` | 0.11 | -0.179 | +0.055 | PARTIAL (CHG only) |
+| `En_Dekubaba.yaw_to_player` | 5.76 | -0.179 | +0.001 | PARTIAL (CHG only) |
+| `En_Dekubaba.yaw` | 0.00 | -0.570 | +0.000 | PARTIAL (CHG only) |
+| `En_Dekubaba.present` | 0.02 | +0.000 | +0.000 | FAIL |
+| `En_Dekubaba.hp` | 0.02 | +0.000 | +0.000 | FAIL |
+| `En_Dekubaba.has_arrow` | 0.08 | +0.000 | +0.000 | FAIL |
+| `En_Dekubaba.shape_yaw` | 1.13 | -0.124 | -0.000 | FAIL |
+| `En_St.pos` | 10.43 | -4.380 | +0.718 | PARTIAL (CHG only) |
+| `En_St.focus` | 10.43 | -4.129 | +0.709 | PARTIAL (CHG only) |
+| `En_St.yaw_to_player` | 7.26 | -1.270 | +0.156 | PARTIAL (CHG only) |
+| `En_St.vel` | 10.43 | -3.855 | +0.070 | PARTIAL (CHG only) |
+| `En_St.present` | 0.03 | +0.000 | +0.000 | FAIL |
+| `En_Sw.yaw_to_player` | 7.47 | -0.510 | +0.128 | PARTIAL (CHG only) |
+| `En_Sw.present` | 0.03 | +0.000 | +0.000 | FAIL |
+| `En_Sw.focus` | 0.01 | -1.095 | -0.000 | FAIL |
+
+**6 PASS · 30 PARTIAL · 13 FAIL, of 49 live fields.** 7 heads learned nothing at all (CHG exactly 0.000). 28 more fields never change in this data and are not scored.
+
+### 14.1 By entity
+
+| class | instances | live fields | PASS | what it contributes |
+|---|---:|---:|---:|---|
+| `Link` | 1 | 24 | 3 | the agent. Nothing in locomotion or combat passes. |
+| `Camera` | 1 | 3 | 0 | driven by game logic we do not observe; all three fields fail or are CHG-only. |
+| `Room` | 1 | 1 | 1 | one rare binary event (the exit). Passes, but it is a terminal, not dynamics. |
+| `En_Dekubaba` | 3 | 13 | 2 | the combat target. `hp` -- what damage is made of -- learned nothing. |
+| `En_St` | 3 | 5 | 0 | Skulltula. Sways vertically 0.32 units; `pos`/`focus` are CHG-only at high skill because the motion is near-periodic. |
+| `En_Sw` | 3 | 3 | 0 | Skullwalltula. Never moves. Nothing to learn. |
+
+### 14.2 Schema: what the OOMDP itself got right and wrong
+
+| aspect | verdict |
+|---|---|
+| 363 columns partition exactly into (class, field) | **holds**, asserted every run |
+| `decompose` -> `recompose` is lossless | **holds**, asserted every run |
+| row indices removed (`targeted_row` -> per-actor `is_targeted`) | **holds**; permutation control exact over 77 heads |
+| varying instance count (1-3 Babas, 5 distinct slot maps) | **holds** |
+| actor ids resolved from the decompilation | **holds** (`0x0055` cross-checks `combat.DEKU_BABA`) |
+| class granularity (one class per actor id) | **untested** -- the shuffled-class control was never run |
+| `En_Dekubaba.vel` declared a state field | **wrong**: always exactly 0 while the Baba moves. Dead input |
+| `Link.y_dist_to_ledge` typed `Real` | **wrong**: a sentinel (399.96), not a continuous quantity |
+| `Link.dist_interact_wall` typed `Real` | **wrong**: FAIL in every arm; a derived proxy for geometry we do not model |
+| 28 of 77 fields never change | correct but means aggregate metrics are 36% composition |
+
+### 14.3 Causal relationship gaps -- the largest gap in the project
+
+**Zero causal edges have been tested.** Everything trained at the full graph `G1`, where every field is a
+parent of every field. The paper's contribution is not in the model, it is in the discovery, and none of it
+has been run:
+
+| paper component | file in `../oocdm` | our status |
+|---|---|---|
+| random-mask training term (`p_edge`) | `mask_generator.py`, `train_ooc.py` | **missing** |
+| current-graph training term | `GraphMaskGenerator` | **missing** |
+| full-graph training term | `FullMaskGenerator` | we train on this ALONE |
+| 3-term objective `-(ll_graph + ll_full + ll_random)/3` | `train_ooc.py:90` | **missing** |
+| CMI per class-level edge | `get_causal_graph()` | **missing** |
+| threshold `causal_threshold=0.1`, `p_edge=0.9` | `train_ooc.py` defaults | **never used** |
+| graph-stability stopping (`n_iter_stable`) | `train_ooc.py` | **missing** |
+
+So of **8,286 candidate class-level edges** (1,741 local + 6,545 global) we have tested **0**, and we cannot
+answer a single question the paper exists to answer: which fields actually cause which, whether the
+discovered graph beats the full graph, or whether class sharing contributes anything at all.
+
+### 14.4 Controls still owed on Stage 1
+
+| control | status |
+|---|---|
+| identity init is exactly do-nothing | done, asserted every run |
+| permutation invariance | done (was silently vacuous for one commit; now asserts head count) |
+| untrained skill ~ 0 | done |
+| **trivial baseline `pos + k*vel`** | run LAST instead of first. **+0.257 vs the model's +0.064** |
+| **shuffled-class** (does class sharing do anything?) | **NEVER RUN** -- tests the paper's premise |
+| **seed variance** (AGENTS.md section 7) | **NEVER RUN** -- everything is single-seed |
+| **multi-step rollout** (AGENTS.md section 8, the barometer) | **NEVER RUN** |
