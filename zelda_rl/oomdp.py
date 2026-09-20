@@ -522,6 +522,43 @@ def assert_roundtrip(state: np.ndarray, actions: np.ndarray | None = None,
                              f"{[names[i] for i in bad[:12]]}{' ...' if len(bad) > 12 else ''}")
 
 
+# --------------------------------------------------------------------------------------------------------
+# Field metrics. These live HERE, beside the Field definitions, because both the do-nothing census and the
+# model evaluation must score a field the same way. state_layout.py's docstring records that every loader bug
+# in this project came from two copies of one definition drifting apart; a metric is a definition.
+# --------------------------------------------------------------------------------------------------------
+def wrap(d: np.ndarray) -> np.ndarray:
+    return (d + np.pi) % (2 * np.pi) - np.pi
+
+
+def unpack_bits(v: np.ndarray, n: int) -> np.ndarray:
+    return ((v.astype(np.int64) >> np.arange(n)) & 1).astype(np.float32)
+
+
+def prep(f: Field, v: np.ndarray) -> np.ndarray:
+    """Raw column values -> the representation `err` works on."""
+    k = f.vtype.kind
+    if k == "bits":
+        return unpack_bits(v, f.vtype.n)
+    if k == "angle":
+        return v * (2 * np.pi / TURNS) if f.vtype.unit == "binang" else v.astype(np.float32)
+    return v.astype(np.float32)
+
+
+def err(f: Field, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Per-sample error between two PREPARED values, in the field's own units. Shape (n,)."""
+    k = f.vtype.kind
+    if k == "angle":
+        return np.abs(wrap(a - b)).mean(-1) * 180.0 / np.pi          # degrees
+    if k in ("real", "count"):
+        return np.abs(a - b).mean(-1)                                 # world units / items
+    return (a != b).astype(np.float32).mean(-1)                       # error rate (enum, boolean, bits)
+
+
+def unit(f: Field) -> str:
+    return {"angle": "deg", "real": f.vtype.unit or "abs", "count": "abs"}.get(f.vtype.kind, "rate")
+
+
 def describe(schema: Schema = SCHEMA_V3) -> str:
     lines = [f"OOMDP schema: {len(schema.classes)} classes, {schema.n_field()} fields "
              f"({schema.n_field('state')} state, {schema.n_field('action')} action)"]

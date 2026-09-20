@@ -40,46 +40,13 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.oomdp import (Field, TURNS, assert_partition,  # noqa: E402
-                            assert_roundtrip, decompose, fit_cardinalities)
+from zelda_rl.oomdp import (Field, assert_partition, assert_roundtrip,  # noqa: E402
+                            decompose, err as _err, fit_cardinalities, prep as _prep, unit as _unit)
 from zelda_rl.state_layout import STATE_DIM_V3  # noqa: E402
 
 DEFAULT_DATA = "datasets/transitions/v3-main/20260919-084052"
 RESERVOIR = 40_000          # values kept per field for the marginal and random-pair controls
 
-
-def _bits(v: np.ndarray, n: int) -> np.ndarray:
-    """(..., 1) packed integers -> (..., n) float bits."""
-    x = v.astype(np.int64).reshape(*v.shape[:-1], 1)
-    return ((x >> np.arange(n)) & 1).astype(np.float32)
-
-
-def _wrap(d: np.ndarray) -> np.ndarray:
-    return (d + np.pi) % (2 * np.pi) - np.pi
-
-
-def _prep(f: Field, v: np.ndarray) -> np.ndarray:
-    """Raw column values -> the representation the error metric works on."""
-    k = f.vtype.kind
-    if k == "bits":
-        return _bits(v, f.vtype.n)
-    if k == "angle":
-        return v * (2 * np.pi / TURNS) if f.vtype.unit == "binang" else v.copy()
-    return v.astype(np.float32)
-
-
-def _err(f: Field, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Per-sample error between two prepared values, in the field's own units. Shape (n,)."""
-    k = f.vtype.kind
-    if k == "angle":
-        return np.abs(_wrap(a - b)).mean(-1) * 180.0 / np.pi          # degrees
-    if k in ("real", "count"):
-        return np.abs(a - b).mean(-1)                                  # world units / items
-    return (a != b).astype(np.float32).mean(-1)                        # error rate (enum, boolean, bits)
-
-
-def _unit(f: Field) -> str:
-    return {"angle": "deg", "real": f.vtype.unit or "abs", "count": "abs"}.get(f.vtype.kind, "rate")
 
 
 class Acc:
