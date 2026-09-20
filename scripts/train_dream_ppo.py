@@ -55,13 +55,18 @@ class Dream:
 
     def __init__(self, pred, dec, scale, seed_z, seed_trk, n_actions, max_steps, combat_cfg,
                  exit_persist=3, moved_thresh=None, moved_calib=(1.0, 0.0), thead=None,
-                 event_calib=None, exit_thresh=6.38):
+                 event_calib=None, exit_thresh=6.38, z_clamp=None):
         self.pred, self.dec, self.scale = pred, dec, scale
         self.seed_z, self.seed_trk = seed_z, seed_trk       # latent + the tracker replayed to that frame
         self.NA, self.max_steps, self.ccfg = n_actions, max_steps, combat_cfg
         self.exit_persist = exit_persist
         self.moved_thresh, self.moved_calib = moved_thresh, moved_calib
         self.thead, self.event_calib, self.exit_thresh = thead, dict(event_calib or {}), exit_thresh
+        # INFERENCE GUARD, not a fix. The predictor's latent norm runs away over a long rollout (12.9 -> 42,660
+        # over 400 steps even trained at unroll 30), which fed NaN into the policy logits and killed a PPO run
+        # outright. The decoder was never trained on norms beyond the encoder's own range, so anything past
+        # that is off-manifold regardless; holding the rollout inside it is strictly better than diverging.
+        self.z_clamp = z_clamp
         self.ev_rng = np.random.default_rng(0)
         self.hp0_timers = {}
 
@@ -98,6 +103,9 @@ class Dream:
         oh = F.one_hot(a, self.NA).float()
         q = self.thead(self.z, oh) if self.thead is not None else None
         self.z = self.pred(torch.cat([self.z, oh], -1))
+        if self.z_clamp is not None:
+            n = self.z.norm(dim=-1, keepdim=True)
+            self.z = self.z * (self.z_clamp / n).clamp(max=1.0)
         if q is not None:
             # motion and damage from (z_t, a_t); the decoded state supplies everything else, and
             # CombatTracker still reads the STATE, so reward parity is untouched
@@ -165,6 +173,10 @@ def main():
     ap.add_argument("--resume", default=None,
                     help="snapshot to continue from: restores weights, optimizer and update counter, and "
                          "reattaches the same wandb run")
+    ap.add_argument("--z-clamp-mult", type=float, default=3.0,
+                    help="cap the rollout latent norm at this multiple of the seed latents' mean norm. The "
+                         "predictor diverges over long rollouts and NaN'd a PPO run; the decoder has never "
+                         "seen norms past the encoder's range anyway.")
     ap.add_argument("--seed-mode", choices=["frames", "slots"], default="frames",
                     help="'slots': seed only from the 10 savestates the model-free run started from, which "
                          "is exactly its start distribution. 'frames': every training frame, with the "
@@ -273,6 +285,7 @@ def main():
                 moved_thresh=None,      # soft gate: P(moved) * dpos, see decoded_to_states
                 moved_calib=ck.get("moved_calib", (1.0, 0.0)), thead=thead,
                 event_calib=ck.get("event_calib"), exit_thresh=ck.get("exit_thresh", 6.38),
+                z_clamp=float(starts.norm(dim=-1).mean()) * a.z_clamp_mult,
                 exit_persist=a.exit_persist)
     OBS = LAT + MEM_DIM
     model = DreamPolicy(OBS, NA, hidden=a.hidden, gru=a.gru)   # the emulator's recurrent policy
@@ -284,7 +297,13 @@ def main():
             opt.load_state_dict(resume_ck["optimizer"])
         else:
             print("  ! snapshot predates optimizer saving: weights restored, Adam state reset")
-        start_update = resume_ck.get("update", 0) + 1
+        # the final checkpoint carries no top-level "update"; fall back to the last history row, otherwise a
+        # resume silently restarts the counter at 1 and the wandb curve and snapshot names collide
+        _h = resume_ck.get("history") or []
+        start_update = resume_ck.get("update", _h[-1]["update"] if _h else 0) + 1
+        print(f"  resuming policy from update {start_update - 1}"
+              f"{' (optimizer state restored)' if 'optimizer' in resume_ck else ' (optimizer state NOT in the '
+               'checkpoint: Adam moments restart)'}")
         hist_prev = resume_ck.get("history", [])
         print(f"resumed {run_name} from update {start_update - 1} "
               f"({(start_update - 1) * a.envs * a.steps:,} transitions)")
@@ -355,7 +374,7 @@ def main():
             e = max(neps, 1)
             print(f"{u:>4} {u*N*T:>12,} {neps:>5} {mr:>8.2f} {ml:>5.0f} {100*ncl/e:>6.1f}% {100*nde/e:>6.1f}% "
                   f"{100*nlf/e:>5.1f}% {nkill/e:>6.2f} {ndmg/e:>5.2f} {nhp/e/16:>7.2f} {nlock/e:>5.2f} "
-                  f"{nblk/e:>5.2f} {u*N*T/(time.time()-t0):>6,.0f}", flush=True)
+                  f"{nblk/e:>5.2f} {(u - start_update + 1)*N*T/(time.time()-t0):>6,.0f}", flush=True)
             row = {"update": u, "transitions": u * N * T, "episodes": neps, "return": mr, "length": ml,
                    "clear_pct": 100 * ncl / e, "death_pct": 100 * nde / e, "left_pct": 100 * nlf / e,
                    "kills": nkill / e, "damage": ndmg / e, "hearts_lost": nhp / e / 16,
@@ -380,7 +399,7 @@ def main():
     el = time.time() - t0
     print(f"\n{updates*N*T:,} dream transitions in {el:.0f}s ({updates*N*T/el:,.0f}/s), 0 emulator steps")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "config": vars(a), "history": hist, "baseline": base}, a.out)
+    torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "update": u, "config": vars(a), "history": hist, "baseline": base}, a.out)
     Path("results/dream_ppo.json").write_text(json.dumps({"config": vars(a), "history": hist,
                                                           "real_baseline": base}, indent=2))
     log.summary({"final_return": hist[-1]["return"] if hist else float("nan"),
