@@ -78,10 +78,28 @@ def main():
     ap.add_argument("--w-v2", type=float, default=1.0,
                     help="weight on the v2 Link body/collision/action heads. Lower it to test whether a "
                          "fixed-width latent is spending capacity on them at the expense of the transition.")
+    ap.add_argument("--w-dist", type=float, default=3.0,
+                    help="weight on the decoded distance heads (nearest live Baba, and per-row). `approach` "
+                         "pays on distance and `shield_facing` gates on it, and deriving it from two "
+                         "separately-decoded absolute positions compounds two diverging errors.")
+    ap.add_argument("--w-geom", type=float, default=2.0,
+                    help="weight on local geometry (distance to the interact wall, height to a ledge). The "
+                         "model otherwise has no representation of the room at all and only learns it touched "
+                         "a wall after the fact.")
     ap.add_argument("--factored-action", action="store_true",
                     help="feed the predictor a STRUCTURED control (stick direction as a unit vector plus one "
                          "flag per button) instead of a flat one-hot over the 63 combined actions, so a "
                          "direction seen with one button generalises to the same direction with another.")
+    ap.add_argument("--enc-kind", default="mlp", choices=("mlp", "transformer"),
+                    help="transformer: self-attention over 17 state tokens (1 Link + 16 actor rows) instead "
+                         "of mean/max pooling the rows into the trunk")
+    ap.add_argument("--film-action", action="store_true",
+                    help="condition the predictor by FiLM (gamma(a)*h+beta(a)) instead of concatenating the "
+                         "action, so 9 action dims cannot be swamped by 128 latent dims")
+    ap.add_argument("--enc-out", default="ln", choices=("ln", "tanh", "none"),
+                    help="latent output activation. 'ln' is the original; 'tanh' measured +0.73 skill over it")
+    ap.add_argument("--enc-shallow", action="store_true",
+                    help="one linear layer to the latent instead of the 2-hidden-layer trunk (+0.36 skill)")
     ap.add_argument("--unified-decoder", action="store_true",
                     help="one decoder trunk and one output layer sliced by a spec, with the activation "
                          "differentiating the target kinds (logits / bits / tanh for sin-cos / real), instead "
@@ -206,7 +224,7 @@ def main():
           f"w_decode {a.w_decode} w_pred {a.w_pred} | whiten {a.whiten}")
 
     enc = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=meta["n_actions"],
-                latent=a.latent, gru=0)
+                latent=a.latent, gru=0, out_act=a.enc_out, shallow=a.enc_shallow, arch=a.enc_kind)
     if bc_ck is not None:
         a.latent = bc_ck["latent"]
         enc.load_state_dict(bc_ck["model"])
@@ -215,7 +233,7 @@ def main():
         enc.eval()
     dec = (UnifiedDecoder(latent=a.latent) if a.unified_decoder else StateDecoder(latent=a.latent))
     NA = meta["n_actions"]
-    pred = build_predictor(a.latent, NA, factored=a.factored_action)
+    pred = build_predictor(a.latent, NA, factored=a.factored_action, film=a.film_action)
     # Action-conditioned transition head. Motion and combat events are read from (z_t, a_t) directly rather
     # than decoded out of z_{t+1}, because the action barely survives into the latent (inverse dynamics
     # 0.089 vs a 0.220 ceiling) and these are exactly the quantities that depend on it.
@@ -384,6 +402,14 @@ def main():
             if float(dm.sum()) > 0:
                 L = L + a.w_dpos * (((p["link_dpos"] - Yt["link_dpos"][i]) ** 2).mean(-1)
                                     * dm).sum() / dm.sum().clamp(min=1)
+        # distance and local geometry: distance is what `approach` pays on, geometry is the only thing that
+        # tells the model a wall exists before it is touched
+        if "near_dist" in p:
+            L = L + a.w_dist * F.mse_loss(p["near_dist"], Yt["near_dist"][i])
+            L = L + a.w_dist * (((p["row_dist"] - Yt["row_dist"][i]) ** 2).mean(-1)
+                                * m).sum() / m.sum().clamp(min=1)
+            for k in ("link_dist_wall", "link_ledge_dy"):
+                L = L + a.w_geom * F.mse_loss(p[k], Yt[k][i])
         L = L + a.w_scene * F.cross_entropy(p["scene"], Yt["scene"][i], weight=CW["scene"])
         L = L + 0.1 * F.cross_entropy(p["room"], Yt["room"][i])
         L = L + a.w_hp * (hp_l + rh.sum() / (m * wr[i]).sum().clamp(min=1))
@@ -754,6 +780,25 @@ def main():
               f"(base {float(xt[tk].mean()):.5f}, {int(xt.sum())} events)")
         print(f"          LINK-hit AP {ap_of(ls[tk], lht[tk]):.4f} "
               f"(base {float(lht[tk].mean()):.4f}, {int(lht.sum())} events)")
+        if "near_dist" in p:
+            nd = p["near_dist"].numpy()[:, 0] * 100.0
+            ndt = Y["near_dist"][te][:, 0] * 100.0
+            sel = ndt > 0
+            base = float(np.abs(ndt[sel] - ndt[sel].mean()).mean()) if sel.any() else float("nan")
+            print(f"          DISTANCE to nearest Baba: MAE {float(np.abs(nd[sel] - ndt[sel]).mean()):.1f} "
+                  f"world units (mean-predictor baseline {base:.1f}, true mean {ndt[sel].mean():.0f})")
+            rm = Yt["row_present"][te].numpy() > 0.5
+            rd = p["row_dist"].numpy()[:, :, 0] * 100.0
+            rdt = Y["row_dist"][te][:, :, 0] * 100.0
+            print(f"          per-row distance: MAE {float(np.abs(rd - rdt)[rm].mean()):.1f} units "
+                  f"over {int(rm.sum()):,} present rows")
+            for k, lbl, sc_ in (("link_dist_wall", "dist to interact wall", 100.0),
+                                ("link_ledge_dy", "height to ledge", 100.0)):
+                v = p[k].numpy()[:, 0] * sc_
+                vt = Y[k][te][:, 0] * sc_
+                b = float(np.abs(vt - vt.mean()).mean())
+                print(f"          GEOMETRY {lbl}: MAE {float(np.abs(v - vt).mean()):.1f} units "
+                      f"(mean-predictor {b:.1f}, true mean {vt.mean():.1f})")
         zp = (p["link_ztarget"].numpy()[:, 0] > 0)[vmask]; zt_ = (Y["link_ztarget"][te][:, 0] > 0.5)[vmask]
         ap_ = (p["link_airborne"].numpy()[:, 0] > 0)[vmask]; at_ = (Y["link_airborne"][te][:, 0] > 0.5)[vmask]
         print(f"          z_target acc {float((zp == zt_).mean()):.4f} recall {float(zp[zt_].mean()):.3f} | "
@@ -792,10 +837,11 @@ def main():
                 # the norm ACTUALLY used for training, not ref["norm"]: with the v2 feature block the two
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
-                "norm": norm.state_dict(), "split": split, "pred_residual": True, "pred_factored": a.factored_action,
+                "norm": norm.state_dict(), "split": split, "pred_residual": True, "pred_factored": a.factored_action, "pred_film": a.film_action,
                 "unified_decoder": a.unified_decoder,
                 "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib,
                 "event_calib": event_calib, "latent": a.latent, "link_dim": T["link"].shape[1],
+                "enc_out": a.enc_out, "enc_shallow": a.enc_shallow, "enc_kind": a.enc_kind,
                 "row_dim": T["rows"].shape[2], "n_actions": NA, "decode_scale": {k: [v[0], v[1]] for k, v in sc.items()},
                 "config": vars(a), "metrics": {"fields": fields, "inverse_top1": t1, "move_ratio": d / r,
                                                "skill": best_skill}}, a.out)

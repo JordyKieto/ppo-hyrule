@@ -263,6 +263,16 @@ def _layer(i, o, std=np.sqrt(2)):
     return l
 
 
+def enc_arch(ck: dict) -> dict:
+    """Encoder architecture flags out of a checkpoint, defaulting to the deep + LayerNorm original.
+
+    Every BCNet rebuild site should splat this, so a checkpoint carries its own architecture instead of each
+    caller assuming one. Checkpoints written before §29 have neither key and rebuild exactly as before.
+    """
+    return {"out_act": ck.get("enc_out", "ln"), "shallow": bool(ck.get("enc_shallow", False)),
+            "arch": ck.get("enc_kind", "mlp")}
+
+
 class BCNet(nn.Module):
     """Structured-state encoder + BC action head (optionally recurrent) + auxiliary heads.
 
@@ -274,7 +284,14 @@ class BCNet(nn.Module):
 
     def __init__(self, link_dim: int = LINK_FEAT_DIM, row_dim: int = ROW_FEAT_DIM, n_actions: int = N_ACTIONS,
                  latent: int = 128, hidden: int = 256, row_hidden: int = 96, id_vocab: int = 256, id_emb: int = 8,
-                 layernorm: bool = True, dropout: float = 0.0, gru: int = 0):
+                 layernorm: bool = True, dropout: float = 0.0, gru: int = 0,
+                 out_act: str | None = None, shallow: bool = False, arch: str = "mlp",
+                 tf_dim: int = 128, tf_layers: int = 2, tf_heads: int = 4):
+        """`out_act` and `shallow` default to the pre-existing deep + LayerNorm encoder, so every checkpoint
+        written before they existed rebuilds identically. See `enc_arch()` and §29 for why they exist: measured
+        untrained on identical features and at matched latent movement (move/rand ~0.098 for all six), the
+        latent LayerNorm costs 0.73 of predictive skill and the deep trunk another 0.36, and both also hurt
+        linear decodability (pos MAE 7.7 shallow+tanh vs 150.8 deep+LN)."""
         super().__init__()
         self.latent = latent
         self.id_vocab = id_vocab
@@ -282,9 +299,25 @@ class BCNet(nn.Module):
         self.id_embedding = nn.Embedding(id_vocab, id_emb)
         self.row_enc = nn.Sequential(_layer(row_dim + id_emb, row_hidden), nn.ReLU(),
                                      _layer(row_hidden, row_hidden), nn.ReLU())
-        self.trunk = nn.Sequential(_layer(link_dim + 2 * row_hidden, hidden), nn.ReLU(), nn.Dropout(dropout),
-                                   _layer(hidden, hidden), nn.ReLU(), nn.Dropout(dropout), _layer(hidden, latent))
-        self.ln = nn.LayerNorm(latent) if layernorm else nn.Identity()
+        self.arch = arch
+        if arch == "transformer":
+            # The state is ALREADY tokens: 16 actor rows + 1 Link token. The MLP path destroys that structure by
+            # mean/max pooling the rows into two fixed vectors before the trunk ever sees them, so which actor
+            # is where survives only as a pooled average. Self-attention over 17 tokens keeps them addressable.
+            self.row_tok = nn.Linear(row_dim + id_emb, tf_dim)
+            self.link_tok = nn.Linear(link_dim, tf_dim)
+            self.type_emb = nn.Parameter(torch.zeros(2, tf_dim))
+            layer = nn.TransformerEncoderLayer(tf_dim, tf_heads, dim_feedforward=4 * tf_dim,
+                                               dropout=dropout, batch_first=True, norm_first=True,
+                                               activation="gelu")
+            self.tf = nn.TransformerEncoder(layer, tf_layers)
+            self.tf_out = nn.Linear(tf_dim, latent)
+        self.trunk = (nn.Sequential(_layer(link_dim + 2 * row_hidden, latent)) if shallow else
+                      nn.Sequential(_layer(link_dim + 2 * row_hidden, hidden), nn.ReLU(), nn.Dropout(dropout),
+                                    _layer(hidden, hidden), nn.ReLU(), nn.Dropout(dropout),
+                                    _layer(hidden, latent)))
+        self.out_act, self.shallow = out_act or ("ln" if layernorm else "none"), shallow
+        self.ln = {"ln": nn.LayerNorm(latent), "tanh": nn.Tanh(), "none": nn.Identity()}[self.out_act]
         self.gru = nn.GRUCell(latent, gru) if gru else None
         self.action = _layer(gru or latent, n_actions, 0.01)
         self.aux = nn.ModuleDict({k: _layer(latent, 1, 0.1) for k in self.AUX})
@@ -293,6 +326,11 @@ class BCNet(nn.Module):
         """z_t = E(s_t). Pure function of the current state; no recurrence, no hidden state."""
         e = self.id_embedding(ids.clamp(0, self.id_vocab - 1))
         m = mask.unsqueeze(-1)
+        if self.arch == "transformer":
+            tok = torch.cat([(self.link_tok(link) + self.type_emb[0]).unsqueeze(-2),
+                             self.row_tok(torch.cat([rows, e], -1)) + self.type_emb[1]], -2)
+            pad = torch.cat([torch.zeros_like(mask[..., :1]), 1.0 - mask], -1).bool()   # absent rows masked out
+            return self.ln(self.tf_out(self.tf(tok, src_key_padding_mask=pad)[..., 0, :]))
         h = self.row_enc(torch.cat([rows, e], -1)) * m
         n = m.sum(-2).clamp(min=1.0)
         mean = h.sum(-2) / n
@@ -395,6 +433,19 @@ def decode_targets(state: np.ndarray, obs: np.ndarray | None = None,
         # v3 states carry the camera directly, so obs is only a fallback for older collections
         out.setdefault("cam_yaw", np.asarray(obs[:, OBS_CAM_YAW], np.float32))
         out["link_vel"] = np.asarray(obs[:, OBS_LINK_VEL], np.float32)
+    # distance and local geometry, in units of 100 so they sit on the same scale as the other real heads
+    rp = rows[:, :, [RI["pos_x"], RI["pos_y"], RI["pos_z"]]]
+    lp3 = lk[:, [LI["pos_x"], LI["pos_y"], LI["pos_z"]]]
+    rd = np.linalg.norm(rp - lp3[:, None, :], axis=2) / 100.0
+    live = (present > 0.5) & (rows[:, :, RI["id"]].astype(np.int64) == BABA_ID) & (rows[:, :, RI["hp"]] > 0)
+    out["row_dist"] = (rd * present)[..., None].astype(np.float32)
+    out["near_dist"] = np.where(live.any(1), np.where(live, rd, np.inf).min(1), 0.0)[:, None].astype(np.float32)
+    if lk.shape[1] >= len(LINK_FIELDS_V2):
+        out["link_dist_wall"] = (np.clip(lk[:, [LI["dist_interact_wall"]]], 0, 400) / 100.0).astype(np.float32)
+        out["link_ledge_dy"] = (np.clip(lk[:, [LI["y_dist_to_ledge"]]], -400, 400) / 100.0).astype(np.float32)
+    else:
+        out["link_dist_wall"] = np.zeros((n, 1), np.float32)
+        out["link_ledge_dy"] = np.zeros((n, 1), np.float32)
     out.update(_v2_targets(lk, v2, n))
     out.update(_dpos_targets(lk, epid, n))
     out.update(transition_targets(state, epid))
@@ -698,10 +749,19 @@ def _decode_spec(n_rows=N_ROWS):
          ("link_action", N_LINK_ACTIONS, "logits"), ("link_moved", 1, "bits"), ("link_dpos", 3, "real"),
          ("link_speed", 1, "real"), ("link_wall_yaw", 2, "unit"), ("link_floor_dy", 1, "real"),
          ("link_shape_yaw", 2, "unit"), ("link_parallel_yaw", 2, "unit"), ("link_fall", 1, "real"),
-         ("link_ztarget", 1, "bits"), ("link_airborne", 1, "bits")]
+         ("link_ztarget", 1, "bits"), ("link_airborne", 1, "bits"),
+         # DISTANCE, decoded directly rather than left as the difference of two absolute positions. It is what
+         # `approach` pays on and what `shield_facing` gates on (dist < shield_radius), and section 22 showed
+         # absolute position diverges, so a derived distance compounds two diverging errors.
+         ("near_dist", 1, "real"),
+         # LOCAL GEOMETRY. The model had no representation of the room: it learned only "I am touching a wall"
+         # after contact, so a predicted displacement could point straight through one at no cost. These are
+         # the geometry fields the v3 state already records and that were encoder inputs but never decoded.
+         ("link_dist_wall", 1, "real"), ("link_ledge_dy", 1, "real")]
     r = [("row_present", 1, "bits"), ("row_is_baba", 1, "bits"), ("row_hp", len(ROW_HP_VALUES), "logits"),
          ("row_pos", 3, "real"), ("row_state", N_BABA_STATES, "logits"), ("row_facing_link", 2, "unit"),
-         ("row_timer", 1, "real"), ("row_vel", 3, "real"), ("link_facing_target", 2, "unit")]
+         ("row_timer", 1, "real"), ("row_vel", 3, "real"), ("link_facing_target", 2, "unit"),
+         ("row_dist", 1, "real")]
     return g, r
 
 

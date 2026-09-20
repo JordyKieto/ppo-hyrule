@@ -41,7 +41,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.train_bc_decode import load_many  # noqa: E402
-from zelda_rl.bc import BCNet, LI, Norm, RI, _split, featurise, wants_v2  # noqa: E402
+from zelda_rl.bc import BCNet, LI, Norm, RI, _split, enc_arch, featurise, wants_v2  # noqa: E402
 from zelda_rl.dynamics import build_predictor  # noqa: E402
 from zelda_rl.ppo import RecurrentEntityActorCritic  # noqa: E402
 
@@ -114,7 +114,7 @@ def our_latents(ck_path: Path, state: np.ndarray):
     v2 = wants_v2(ck["link_dim"])
     T = Norm.load(ck["norm"]).apply(featurise(state, link_v2=v2, control_echo=False))
     enc = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=ck["n_actions"],
-                latent=ck["latent"], gru=0)
+                latent=ck["latent"], gru=0, **enc_arch(ck))
     enc.load_state_dict(ck["encoder"])
     enc.eval()
     out = []
@@ -136,15 +136,15 @@ class ShallowEnc(nn.Module):
     """
 
     def __init__(self, link_dim: int, row_dim: int, latent: int = 256, row_hidden: int = 96, id_emb: int = 8,
-                 deep: bool = False, layernorm: bool = False):
+                 deep: bool = False, out: str = "tanh"):
         super().__init__()
         self.id_embedding = nn.Embedding(256, id_emb)
         self.row_enc = nn.Sequential(nn.Linear(row_dim + id_emb, row_hidden), nn.Tanh())
         w = link_dim + 2 * row_hidden
         self.trunk = (nn.Sequential(nn.Linear(w, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(),
                                     nn.Linear(256, latent)) if deep
-                      else nn.Sequential(nn.Linear(w, latent), nn.Tanh()))
-        self.ln = nn.LayerNorm(latent) if layernorm else nn.Identity()
+                      else nn.Sequential(nn.Linear(w, latent)))
+        self.ln = {"ln": nn.LayerNorm(latent), "tanh": nn.Tanh(), "none": nn.Identity()}[out]
 
     def forward(self, link, rows, ids, mask):
         e = self.id_embedding(ids.clamp(0, 255))
@@ -233,6 +233,7 @@ def main():
     ap.add_argument("--ours", default="checkpoints/dynamics/wm_fu_dist.pt")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--max-frames", type=int, default=200_000)
+    ap.add_argument("--skip-policy", action="store_true", help="only the encoder-geometry grid")
     a = ap.parse_args()
 
     meta, state, act, slot, epid, obs, has = load_many(a.data)
@@ -255,7 +256,7 @@ def main():
     }
 
     rows_out = []
-    for tag, zero in ABLATIONS.items():
+    for tag, zero in ({} if a.skip_policy else ABLATIONS).items():
         P, H, na = policy_latents(Path(POLICY), obs, epid, zero=zero)
         for nm, Z in (("policy proj", P), ("policy gru-h", H)):
             rows_out.append(measure(f"{nm} ({tag})", Z, act, epid, na, probes, a.epochs))
@@ -263,21 +264,28 @@ def main():
             print(f"  {r['name']:<28} skill {r['skill']:+.3f}  move-ratio {r['ratio']:.3f}")
 
     # Controls: same architecture untrained, and the raw observation itself.
-    P0, H0, na = policy_latents(Path(POLICY), obs, epid, zero=ECHO + CLOCK, trained=False)
-    for nm, Z in (("UNTRAINED proj", P0), ("UNTRAINED gru-h", H0)):
-        rows_out.append(measure(f"{nm} (echo+clock)", Z, act, epid, na, probes, a.epochs))
+    if not a.skip_policy:
+        P0, H0, na = policy_latents(Path(POLICY), obs, epid, zero=ECHO + CLOCK, trained=False)
+        for nm, Z in (("UNTRAINED proj", P0), ("UNTRAINED gru-h", H0)):
+            rows_out.append(measure(f"{nm} (echo+clock)", Z, act, epid, na, probes, a.epochs))
+            r = rows_out[-1]
+            print(f"  {r['name']:<28} skill {r['skill']:+.3f}  move-ratio {r['ratio']:.3f}")
+        ob = obs.copy()
+        for sl in ECHO + CLOCK:
+            ob[:, sl] = 0.0
+        rows_out.append(measure("raw obs (echo+clock)", ob, act, epid, meta["n_actions"], probes, a.epochs))
         r = rows_out[-1]
         print(f"  {r['name']:<28} skill {r['skill']:+.3f}  move-ratio {r['ratio']:.3f}")
-    ob = obs.copy()
-    for sl in ECHO + CLOCK:
-        ob[:, sl] = 0.0
-    rows_out.append(measure("raw obs (echo+clock)", ob, act, epid, meta["n_actions"], probes, a.epochs))
-    r = rows_out[-1]
-    print(f"  {r['name']:<28} skill {r['skill']:+.3f}  move-ratio {r['ratio']:.3f}")
 
     if Path(a.ours).exists():
-        for nm, kw in (("OUR feats, shallow-tanh", {}),
-                       ("OUR feats, deep+LN (untrained)", {"deep": True, "layernorm": True})):
+        # Which architectural element collapses the surface: depth, or the latent normalisation?
+        for nm, kw in (("shallow + tanh", {"deep": False, "out": "tanh"}),
+                       ("shallow + LN", {"deep": False, "out": "ln"}),
+                       ("shallow + none", {"deep": False, "out": "none"}),
+                       ("deep + tanh", {"deep": True, "out": "tanh"}),
+                       ("deep + LN  (= ours)", {"deep": True, "out": "ln"}),
+                       ("deep + none", {"deep": True, "out": "none"})):
+            nm = f"UNTRAINED {nm}"
             rows_out.append(measure(nm, shallow_latents(state, Path(a.ours), **kw), act, epid,
                                     meta["n_actions"], probes, a.epochs))
             r = rows_out[-1]

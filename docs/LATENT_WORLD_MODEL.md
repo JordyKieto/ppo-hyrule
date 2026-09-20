@@ -1446,3 +1446,56 @@ bearing and per-actor velocity are already in the row block, and Link's `speed`/
 
 Method cost of this section: the +0.742 was reported before any control ran, and a WM + dream PPO was nearly
 launched on it. See `AGENTS.md` for the rules added as a result.
+
+## 29. Three architecture changes, three negatives: the wall is the latent, not the network
+
+All four arms share one config (v3 data, latent 128, unroll 30, oversample 50, factored action, unified
+decoder, seed 0) and differ only where named, so they are comparable at matched epochs.
+
+| arm | skill | move ratio | inverse dyn | notes |
+|---|---|---|---|---|
+| deep + LayerNorm (`wm_fu_dist`, 12 ep) | -0.776 | 0.044 | 0.059 | the baseline |
+| shallow + tanh (`wm_shallow_tanh`, 12 ep) | **-2.023** | 0.039 | 0.069 | baba 0.961, pos MAE 12.78 |
+| shallow + tanh + FiLM (`wm_film`, killed at 4 ep) | **-9.87** @ep4 | - | - | vs -2.55 @ep4 concat |
+| transformer + tanh (`wm_tf`, 4 ep) | -2.412 @ep4 | **0.023** | **0.043** | vs -2.547 @ep4 MLP |
+
+**1. Encoder geometry (shallow + tanh).** Chosen from an untrained-init sweep over our own features at matched
+latent movement (move/rand ~0.098 for all six variants), where LayerNorm cost 0.73 skill and depth 0.36:
+
+| untrained, our features | skill | pos MAE (ridge) |
+|---|---|---|
+| shallow + tanh | +0.014 | 7.7 |
+| shallow + none | -0.213 | 10.3 |
+| deep + tanh | -0.350 | 15.9 |
+| deep + none | -0.323 | 27.7 |
+| shallow + LN | -0.712 | 26.2 |
+| deep + LN (= ours) | -0.673 | 150.8 |
+
+Trained, it scored -2.023 -- 2.6x WORSE than the deep+LN baseline it was meant to fix. Decode moved both ways
+(baba_count 0.915 -> 0.961, pos MAE 14.62 -> 12.78, but link_hp 0.968 -> 0.922). The init measurement predicted
+nothing; see `AGENTS.md` §11.
+
+**2. FiLM action conditioning.** Motivated by a real diagnosis: `cat([z, factored(a)])` gives the action 9 of
+137 input columns, and inverse dynamics is 0.059-0.069 against a 0.220 ceiling, so the action IS being ignored.
+`FiLMPredictor` makes it multiplicative (`(1+gamma(a)) * h + beta(a)` on both hidden layers, gamma zero-init so
+init is exactly identity). It lost at every matched epoch -- -30.1/-17.0/-13.0/-9.9 against -16.2/-4.3/-2.7/-2.5
+-- and was killed. Unresolved whether this is capacity or optimisation: gamma starting pinned at 1 means all
+modulation is learned from a dead start, while concat has action gradients from step 1.
+
+**3. Transformer encoder.** The state is already 17 tokens (1 Link + 16 actor rows) and the MLP path mean/max
+pools the rows away before the trunk sees them, so self-attention should strictly preserve more. At epoch 4 skill
+was a wash (-2.412 vs -2.547, well inside seed variance) for 2.6x the wall clock, decode was worse (476 vs 439),
+and every structural indicator moved the wrong way: move ratio 0.023 vs 0.039, inverse dynamics 0.043 vs 0.069,
+PCs for 99% variance 24 vs 44 (the representation concentrates rather than spreads).
+
+**What the three share.** Whatever we do to the network, the latent moves 0.023-0.044 of a random pair per step
+and the action explains 0.04-0.07 of a latent transition against a 0.220 ceiling. The identity is therefore a
+very strong baseline and every trained model of ours is worse than it. Meanwhile the ACTION-CONDITIONED heads on
+real latents work in the same runs: moved AP 0.435 (6.8x base), step magnitude ratio 1.04x on truly-moving
+frames (the regressed version was 0.11x), enemy-hit AP 0.628, Link-hit AP 0.589, hit-row 0.818, nearest-Baba
+distance MAE 26.8 against a 64.0 mean-predictor. Those read `(z_t, a_t) -> what happens`, never `z_t -> z_{t+1}`.
+
+Still untried from the same design list: categorical / VQ latents (the DreamerV3 answer to L2 smoothing into
+physically impossible interpolations), and signed-distance encoding of collision in place of the 9 binary
+`bgCheckFlags` bits -- where `dist_interact_wall` MAE 2.8-2.9 against a 2.9 mean-predictor shows the current
+continuous head is not learned at all.

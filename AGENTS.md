@@ -98,3 +98,29 @@ number is an hour that has to be thrown away, plus the time spent believing the 
 When a measurement kills a hypothesis — including one already reported to the user — say so in the next
 message, state which earlier claim is now wrong, and do not soften it. Retracting costs one message.
 Not retracting costs days.
+
+## 11. An at-initialisation measurement does not predict a trained outcome
+
+Measuring an architecture's properties with random weights tells you about its geometry at init, not about
+where training lands. Joint training here runs a decode loss of ~300-1800 through the encoder, and that
+pressure reshapes the latent far away from wherever it started.
+
+**The incident.** Untrained on identical features at matched latent movement, the latent LayerNorm measured a
+0.73 skill cost and the deep trunk another 0.36, so `shallow + tanh` was predicted to fix the encoder. Trained
+under the real objective it scored skill **-2.023 against the deep+LayerNorm baseline's -0.776** -- 2.6x worse
+on exactly the metric it was chosen to improve. The controls were right; the extrapolation from init to trained
+was the error.
+
+Corollary: when an architecture change is the hypothesis, the smoke test must TRAIN both arms and compare at
+matched epochs. Nothing about init transfers.
+
+## 12. Compare at matched epochs, and check the denominator before reading a ratio
+
+`skill = 1 - pred/identity` divides by how much the latent moves. A change that makes the latent MORE static
+shrinks the denominator and moves skill for reasons unrelated to the model getting better.
+
+**The incident.** The transformer encoder showed a 3x better raw prediction error than the MLP at epoch 1
+(0.0368 vs 0.1101) and a *worse* skill (-37.6 vs -16.2), purely because its identity error was 6x smaller
+(0.00095 vs 0.00613). Reading either number alone would have given the opposite conclusion.
+
+Always print `pred`, `identity` and the move ratio together, and compare arms at the same epoch count.

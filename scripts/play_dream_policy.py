@@ -20,7 +20,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.collect_transitions import DEKU_STATES_DIR, EnemyRows, check_slots, encode_state  # noqa: E402
-from zelda_rl.bc import BCNet, Norm, featurise, wants_v2  # noqa: E402
+from zelda_rl.bc import enc_arch, BCNet, Norm, featurise, wants_v2  # noqa: E402
 from zelda_rl.env import action_name  # noqa: E402
 from zelda_rl.policy_io import load_policy, make_env, resolve_checkpoint  # noqa: E402
 from zelda_rl.dream_state import MEM_DIM, DreamPolicy, memory_features  # noqa: E402
@@ -44,7 +44,7 @@ def main():
 
     mk = torch.load(a.model, weights_only=False, map_location="cpu")
     LAT, NA = mk["latent"], mk["n_actions"]
-    enc = BCNet(link_dim=mk["link_dim"], row_dim=mk["row_dim"], n_actions=NA, latent=LAT, gru=0)
+    enc = BCNet(link_dim=mk["link_dim"], row_dim=mk["row_dim"], n_actions=NA, latent=LAT, gru=0, **enc_arch(mk))
     enc.load_state_dict(mk["encoder"]); enc.eval()
     norm = Norm.load(mk["norm"])
 

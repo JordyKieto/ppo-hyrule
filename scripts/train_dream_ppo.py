@@ -30,8 +30,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, decode_targets, featurise,  # noqa: E402
-                         hp_class, wants_v2)
+from zelda_rl.bc import (LINK_HP_VALUES, ROW_HP_VALUES, BCNet, Norm, decode_targets, enc_arch,  # noqa: E402
+                         featurise, hp_class, wants_v2)
 from zelda_rl.ppo import gae, ppo_update_recurrent  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA  # noqa: E402
 from scripts.train_event_head import labels, load_with_terminal  # noqa: E402
@@ -199,7 +199,7 @@ def main():
 
     ck = torch.load(a.model, weights_only=False, map_location="cpu")
     LAT, NA = ck["latent"], ck["n_actions"]
-    enc = BCNet(link_dim=ck["link_dim"], row_dim=ck["row_dim"], n_actions=NA, latent=LAT, gru=0)
+    enc = BCNet(link_dim=ck["link_dim"], row_dim=ck["row_dim"], n_actions=NA, latent=LAT, gru=0, **enc_arch(ck))
     enc.load_state_dict(ck["encoder"]); enc.eval()
     pred = load_predictor(ck, LAT, NA)      # residual or flat, per what the checkpoint stored
     thead = None

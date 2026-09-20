@@ -56,7 +56,9 @@ class FlatPredictor(nn.Module):
 
 
 def build_predictor(latent: int, n_actions: int, residual: bool = True, hidden: int = 512,
-                    factored: bool = False) -> nn.Module:
+                    factored: bool = False, film: bool = False) -> nn.Module:
+    if film:
+        return FiLMPredictor(latent, n_actions, hidden, factored=factored)
     if factored:
         return FactoredPredictor(latent, n_actions, hidden)
     return (ResidualPredictor if residual else FlatPredictor)(latent, n_actions, hidden)
@@ -70,6 +72,10 @@ def load_predictor(ck: dict, latent: int, n_actions: int) -> nn.Module:
     shape rather than trusting the flag to be present, so old artefacts keep working.
     """
     sd = ck["pred"]
+    if ck.get("pred_film") or any(k.startswith("film.") for k in sd):
+        m = FiLMPredictor(latent, n_actions, factored=any(k == "table" for k in sd))
+        m.load_state_dict(sd); m.eval()
+        return m
     if ck.get("pred_factored") or any(k == "table" for k in sd):
         m = FactoredPredictor(latent, n_actions)
         m.load_state_dict(sd); m.eval()
@@ -219,3 +225,54 @@ class FactoredPredictor(nn.Module):
     def forward(self, za: torch.Tensor) -> torch.Tensor:
         z, oh = za[..., :self.latent], za[..., self.latent:]
         return z + self.net(torch.cat([z, oh @ self.table], -1))
+
+
+class FiLMPredictor(nn.Module):
+    """z_{t+1} = z_t + f(z_t | a_t), where the action MODULATES the trunk instead of being concatenated.
+
+    The concat predictors feed `cat([z, factored(a)])`: 128 dense latent dims next to 9 action dims. The first
+    layer's action columns are 7% of its input, so the latent dominates and the action is free to be ignored --
+    which is what the measurements show (inverse dynamics 0.069 against a 0.220 ceiling; the earlier audit found
+    max kills 0.00 and damage appearing under SHIELD actions, i.e. an action-independent transition).
+
+    FiLM makes the action multiplicative and unavoidable: every hidden unit is scaled and shifted by it, so
+    there is no path through the network that does not see it.
+
+        h = relu(W1 z);  h = gamma1(a) * h + beta1(a)
+        h = relu(W2 h);  h = gamma2(a) * h + beta2(a)
+        dz = W3 h                                    (zero-init, so untrained == identity == the skill control)
+
+    gamma is parameterised as 1 + Linear(a) with a zero-init weight, so at init gamma == 1 exactly and the
+    modulation starts as a no-op rather than as noise. Same call contract as every other predictor here --
+    pass cat([z, one_hot(a)], -1) -- so existing callers work unchanged.
+    """
+
+    def __init__(self, latent: int, n_actions: int, hidden: int = 512, factored: bool = True):
+        super().__init__()
+        import numpy as np
+        self.latent, self.n_actions = latent, n_actions
+        self.factored = factored
+        a_dim = FACTORED_DIM if factored else n_actions
+        if factored:
+            self.register_buffer("table", torch.from_numpy(factor_actions(n_actions)))
+        self.l1 = nn.Linear(latent, hidden)
+        self.l2 = nn.Linear(hidden, hidden)
+        self.out = nn.Linear(hidden, latent)
+        self.film = nn.ModuleList([nn.Linear(a_dim, 2 * hidden) for _ in range(2)])
+        for f in self.film:
+            nn.init.zeros_(f.weight); nn.init.zeros_(f.bias)   # gamma = 1, beta = 0 at init
+        nn.init.zeros_(self.out.weight); nn.init.zeros_(self.out.bias)
+
+    def _mod(self, h, a, i):
+        g, b = self.film[i](a).chunk(2, -1)
+        return (1.0 + g) * h + b
+
+    def delta(self, za: torch.Tensor) -> torch.Tensor:
+        z, oh = za[..., :self.latent], za[..., self.latent:]
+        a = oh @ self.table if self.factored else oh
+        h = self._mod(torch.relu(self.l1(z)), a, 0)
+        h = self._mod(torch.relu(self.l2(h)), a, 1)
+        return self.out(h)
+
+    def forward(self, za: torch.Tensor) -> torch.Tensor:
+        return za[..., :self.latent] + self.delta(za)

@@ -1,0 +1,414 @@
+{
+  "task": "deku_baba_combat",
+  "episodes": 121,
+  "transitions": 106757,
+  "outcomes": {
+    "success": 65,
+    "timeout": 53,
+    "left_room": 1,
+    "death": 2
+  },
+  "wall_seconds": 1391.7,
+  "state_dim": 363,
+  "link_dim": 43,
+  "max_enemies": 16,
+  "enemy_dim": 20,
+  "link_fields": [
+    "scene",
+    "room",
+    "hp",
+    "hp_cap",
+    "sf1",
+    "pos_x",
+    "pos_y",
+    "pos_z",
+    "yaw",
+    "targeted_row",
+    "arrow_row",
+    "held_item",
+    "seeds",
+    "nuts",
+    "grass",
+    "shape_yaw",
+    "vel_x",
+    "vel_y",
+    "vel_z",
+    "speed",
+    "bg_flags",
+    "wall_yaw",
+    "floor_height",
+    "action_fn_rel",
+    "sf2",
+    "sf3",
+    "melee_state",
+    "melee_anim",
+    "ztarget_timer",
+    "parallel_yaw",
+    "fall_distance",
+    "floor_pitch",
+    "dist_interact_wall",
+    "y_dist_to_ledge",
+    "door_type",
+    "door_direction",
+    "door_timer",
+    "knockback_type",
+    "cam_yaw",
+    "cam_pitch",
+    "cam_eye_x",
+    "cam_eye_y",
+    "cam_eye_z"
+  ],
+  "enemy_fields": [
+    "present",
+    "id",
+    "hp",
+    "pos_x",
+    "pos_y",
+    "pos_z",
+    "fn_rel",
+    "state_idx",
+    "shape_yaw",
+    "yaw_to_player",
+    "timer",
+    "cat",
+    "params",
+    "yaw",
+    "vel_x",
+    "vel_y",
+    "vel_z",
+    "focus_x",
+    "focus_y",
+    "focus_z"
+  ],
+  "baba_states": [
+    "hidden",
+    "emerge_retract",
+    "idle",
+    "prepare_lunge",
+    "lunge",
+    "pull_back",
+    "hit",
+    "stunned",
+    "dying",
+    "other"
+  ],
+  "n_actions": 63,
+  "action_names": [
+    "-",
+    "-+A",
+    "-+B",
+    "-+Z",
+    "-+Shield",
+    "-+Z+B",
+    "-+Z+A",
+    "E",
+    "E+A",
+    "E+B",
+    "E+Z",
+    "E+Shield",
+    "E+Z+B",
+    "E+Z+A",
+    "NE",
+    "NE+A",
+    "NE+B",
+    "NE+Z",
+    "NE+Shield",
+    "NE+Z+B",
+    "NE+Z+A",
+    "N",
+    "N+A",
+    "N+B",
+    "N+Z",
+    "N+Shield",
+    "N+Z+B",
+    "N+Z+A",
+    "NW",
+    "NW+A",
+    "NW+B",
+    "NW+Z",
+    "NW+Shield",
+    "NW+Z+B",
+    "NW+Z+A",
+    "W",
+    "W+A",
+    "W+B",
+    "W+Z",
+    "W+Shield",
+    "W+Z+B",
+    "W+Z+A",
+    "SW",
+    "SW+A",
+    "SW+B",
+    "SW+Z",
+    "SW+Shield",
+    "SW+Z+B",
+    "SW+Z+A",
+    "S",
+    "S+A",
+    "S+B",
+    "S+Z",
+    "S+Shield",
+    "S+Z+B",
+    "S+Z+A",
+    "SE",
+    "SE+A",
+    "SE+B",
+    "SE+Z",
+    "SE+Shield",
+    "SE+Z+B",
+    "SE+Z+A"
+  ],
+  "obs_dim": 483,
+  "obs_fields": [
+    [
+      "link_pos",
+      3
+    ],
+    [
+      "goal_pos",
+      3
+    ],
+    [
+      "goal_delta",
+      3
+    ],
+    [
+      "goal_dist",
+      1
+    ],
+    [
+      "link_yaw_sin_cos",
+      2
+    ],
+    [
+      "camera_yaw_sin_cos",
+      2
+    ],
+    [
+      "link_vel",
+      3
+    ],
+    [
+      "rupees",
+      1
+    ],
+    [
+      "goal_rupees",
+      1
+    ],
+    [
+      "rupee_gap",
+      1
+    ],
+    [
+      "health_frac",
+      1
+    ],
+    [
+      "time_left",
+      1
+    ],
+    [
+      "prev_action_world_dir_sin_cos",
+      2
+    ],
+    [
+      "prev_action_button",
+      2
+    ],
+    [
+      "state_flags1_bits",
+      14
+    ],
+    [
+      "owns_sword_shield",
+      2
+    ],
+    [
+      "goal_flags_missing_extra",
+      2
+    ],
+    [
+      "same_scene_as_goal",
+      1
+    ],
+    [
+      "link_hp_frac",
+      1
+    ],
+    [
+      "link_hp_cap",
+      1
+    ],
+    [
+      "targets_alive_frac",
+      1
+    ],
+    [
+      "targets_start",
+      1
+    ],
+    [
+      "locked_on_target",
+      1
+    ],
+    [
+      "arrow_on_target",
+      1
+    ],
+    [
+      "shielding",
+      1
+    ],
+    [
+      "damaged",
+      1
+    ],
+    [
+      "nearest_target_rel_pos",
+      3
+    ],
+    [
+      "nearest_target_dist",
+      1
+    ],
+    [
+      "nearest_target_hp",
+      1
+    ],
+    [
+      "nearest_target_facing_cos_sin",
+      2
+    ],
+    [
+      "second_target_rel_pos",
+      3
+    ],
+    [
+      "second_target_dist",
+      1
+    ],
+    [
+      "second_target_hp",
+      1
+    ],
+    [
+      "time_left",
+      1
+    ],
+    [
+      "mem_kills_frac",
+      1
+    ],
+    [
+      "mem_damage_dealt",
+      1
+    ],
+    [
+      "mem_hearts_lost",
+      1
+    ],
+    [
+      "mem_since_last_hit",
+      1
+    ],
+    [
+      "mem_since_last_damage",
+      1
+    ],
+    [
+      "mem_since_last_kill",
+      1
+    ],
+    [
+      "mem_lockons",
+      1
+    ],
+    [
+      "t1_state_onehot",
+      10
+    ],
+    [
+      "t1_facing_link_cos_sin",
+      2
+    ],
+    [
+      "t1_timer",
+      1
+    ],
+    [
+      "t2_state_onehot",
+      10
+    ],
+    [
+      "t2_facing_link_cos_sin",
+      2
+    ],
+    [
+      "t2_timer",
+      1
+    ]
+  ],
+  "obs_version": 4,
+  "vi_per_step": 6,
+  "steps_per_second": 10.0,
+  "episode_seconds": 180.0,
+  "slots": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "deterministic": false,
+  "checkpoints": [
+    {
+      "path": "checkpoints/inbox/deku-combat_r5_u00005.pt",
+      "global_update": 5,
+      "episodes": 11,
+      "transitions": 15089
+    },
+    {
+      "path": "checkpoints/inbox/deku-combat-gru-v2_u00030.pt",
+      "global_update": 30,
+      "episodes": 17,
+      "transitions": 17576
+    },
+    {
+      "path": "checkpoints/inbox/deku-combat_r2_u00030.pt",
+      "global_update": 30,
+      "episodes": 15,
+      "transitions": 19689
+    },
+    {
+      "path": "checkpoints/inbox/deku-combat-gru-v2b_u00060.pt",
+      "global_update": 90,
+      "episodes": 14,
+      "transitions": 12593
+    },
+    {
+      "path": "checkpoints/inbox/deku-combat-gru-v2b_u00080.pt",
+      "global_update": 110,
+      "episodes": 21,
+      "transitions": 16241
+    },
+    {
+      "path": "checkpoints/inbox/deku-combat-gru-v2b_u00100.pt",
+      "global_update": 130,
+      "episodes": 19,
+      "transitions": 11111
+    },
+    {
+      "path": "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt",
+      "global_update": 150,
+      "episodes": 24,
+      "transitions": 14458
+    }
+  ],
+  "layout": "each episode .npz has action[T], reward[T], state[T+1, state_dim] (+ obs[T, obs_dim]); transition t = (state[t], action[t], state[t+1])"
+}
