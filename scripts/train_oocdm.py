@@ -51,8 +51,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.oocdm import (OOCDM, assert_identity_init, field_losses, fit_codecs,  # noqa: E402
-                            make_batch, pack, predict_raw)
+from zelda_rl.oocdm import (OOCDM, assert_identity_init, calibrate_thresholds, change_rates,  # noqa: E402
+                            field_losses, fit_codecs, make_batch, pack, predict_raw)
 from zelda_rl.oomdp import (SCHEMA_V3, assert_partition, assert_roundtrip, decompose,  # noqa: E402
                             err, prep, unit)
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
@@ -93,11 +93,12 @@ def check_permutation(model, batch, cname="En_Dekubaba", tol=2e-4):
               for k in batch}
         sw = model(b2)
     worst = 0.0
-    for key in base:
-        a, b = base[key], sw[key]
-        if key.startswith(cname + "|"):
-            b = b[:, perm]
-        worst = max(worst, float((a - b).abs().max()))
+    for part in ("value", "gate"):
+        for key in base.get(part, {}):
+            a, b = base[part][key], sw[part][key]
+            if key.startswith(cname + "|"):
+                b = b[:, perm]
+            worst = max(worst, float((a - b).abs().max()))
     return f"max deviation {worst:.2e} {'OK' if worst < tol else 'FAILED'}"
 
 
@@ -128,13 +129,13 @@ class Stat:
 
 
 @torch.no_grad()
-def evaluate(model, p, codecs, device, batch_size=512, cap=0):
+def evaluate(model, p, codecs, device, batch_size=512, cap=0, thresholds=None):
     model.eval()
     idx = p.pairs if not cap else p.pairs[:: max(1, len(p.pairs) // cap)]
     stats = {}
     for s in range(0, len(idx), batch_size):
         b = make_batch(p, codecs, model, idx[s: s + batch_size], device)
-        pred = predict_raw(model, model(b), b)
+        pred = predict_raw(model, model(b), b, thresholds)
         for c in model.order:
             for t in model.target_names[c.name]:
                 v = b["valid"][c.name][t].cpu().numpy()
@@ -199,6 +200,11 @@ def main():
     ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
     ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
     ap.add_argument("--wandb-group", default="stage1-G1")
+    ap.add_argument("--gate", dest="gate", action="store_true", default=True,
+                    help="per-field change gate (docs/CAUSAL_WORLD_MODEL.md 12.1)")
+    ap.add_argument("--no-gate", dest="gate", action="store_false",
+                    help="the matched baseline arm: regress the value directly, as the first Stage 1 run did")
+    ap.add_argument("--w-gate", type=float, default=1.0, help="weight on the gate BCE terms")
     args = ap.parse_args()
 
     name = args.name or f"oocdm-stage1-{datetime.now():%Y%m%d-%H%M%S}"
@@ -229,7 +235,15 @@ def main():
     LOGGER.info("transitions: %s | capacity %s", ", ".join(f"{k} {len(p)}" for k, p in packs.items()), cap)
 
     dev = torch.device(args.device)
-    model = OOCDM(codecs, cap).to(dev)
+    model = OOCDM(codecs, cap, use_gate=args.gate).to(dev)
+    if args.gate:
+        rates = change_rates(packs["train"], model)
+        pw = model.set_change_rates(rates)
+        rare = sorted(pw.items(), key=lambda kv: -kv[1])[:5]
+        LOGGER.info("change gate ON; pos_weight from measured train change rates, top 5: %s",
+                    ", ".join(f"{k.replace('|', '.')} {v:.0f}x (chg {100 * rates[k]:.3f}%)" for k, v in rare))
+    else:
+        LOGGER.info("change gate OFF (matched baseline arm)")
     n_par, n_head = sum(x.numel() for x in model.parameters()), sum(len(v) for v in model.target_names.values())
     LOGGER.info("params: %.2fM, %d field heads", n_par / 1e6, n_head)
 
@@ -255,34 +269,50 @@ def main():
     for ep in range(args.epochs):
         perm = rng.permutation(tr.pairs)
         tot, nb, t1 = 0.0, 0, time.time()
+        gsum = vsum = 0.0
         for s in range(0, len(perm) - args.batch, args.batch):
             b = make_batch(tr, codecs, model, perm[s: s + args.batch], dev)
             L = field_losses(model, model(b), b)
-            loss = sum(L.values())
+            g = sum(v for k, v in L.items() if k.startswith("gate:"))
+            val = sum(v for k, v in L.items() if not k.startswith("gate:"))
+            loss = args.w_gate * g + val
+            gsum += float(g.detach()) if torch.is_tensor(g) else 0.0
+            vsum += float(val.detach()) if torch.is_tensor(val) else 0.0
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
             opt.step()
             tot += float(loss.detach()); nb += 1
-        rows = evaluate(model, packs["tune"], codecs, dev, cap=20000)
+        thr = calibrate_thresholds(model, packs["tune"], codecs, dev)
+        rows = evaluate(model, packs["tune"], codecs, dev, cap=20000, thresholds=thr)
         step = (ep + 1) * len(tr.pairs)
         m = wandb_metrics(rows, "tune")
         m["train/loss"] = tot / max(nb, 1)
+        m["train/loss_gate"], m["train/loss_value"] = gsum / max(nb, 1), vsum / max(nb, 1)
         m["train/epoch"] = ep + 1
         m["train/sec_per_epoch"] = time.time() - t1
         m.update({f"loss/{k.replace('|', '.')}": float(v.detach()) for k, v in L.items()})
         log.update(m, step)
-        LOGGER.info("epoch %d/%d  loss %8.3f  tune fields beating do-nothing on changed steps: %d/%d  (%.0fs)",
-                    ep + 1, args.epochs, m["train/loss"], m["tune/fields_beating_identity"],
-                    m["tune/fields_live"], m["train/sec_per_epoch"])
+        off = sum(1 for v in thr.values() if v > 1.0)
+        LOGGER.info("epoch %d/%d  loss %8.3f (gate %7.3f value %7.3f)  tune beating do-nothing on changed "
+                    "steps: %d/%d  gates off: %d  (%.0fs)", ep + 1, args.epochs, m["train/loss"],
+                    m["train/loss_gate"], m["train/loss_value"], m["tune/fields_beating_identity"],
+                    m["tune/fields_live"], off, m["train/sec_per_epoch"])
+        m["tune/gates_never_fire"] = off
 
-    rows = evaluate(model, packs["test"], codecs, dev)
+    # Thresholds are chosen on TUNE and applied unchanged to TEST -- never fitted on the split reported.
+    thr = calibrate_thresholds(model, packs["tune"], codecs, dev)
+    if thr:
+        LOGGER.info("gate thresholds calibrated on tune: %d fields, median %.2f, %d pinned at never-fire",
+                    len(thr), float(np.median(list(thr.values()))), sum(1 for v in thr.values() if v > 1.0))
+        (run_dir / "thresholds.json").write_text(json.dumps(thr, indent=1))
+    rows = evaluate(model, packs["test"], codecs, dev, thresholds=thr)
     live = report(rows, model, f"TEST slots {sorted(TEST_SLOTS)}, {args.epochs} epochs")
     final = wandb_metrics(rows, "test")
     log.update(final, args.epochs * len(tr.pairs))
     log.summary({k: v for k, v in final.items() if v is not None})
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args)}, out)
+    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args), "thresholds": thr}, out)
     LOGGER.info("wrote %s (%d fields live on test)", out, len(live))
     log.artifact(out)
     (run_dir / "fields.json").write_text(json.dumps(rows, indent=1))

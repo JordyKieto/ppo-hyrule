@@ -24,6 +24,30 @@ formulation makes "copy the input" the global optimum of a next-step objective w
 barely moves. That failure is why every metric here is reported BOTH aggregate and restricted to the steps
 where the field actually changed (`id|chg` in scripts/eval_field_identity.py). A model that learns to copy
 scores 0 on the restricted metric and is caught immediately.
+
+THE CHANGE GATE (docs/CAUSAL_WORLD_MODEL.md section 12.1)
+---------------------------------------------------------
+Every field head is split in two:
+
+  gate   1 logit    did this field change at all this step?
+  value  n outputs  GIVEN that it changed, by how much / to what?
+
+and the prediction is `gate < threshold ? v_t : apply(v_t, value)`.
+
+This is not a refinement, it is the fix for the measured failure of the first Stage 1 run. Without it a head
+regresses a delta directly, so a delta that is zero on ~90% of steps gets smeared across all of them: the
+6-epoch run emitted **1.41 world units of spurious `Link.pos` motion on steps where Link did not move**, and
+seven rare-event heads (`En_Dekubaba.hp` among them) sat at exactly 0.000 because "never changes" is the
+regression optimum. Section 29 of the latent trail already had the evidence that this decomposition works --
+`TransitionHead`'s `moved` logit reached AP 0.435, 6.8x base.
+
+Three consequences, each deliberate:
+  - the VALUE loss is computed only on steps where the field truly changed, so it learns "how much, given it
+    moved" instead of being dominated by zeros;
+  - the GATE loss is a per-field BCE with `pos_weight` taken from that field's MEASURED change rate, which is
+    where rare-event supervision now lives (section 23 of the latent trail, applied per field);
+  - at init the gate bias is GATE_INIT_BIAS, so p(changed) ~ 3e-4 and the untrained model is do-nothing
+    EXACTLY -- more exactly than before, since the angle codec's float round-trip is bypassed entirely.
 """
 from __future__ import annotations
 
@@ -36,6 +60,7 @@ from zelda_rl.oomdp import (SCHEMA_V3, TURNS, Field, ObjClass, ObjectGroup, Sche
                             prep, unit, unpack_bits, wrap)
 
 IDENTITY_LOGIT = 8.0        # logit margin that makes argmax == the current value at init
+GATE_INIT_BIAS = -8.0       # change-gate bias at init: p(changed) ~ 3e-4, so the model starts as do-nothing
 UNKNOWN = -1                # categorical index for a value never seen while fitting
 
 
@@ -339,11 +364,14 @@ class ClassModule(nn.Module):
         self.fq, self.fk, self.fv = MultiLinear(n_t, d_h, d_k), nn.Linear(d_h, d_k), nn.Linear(d_h, d_v)
         self.dec = nn.Sequential()
         self.dec1, self.dec2 = MultiLinear(n_t, d_h + d_v, d_dec), MultiLinear(n_t, d_dec, d_dec)
-        self.heads = nn.ModuleList()
+        self.heads, self.gates = nn.ModuleList(), nn.ModuleList()
         for t in self.targets:                                  # zero-init: an untrained head is do-nothing
             h = nn.Linear(d_dec, codecs[t].n_out)
             nn.init.zeros_(h.weight), nn.init.zeros_(h.bias)
             self.heads.append(h)
+            g = nn.Linear(d_dec, 1)                             # "did this field change at all this step?"
+            nn.init.zeros_(g.weight), nn.init.constant_(g.bias, GATE_INIT_BIAS)
+            self.gates.append(g)
 
     def encode(self, xs: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         e = self.embed(xs).flatten(-2)                          # (B, n_obj, n_field*d)
@@ -363,9 +391,11 @@ class OOCDM(nn.Module):
 
     def __init__(self, codecs: dict[str, dict[str, FieldCodec]], capacity: dict[str, int],
                  schema: Schema = SCHEMA_V3, targets: dict[str, list[str]] | None = None,
-                 d: int = 16, d_h: int = 64, d_k: int = 32, d_v: int = 64, d_dec: int = 128):
+                 d: int = 16, d_h: int = 64, d_k: int = 32, d_v: int = 64, d_dec: int = 128,
+                 use_gate: bool = True):
         super().__init__()
-        self.schema, self.codecs, self.capacity = schema, codecs, capacity
+        self.schema, self.codecs, self.capacity, self.use_gate = schema, codecs, capacity, use_gate
+        self.pos_weight: dict[str, torch.Tensor] = {}      # filled by set_change_rates()
         self.order = [c for c in schema.classes if capacity.get(c.name, 0) > 0]
         self.field_names, self.target_names = {}, {}
         mods = {}
@@ -381,9 +411,12 @@ class OOCDM(nn.Module):
             for c in self.order for t in self.target_names[c.name]
             if codecs[c.name][t].kind in ("real", "count")})
 
-    def forward(self, batch: dict) -> dict[str, torch.Tensor]:
+    def forward(self, batch: dict) -> dict[str, dict[str, torch.Tensor]]:
         """batch['x'][cls][field] (B, n_obj, in_dim); batch['mask'][cls] (B, n_obj);
-        batch['raw'][cls][field] (B, n_obj, size) for the identity residual. Returns {'Cls|field': out}."""
+        batch['raw'][cls][field] (B, n_obj, size) for the identity residual.
+
+        Returns {'value': {'Cls|field': (B, n_obj, n_out)}, 'gate': {'Cls|field': (B, n_obj)}}.
+        """
         local, keys, vals, obj_mask = {}, [], [], []
         for c in self.order:
             m = self.mods[c.name]
@@ -395,6 +428,7 @@ class OOCDM(nn.Module):
         M = torch.cat(obj_mask, 1)                                        # (B, n_obj_all)
 
         out: dict[str, torch.Tensor] = {}
+        gate: dict[str, torch.Tensor] = {}
         base = 0
         for c in self.order:
             m, n_obj = self.mods[c.name], self.capacity[c.name]
@@ -410,10 +444,23 @@ class OOCDM(nn.Module):
             h = torch.cat([local[c.name], torch.einsum("botj,bjv->botv", att, V)], -1)
             h = Fn.leaky_relu(m.dec2(Fn.leaky_relu(m.dec1(h))))           # (B, n_obj_c, n_t, d_dec)
             for i, t in enumerate(self.target_names[c.name]):
-                out[f"{c.name}|{t}"] = self._identity(c.name, t, m.heads[i](h[:, :, i]),
-                                                      batch["raw"][c.name][t])
+                key = f"{c.name}|{t}"
+                out[key] = self._identity(c.name, t, m.heads[i](h[:, :, i]), batch["raw"][c.name][t])
+                gate[key] = m.gates[i](h[:, :, i])[..., 0]
             base += n_obj
-        return out
+        return {"value": out, "gate": gate} if self.use_gate else {"value": out}
+
+    def set_change_rates(self, rates: dict[str, float], cap: float = 200.0) -> dict[str, float]:
+        """`pos_weight` for each gate, from that field's MEASURED change rate on the training split.
+
+        This is where per-field rare-event supervision lives (docs/CAUSAL_WORLD_MODEL.md 12.3). A field that
+        changes on 0.057% of object-steps -- En_Dekubaba.hp -- gets its positives weighted ~1750x, which is
+        section 23's oversampling expressed per field instead of as one shared batch policy. Capped, because
+        an unbounded weight on a field that changed twice in the dataset is noise amplification.
+        """
+        self.pos_weight = {k: torch.tensor(min((1 - r) / r, cap), dtype=torch.float32)
+                           for k, r in rates.items() if r > 0}
+        return {k: float(v) for k, v in self.pos_weight.items()}
 
     def _identity(self, cname: str, t: str, raw_out: torch.Tensor, cur: torch.Tensor) -> torch.Tensor:
         """Add the residual-from-identity offset, so a zero-init head predicts EXACTLY no change."""
@@ -449,14 +496,14 @@ def make_batch(p: Packed, codecs: dict[str, dict[str, FieldCodec]], model: "OOCD
     `present` itself, whose despawn (1 -> 0) is precisely the thing to predict.
     """
     t = np.asarray(idx)
-    x, raw, mask, y, valid = {}, {}, {}, {}, {}
+    x, raw, mask, y, valid, chg = {}, {}, {}, {}, {}, {}
     T = lambda a, d=torch.float32: torch.as_tensor(a, dtype=d, device=device)   # noqa: E731
     for c in model.order:
         cn = c.name
         at, m = p.attrs[cn], p.mask[cn]
         here, there = m[t], m[t + 1]
         mask[cn] = T(here, torch.bool)
-        x[cn], raw[cn], y[cn], valid[cn] = {}, {}, {}, {}
+        x[cn], raw[cn], y[cn], valid[cn], chg[cn] = {}, {}, {}, {}, {}
         for f in model.field_names[cn]:
             cod = codecs[cn].get(f)
             v = at[f][t]
@@ -468,23 +515,39 @@ def make_batch(p: Packed, codecs: dict[str, dict[str, FieldCodec]], model: "OOCD
             tv = cod.target(cur, nxt)
             y[cn][tgt] = T(tv, torch.int64 if cod.kind in ("categorical", "boolean") else torch.float32)
             valid[cn][tgt] = T(here if fld.is_mask else (here & there), torch.bool)
-    return {"x": x, "raw": raw, "mask": mask, "y": y, "valid": valid, "t": t}
+            # The gate's target, in the SAME metric the evaluation uses (zelda_rl.oomdp.err), so "changed"
+            # can never mean one thing to the loss and another to the report.
+            chg[cn][tgt] = T(err(fld, prep(fld, nxt), prep(fld, cur)) > 0, torch.float32)
+    return {"x": x, "raw": raw, "mask": mask, "y": y, "valid": valid, "chg": chg, "t": t}
 
 
-def field_losses(model: "OOCDM", out: dict[str, torch.Tensor], batch: dict) -> dict[str, torch.Tensor]:
+def field_losses(model: "OOCDM", out: dict, batch: dict) -> dict[str, torch.Tensor]:
     """One scalar per (class, field), each already averaged per instance -- the paper's AILL, per field.
 
     Averaging PER INSTANCE rather than per batch element is what makes the objective invariant to how many
     actors are alive, which is the whole point of the object-oriented formulation.
+
+    With the gate on, each field contributes TWO terms: a `gate:` BCE over "did this change", weighted by the
+    field's measured change rate, and a value term computed ONLY on the steps where it truly changed.
     """
     losses = {}
+    gates = out.get("gate") if isinstance(out, dict) and "value" in out else None
+    vals = out["value"] if gates is not None else out
     for c in model.order:
         for t in model.target_names[c.name]:
             key = f"{c.name}|{t}"
-            cod, pred, tgt = model.codecs[c.name][t], out[key], batch["y"][c.name][t]
+            cod, pred, tgt = model.codecs[c.name][t], vals[key], batch["y"][c.name][t]
             v = batch["valid"][c.name][t]
             if not bool(v.any()):
                 continue
+            if gates is not None:
+                ch = batch["chg"][c.name][t]
+                pw = model.pos_weight.get(key)
+                losses[f"gate:{key}"] = Fn.binary_cross_entropy_with_logits(
+                    gates[key][v], ch[v], pos_weight=pw.to(gates[key].device) if pw is not None else None)
+                v = v & (ch > 0.5)             # the value head learns "how much, GIVEN it moved"
+                if not bool(v.any()):
+                    continue
             k = cod.kind
             if k in ("real", "count"):
                 s = model.log_scale[f"{c.name}|{t}"]
@@ -502,14 +565,28 @@ def field_losses(model: "OOCDM", out: dict[str, torch.Tensor], batch: dict) -> d
 
 
 @torch.no_grad()
-def predict_raw(model: "OOCDM", out: dict[str, torch.Tensor], batch: dict) -> dict[str, np.ndarray]:
-    """Head outputs -> predicted RAW field values, so every metric is in the field's own units."""
+def predict_raw(model: "OOCDM", out: dict, batch: dict,
+                thresholds: dict[str, float] | None = None) -> dict[str, np.ndarray]:
+    """Head outputs -> predicted RAW field values, so every metric is in the field's own units.
+
+    Where the gate says the field did not change, the CURRENT value is returned unchanged -- the prediction
+    is then exactly do-nothing for that (object, step), which is what stops a near-zero delta being smeared
+    across the ~90% of steps on which nothing happens.
+    """
+    gates = out.get("gate") if isinstance(out, dict) and "value" in out else None
+    vals = out["value"] if gates is not None else out
     res = {}
     for c in model.order:
         for t in model.target_names[c.name]:
             key = f"{c.name}|{t}"
             cod = model.codecs[c.name][t]
-            res[key] = cod.apply(batch["raw"][c.name][t].cpu().numpy(), out[key].float().cpu().numpy())
+            cur = batch["raw"][c.name][t].cpu().numpy()
+            pred = cod.apply(cur, vals[key].float().cpu().numpy())
+            if gates is not None:
+                thr = (thresholds or {}).get(key, 0.5)
+                fire = torch.sigmoid(gates[key]).cpu().numpy() >= thr
+                pred = np.where(fire[..., None], pred, cur)
+            res[key] = pred
     return res
 
 
@@ -536,3 +613,64 @@ def assert_identity_init(model: "OOCDM", batch: dict, tol: float = 1e-3) -> None
     if bad:
         raise AssertionError("zero-init model is not the identity: "
                              + ", ".join(f"{k} max|delta|={e:.4g} (rel {r:.2g})" for k, e, r in bad[:8]))
+
+
+def change_rates(p: Packed, model: "OOCDM") -> dict[str, float]:
+    """Fraction of scored (object, step) pairs on which each field changes, measured on a split."""
+    t = p.pairs
+    out = {}
+    for c in model.order:
+        for tgt in model.target_names[c.name]:
+            f, a, m = c.field(tgt), p.attrs[c.name][tgt], p.mask[c.name]
+            here, there = m[t], m[t + 1]
+            v = here if f.is_mask else (here & there)
+            if not v.any():
+                continue
+            cur, nxt = a[t][v], a[t + 1][v]
+            out[f"{c.name}|{tgt}"] = float((err(f, prep(f, nxt), prep(f, cur)) > 0).mean())
+    return out
+
+
+@torch.no_grad()
+def calibrate_thresholds(model: "OOCDM", p: Packed, codecs, device, batch_size: int = 512,
+                         cap: int = 40000,
+                         grid=(0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.01)) -> dict[str, float]:
+    """Pick each gate's firing threshold on the TUNE split, minimising that field's own raw error.
+
+    Not a hyper-parameter and not 0.5 by default: section 3 of the latent trail took damage F1 from 0.746 to
+    0.906 purely by calibrating a threshold on a held-out split, and the decision here is the same one --
+    firing costs spurious motion, not firing costs a missed event, and the exchange rate is per field.
+
+    The grid's last entry, 1.01, means NEVER FIRE. It matters more than the others: it lets a field whose
+    value head cannot beat do-nothing fall back to exact do-nothing, so after calibration the identity is a
+    floor for every field AFTER training and not only at init. A field pinned at 1.01 is reported as skill
+    0.000, which is the truth about it -- and a threshold sitting at either end of the grid is itself a
+    signal that the gate carries no information for that field.
+    """
+    if not model.use_gate:
+        return {}
+    model.eval()
+    idx = p.pairs if len(p.pairs) <= cap else p.pairs[:: max(1, len(p.pairs) // cap)]
+    tot = {}
+    for s0 in range(0, len(idx), batch_size):
+        b = make_batch(p, codecs, model, idx[s0: s0 + batch_size], device)
+        o = model(b)
+        for c in model.order:
+            for t in model.target_names[c.name]:
+                key = f"{c.name}|{t}"
+                f = c.field(t)
+                v = b["valid"][c.name][t].cpu().numpy()
+                if not v.any():
+                    continue
+                cur = b["raw"][c.name][t].cpu().numpy()
+                nxt = p.attrs[c.name][t][b["t"] + 1]
+                val = codecs[c.name][t].apply(cur, o["value"][key].float().cpu().numpy())
+                pr = torch.sigmoid(o["gate"][key]).cpu().numpy()
+                e_id = err(f, prep(f, nxt[v]), prep(f, cur[v]))
+                e_md = err(f, prep(f, nxt[v]), prep(f, val[v]))
+                acc = tot.setdefault(key, np.zeros(len(grid)))
+                for i, g in enumerate(grid):
+                    fire = pr[v] >= g
+                    acc[i] += float(np.where(fire, e_md, e_id).sum())
+    model.train()
+    return {k: float(grid[int(np.argmin(a))]) for k, a in tot.items()}
