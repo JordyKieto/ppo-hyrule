@@ -903,3 +903,52 @@ def discover_graph(model: "OOCDM", p: Packed, codecs, device, threshold: float =
                                       model.field_names[c.name].index(f)] = True
     model.train()
     return out, cmis
+
+
+# --------------------------------------------------------------------------------------------------------
+# Event oversampling (docs/LATENT_WORLD_MODEL.md section 23).
+#
+# NOT from Yu et al. -- the paper's environments have no rare events. `mouse.hunger` decreases by 2.0 on
+# EVERY step and its reward is a function of `delta_hunger` and `delta_health`, so there is nothing to miss.
+# Ours is the opposite: enemy HP changes on 0.02% of scored steps, a despawn on 0.02%, the room is left on
+# 0.03%, and those are what CombatTracker.step() pays out on. An objective drawn uniformly is computed almost
+# entirely on frames whose correct answer is "nothing changed".
+#
+# This repo has already measured the fix. Section 23 took hit-window event detection from 2% to 55% and Baba
+# HP removed from 0.04 to 1.15 (real 1.25) with `1 + K*rare + sqrt(K)*move` applied to the BATCH SAMPLER.
+#
+# It is a SAMPLING weight, not a loss weight, and that distinction is the whole reason to expect it to work
+# where the change gate did not: section 13 weighted a gate's BCE by pos_weight up to 200x and backpropagated
+# it through the shared trunk, which collapsed every value head (28/47 -> 14/47). Changing which frames the
+# model sees does not deform the loss geometry.
+# --------------------------------------------------------------------------------------------------------
+def event_weights(p: Packed, model: "OOCDM", oversample: float,
+                  rare_fields: Sequence[tuple[str, str]] = (("En_Dekubaba", "hp"),
+                                                            ("En_Dekubaba", "present"),
+                                                            ("En_Dekubaba", "state_idx"),
+                                                            ("Link", "hp"),
+                                                            ("Room", "scene")),
+                  move_field: tuple[str, str] = ("Link", "pos")) -> tuple[np.ndarray, dict]:
+    """Per-transition sampling weights `1 + K*rare + sqrt(K)*move`, and the batch composition they produce."""
+    t = p.pairs
+    rare = np.zeros(len(t), bool)
+    for cls, fld in rare_fields:
+        if cls not in p.attrs or fld not in p.attrs[cls]:
+            continue
+        c = next((x for x in model.order if x.name == cls), None)
+        if c is None:
+            continue
+        f, a, m = c.field(fld), p.attrs[cls][fld], p.mask[cls]
+        v = m[t] if f.is_mask else (m[t] & m[t + 1])
+        e = err(f, prep(f, a[t + 1]), prep(f, a[t]))
+        rare |= ((e > 0) & v).any(-1) if e.ndim > 1 else ((e > 0) & v)
+    cls, fld = move_field
+    c = next(x for x in model.order if x.name == cls)
+    f, a, m = c.field(fld), p.attrs[cls][fld], p.mask[cls]
+    v = m[t] & m[t + 1]
+    e = err(f, prep(f, a[t + 1]), prep(f, a[t]))
+    move = ((e > 0) & v).any(-1) if e.ndim > 1 else ((e > 0) & v)
+    w = 1.0 + oversample * rare + np.sqrt(max(oversample, 0.0)) * move
+    return w, {"rare_frac": float(rare.mean()), "move_frac": float(move.mean()),
+               "rare_share": float(w[rare].sum() / w.sum()), "move_share": float(w[move].sum() / w.sum()),
+               "n_rare": int(rare.sum())}

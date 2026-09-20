@@ -42,7 +42,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.oocdm import (OOCDM, FullMask, GraphMask, OOCGraph, RandomMask, discover_graph,  # noqa: E402
-                            field_losses, make_batch, pack, velocity_baseline)
+                            event_weights, field_losses, make_batch, pack, velocity_baseline)
 from zelda_rl.oomdp import err, prep, unit  # noqa: E402
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
 
@@ -117,6 +117,9 @@ def main():
     ap.add_argument("--cmi-batch-size", type=int, default=2048)
     ap.add_argument("--p-edge", type=float, default=0.9)
     ap.add_argument("--n-stable", type=int, default=2, help="stop after the graph is unchanged this often")
+    ap.add_argument("--oversample", type=float, default=0.0,
+                    help="event oversampling K (LATENT_WORLD_MODEL.md 23): batch weights 1 + K*rare + "
+                         "sqrt(K)*move. NOT in Yu et al., whose environments have no rare events. 0 = off.")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     ap.add_argument("--wandb", dest="wandb", action="store_true", default=True)
     ap.add_argument("--no-wandb", dest="wandb", action="store_false")
@@ -171,6 +174,14 @@ def main():
         opt.load_state_dict(src["optim"])
     rng = np.random.default_rng(0)
     tr = packs["train"]
+    samp_p = None
+    if a.oversample > 0:
+        w, comp = event_weights(tr, model, a.oversample)
+        samp_p = w / w.sum()
+        LOGGER.info("oversample x%.0f: rare events are %.3f%% of frames (%d), motion %.1f%%; their share of "
+                    "a batch rises to %.1f%% and %.1f%%", a.oversample, 100 * comp["rare_frac"],
+                    comp["n_rare"], 100 * comp["move_frac"], 100 * comp["rare_share"],
+                    100 * comp["move_share"])
     prev_edges = model.graph.edge_set()
     n_unchanged, times, t_start = 0, [], time.time()
 
@@ -198,10 +209,12 @@ def main():
         t0 = time.time()
         tot = {"graph": 0.0, "full": 0.0, "random": 0.0}
         nb = 0
-        for _ in range(a.epochs_per_iter):
-            perm = rng.permutation(tr.pairs)
-            for s in range(0, len(perm) - a.batch, a.batch):
-                b = make_batch(tr, codecs, model, perm[s: s + a.batch], dev)
+        n_steps = (len(tr.pairs) // a.batch) * a.epochs_per_iter
+        for _ in range(n_steps):
+            idx = (rng.choice(tr.pairs, size=a.batch, replace=True, p=samp_p) if samp_p is not None
+                   else rng.choice(tr.pairs, size=a.batch, replace=False))
+            if True:
+                b = make_batch(tr, codecs, model, idx, dev)
                 Lg = sum(field_losses(model, model(b, GraphMask(model.graph)), b).values())
                 Lf = sum(field_losses(model, model(b, FullMask(model.graph)), b).values())
                 Lr = sum(field_losses(model, model(b, RandomMask(model.graph, a.p_edge)), b).values())
