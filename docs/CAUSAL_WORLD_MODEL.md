@@ -895,9 +895,7 @@ Build (1), (4), (6); revert the `f_global` deviation. Then hand-set `Link.pos'`'
 `{pos, vel, speed, stick, bg_flags}` -- the set section 16's ridge probe says it needs -- leave every other
 field at `G1`, and train. One variable against `runs/paper-fast-s0`.
 
-**Gate: does `Link.pos` reach ~+0.22?**
-- **Yes** -> masking is the mechanism section 16 claims, and P1-P3 are justified.
-- **No** -> masking is not sufficient, discovery will not save it either, and P1-P3 are NOT built. Say so.
+**Gate: does `Link.pos` reach ~+0.22?** -> **PASSED at +0.207. See 17.7.**
 
 Reference points for reading the answer: trained model at `G1` **+0.064**; ridge given only the right parents
 **+0.219**; zero-parameter `pos + 1.67*vel` **+0.257**.
@@ -945,3 +943,40 @@ oversampling**, **binned direction/magnitude** heads, and firing **threshold cal
 The schema defects of 14.2 (`En_Dekubaba.vel` a dead input, `Link.y_dist_to_ledge` a sentinel typed `Real`,
 `Link.dist_interact_wall`) are real but are **not** deviations and **not** P0-P3. They are fixed after P2, or
 earlier only if discovery names them as parents of something that matters.
+
+
+### 17.7 P0 result: the gate passes
+
+`runs/paper-fast-s0` (G1) vs `runs/p0-masked` (hand graph). Same 120-episode random subset, same seed 0,
+2 epochs, test slots {7,9}. The ONLY difference is `Link.pos'`'s parent set: 8,168 of 8,286 edges active
+instead of all of them.
+
+| arm | `Link.pos` AGG | `Link.pos` CHG |
+|---|---|---|
+| `G1` -- every field a parent | -0.310 | +0.134 |
+| **P0 masked -- `{pos, vel, speed, stick, bg_flags}`** | -0.365 | **+0.207** |
+| ridge given only those parents (section 16) | -- | +0.219 |
+| `pos + 1.67*vel`, zero parameters | -- | +0.257 |
+
+**+0.134 -> +0.207, a 54% improvement from masking one field's parents, landing essentially at the ridge
+ceiling of +0.219.** Section 16's claim holds: masking is the mechanism, not an optimisation. The model can
+use those five fields once it is not also handed the other 33.
+
+Three caveats, recorded rather than smoothed:
+
+1. **Aggregate skill got slightly WORSE** (-0.310 -> -0.365). Masking helped the model predict motion when
+   motion happens; it did not stop it moving when nothing moved. That failure is unchanged.
+2. **Fields left at `G1` moved anyway.** `Link.dist_interact_wall` -27.9 -> -57.5,
+   `En_Dekubaba.is_targeted` +0.019 -> +0.336. They share the trunk, so training dynamics couple them: the
+   change is clean in the GRAPH but not in the OPTIMISATION, and run-to-run variation is evidently large for
+   some fields.
+3. **Single seed** (AGENTS.md section 7). Given (2), a +0.073 effect from one run is not a measurement. The
+   seed control in P3 is what settles it; the gate is accepted on the strength of the effect size landing on
+   an independently predicted value, not on the single run alone.
+
+**Auditability gap, and the fix.** Both P0 arms were run with `--no-wandb`, so they exist only as
+`runs/*/train.log` + `fields.json`. That was an omission. The trainer now logs the graph itself --
+`graph/edges_active`, `graph/edges_candidate`, `graph/edges_global`, `graph/edges_local`,
+`graph/frac_active`, and a `graph/kind` + `graph/hand_parents` summary -- because two runs differing ONLY in
+their causal graph are otherwise indistinguishable in wandb. The velocity baseline is logged as
+`control/velocity_baseline_val_chg` for the same reason. Every run from here is wandb-audited by default.

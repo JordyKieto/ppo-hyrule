@@ -60,6 +60,8 @@ from zelda_rl.state_layout import STATE_DIM_V3  # noqa: E402
 
 DEFAULT_DATA = ["datasets/transitions/v3-main/20260919-084052"]
 TRAIN_SLOTS, TUNE_SLOTS, TEST_SLOTS = {1, 2, 3, 5, 6, 10}, {4, 8}, {7, 9}
+# P0's hand-specified parent set for Link.pos', from the ridge probe in docs/CAUSAL_WORLD_MODEL.md 16.
+HAND_PARENTS = ["pos", "vel", "speed", "stick", "bg_flags"]
 
 
 def load(dirs, limit=0, sample_seed=0):
@@ -214,7 +216,7 @@ def main():
     ap.add_argument("--no-wandb", dest="wandb", action="store_false")
     ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
     ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
-    ap.add_argument("--wandb-group", default="stage1-G1")
+    ap.add_argument("--wandb-group", default="oocdm")
     ap.add_argument("--hand-graph", action="store_true",
                     help="P0 gate (docs section 16): mask Link.pos' to the parents the ridge probe says it "
                          "needs, leave every other field at the full graph. One variable.")
@@ -229,7 +231,7 @@ def main():
     if log.run is not None:
         import wandb
         wandb.define_metric("global_step")
-        for pre in ("train", "tune", "test", "loss", "skill_tune", "skill_chg_tune", "control"):
+        for pre in ("train", "tune", "test", "loss", "skill_tune", "skill_chg_tune", "control", "graph"):
             wandb.define_metric(f"{pre}/*", step_metric="global_step")
 
     LOGGER.info("run dir: %s", run_dir)
@@ -260,12 +262,11 @@ def main():
         # masking is the mechanism the paper says it is, restricting THIS ONE target to those parents should
         # recover most of that. Everything else stays at G1, so exactly one thing differs from the baseline.
         g = OOCGraph(model.order, model.field_names, model.target_names, full=True)
-        g.set_local("Link", "pos", ["pos", "vel", "speed", "stick", "bg_flags"])
+        g.set_local("Link", "pos", HAND_PARENTS)
         g.set_global("Link", "pos", None)
         model.set_graph(g)
         LOGGER.info("P0 hand graph: Link.pos' <- local %s, global {} | %d of %d edges active",
-                    ["pos", "vel", "speed", "stick", "bg_flags"], g.n_edges(),
-                    g.n_out * g.n_in + sum(m.size for m in g.local.values()))
+                    HAND_PARENTS, g.n_edges(), g.n_out * g.n_in + sum(m.size for m in g.local.values()))
     n_par, n_head = sum(x.numel() for x in model.parameters()), sum(len(v) for v in model.target_names.values())
     LOGGER.info("params: %.2fM, %d field heads", n_par / 1e6, n_head)
 
@@ -287,8 +288,20 @@ def main():
     worst = max(((abs(r["skill"]), k) for k, r in base.items()), default=(0.0, "-"))
     LOGGER.info("control -- untrained test skill: worst |skill| %.2e on %s%s", worst[0], worst[1],
                 "" if worst[0] == 0 else "  (nonzero only through the float round-trip of the angle codec)")
+    gr = model.graph
+    n_cand = gr.n_out * gr.n_in + sum(m.size for m in gr.local.values())
     log.update({"control/untrained_worst_abs_skill": worst[0], "control/permutation_ok": float("OK" in perm_msg),
-                "control/params_m": n_par / 1e6, "control/field_heads": n_head}, 0)
+                "control/params_m": n_par / 1e6, "control/field_heads": n_head,
+                "graph/edges_active": gr.n_edges(), "graph/edges_candidate": n_cand,
+                "graph/edges_global": int(gr.global_matrix.sum()),
+                "graph/edges_local": int(sum(m.sum() for m in gr.local.values())),
+                "graph/frac_active": gr.n_edges() / n_cand,
+                "control/velocity_baseline_val_chg": vb.get("val_chg", float("nan")) if vb else float("nan")},
+               0)
+    if log.run is not None:
+        # the graph IS the experiment: two runs differing only in it are otherwise indistinguishable
+        log.run.summary.update({"graph/kind": "hand" if args.hand_graph else "G1",
+                                "graph/hand_parents": ",".join(HAND_PARENTS) if args.hand_graph else ""})
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     rng = np.random.default_rng(args.seed)
