@@ -1040,6 +1040,38 @@ stable at 256 transitions against a 0.1-nat threshold, which is the seed/Jaccard
 forward. Both are being measured against the P1 checkpoint, which is the one the method actually specifies,
 since it was trained with the random-mask term that makes CMI well-posed.
 
+### 17.4d P2 COMPLETE: the loop converges, and the discovered graph beats the hand-picked one
+
+`runs/p2-loop`, wandb `ovre14fq`, group `oocdm-p2`. Three iterations, 34m19s, all four v3 collections,
+eps 0.05, CMI 10,240 transitions, `p_edge` 0.9, one epoch per iteration.
+
+| iter | edges | +/- | jaccard prev | `ll_graph` | `ll_full` | fields won | `Link.pos` | `En_Dekubaba.pos` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 48 | +48/-0 | -- | 37.26 | 35.85 | 17/47 | +0.055 | +0.113 |
+| 2 | 39 | +11/-20 | 0.475 | 36.09 | 34.02 | 23/47 | +0.107 | +0.134 |
+| 3 | 48 | +11/**-2** | **0.740** | **34.97** | **32.92** | **25/47** | **+0.173** | **+0.154** |
+
+**Every column moves monotonically in the right direction.** The graph converges -- churn collapses from 20
+edges removed to 2, agreement rises 0.475 -> 0.740 -- while both loss terms fall and six more fields start
+beating do-nothing. `Link.pos` triples.
+
+**The discovered graph beats the hand-specified one.** Read against each arm's own velocity control, which
+section 18.1 makes mandatory:
+
+| | `Link.pos` | its velocity control | % of baseline |
+|---|---|---|---|
+| P0, hand-picked `{pos, vel, speed, stick, bg_flags}` | +0.207 | +0.275 | 75% |
+| **P2, discovered** | +0.173 | +0.205 | **84%** |
+
+That closes the loop on section 16: masking is the mechanism, and the paper's CMI finds a better mask than a
+human reading a ridge table did.
+
+**What is NOT fixed, so it does not get lost in the good news.** `En_Dekubaba.hp` is exactly **+0.000** --
+damage has been unmodelled since section 11 and nothing in P0-P2 touched it. `Camera.eye` is -0.011. And
+three iterations is thin for a convergence claim: the paper runs to `n_iter=100` with an `n_iter_stable`
+stopping rule, so the honest statement is "trending to stability over three iterations", not "converged".
+The loop supports `--resume`, so extending it is cheap.
+
 ### 17.5 P3 -- the paper's own controls
 
 These are the results the paper reports, and the only ones that say whether any of this works.

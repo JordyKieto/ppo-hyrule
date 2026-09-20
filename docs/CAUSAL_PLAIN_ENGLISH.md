@@ -113,6 +113,20 @@ quantities started beating the "assume nothing happens" baseline.
 
 That is the phase working as intended: better links make a better model, which finds better links.
 
+**And the biggest result: the model's own answer beat ours.** Earlier we hand-picked what we thought should
+determine Link's position, from a separate analysis. The links the model discovered by itself did better --
+84% of the "simple formula" benchmark against our hand-picked 75%. We are no longer better than it at this.
+
+## The honest caveats
+
+- **Damage is still not modelled at all.** Whether a Deku Baba loses health scores exactly zero, as it has
+  since the very first attempt. Nothing in this phase touched it, and it is what the reward is made of.
+- **Three rounds is not proof of convergence.** The paper runs up to a hundred. The trend is right; the
+  claim "it converged" would be premature.
+- **One earlier result was measured on easier data.** A bug meant several runs used one of our four gameplay
+  collections rather than all of them, and that one has Link standing still more often. Their numbers are
+  real but not directly comparable; every figure is now quoted against its own baseline.
+
 ## The honest scoreboard
 
 **What is working:** the object-based structure, the trimming mechanism, the paper's training method, and a
