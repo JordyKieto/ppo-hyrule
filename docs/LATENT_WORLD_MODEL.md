@@ -1398,3 +1398,51 @@ a regression.
 
 All rollout and dream consumers now honour the checkpoint's decoder kind (`unified_decoder`) and predictor kind
 (`pred_factored`), so old checkpoints still load.
+
+## 28. Null result: the competent policy's latent is not a better predictive surface
+
+The premise: `checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt` reached return 55.5 / 76% success on Deku
+Baba combat, so its internal representation is demonstrably sufficient to ACT. Take it frozen as an encoder
+and measure predictability. The dataset already stores the 483-d `obs` that policy consumes, so it replays
+straight through `enc._features -> proj` with no retraining.
+
+Measured on 120k frames of v3-main, 80 episodes, split by episode, the same skill definition train_joint.py
+reports (`1 - pred_mse/identity_mse`, identity = the zero-init residual predictor):
+
+| latent | skill | move/rand | pos R2 (ridge) | pos MAE |
+|---|---|---|---|---|
+| policy `proj`, as-trained          | +0.742 | 0.287 | 0.993 |  4.4 |
+| policy `proj`, echo-zeroed         | +0.240 | 0.059 | 0.994 |  4.1 |
+| policy `proj`, echo+vel-zeroed     | +0.053 | 0.040 | 0.993 |  4.1 |
+| policy `proj`, echo+clock+vel      | -0.012 | 0.040 | 0.991 |  4.9 |
+| UNTRAINED same arch, echo+clock    | +0.147 | 0.059 | 0.981 |  6.5 |
+| policy GRU hidden, as-trained      | +0.369 | 0.046 | 0.674 | 25.6 |
+| OUR features, shallow-tanh, untrained | +0.025 | 0.098 | 0.968 | 7.7 |
+| OUR features, deep+LN, untrained   | -0.728 | 0.098 | -17.2 | 150.8 |
+| ours (frozen trained encoder)      | -0.482 | 0.070 | 0.948 | 10.7 |
+
+**The +0.742 is entirely artifact.** Decomposed by cumulative ablation: ~0.50 of it is the control echo
+(`GLOBAL_FIELDS_V2` dims 22:26 are `prev_action_world_dir_sin_cos` + `prev_action_button`, i.e. `a_t` copied
+into `obs_{t+1}`); ~0.19 is `link_vel`, which makes next position a linear extrapolation; ~0.06 is `time_left`
+(a deterministic countdown) plus the `goal_*` block (constant within an episode). Remove all three: -0.012.
+
+Three conclusions:
+
+1. **The policy's competence is irrelevant.** The same architecture with random untrained weights scores
+   +0.617 (echo-zeroed, buggy slice) / +0.147 (echo+clock), at or above the trained policy. Whatever makes
+   that surface look predictable is the shape of the map and the content of the input, not what PPO learned.
+2. **The GRU hidden state is a bad surface**, not a good one: pos MAE 25.6 against `proj`'s 4.4. Compressing
+   history discards the state the reward reads.
+3. **The finding that survives is about our own encoder.** An UNTRAINED random shallow-tanh projection of our
+   own features scores +0.025; our trained encoder scores -0.482; untrained deep+LayerNorm scores -0.728.
+   Our encoder is *worse than random* as a predictive surface, and the deep trunk + latent LayerNorm is the
+   mechanism -- LayerNorm renormalises every frame, so a small state change can rotate the whole vector, and
+   latent scale (how far Link moved) is not smoothly representable. That is a ~0.5 skill deficit of our own
+   construction, and it is the next thing to test.
+
+Note also that our state features are *richer* than `obs` on physics, not poorer: relative positions, distance,
+bearing and per-actor velocity are already in the row block, and Link's `speed`/`vel_xyz` in the v2 link block.
+`obs` uniquely has only goal-conditioning, the clock, rupee targets and category one-hots.
+
+Method cost of this section: the +0.742 was reported before any control ran, and a WM + dream PPO was nearly
+launched on it. See `AGENTS.md` for the rules added as a result.
