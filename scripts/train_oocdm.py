@@ -62,18 +62,29 @@ DEFAULT_DATA = ["datasets/transitions/v3-main/20260919-084052"]
 TRAIN_SLOTS, TUNE_SLOTS, TEST_SLOTS = {1, 2, 3, 5, 6, 10}, {4, 8}, {7, 9}
 
 
-def load(dirs, limit=0):
-    """-> {'train'|'tune'|'test': [(state, action)]}, split by START SLOT (the project's convention)."""
-    out = {"train": [], "tune": [], "test": []}
+def load(dirs, limit=0, sample_seed=0):
+    """-> {'train'|'tune'|'test': [(state, action)]}, split by START SLOT (the project's convention).
+
+    `limit` is a TOTAL across collections, sampled at random. Taking the first N of one collection is not a
+    subset, it is a different problem: v3-main is combat where Link often stands still, and Link.pos changes
+    on 0.6% of its first 60 episodes against 8.3% on the real test split.
+    """
+    catalogue = []
     for d in dirs:
         d = Path(d)
-        rows = [json.loads(l) for l in (d / "manifest.jsonl").read_text().splitlines() if l.strip()]
-        for r in (rows[:limit] if limit else rows):
+        catalogue += [(d, r) for r in (json.loads(l) for l in
+                                       (d / "manifest.jsonl").read_text().splitlines() if l.strip())]
+    if limit:
+        keep = sorted(np.random.default_rng(sample_seed).permutation(len(catalogue))[:limit])
+        catalogue = [catalogue[i] for i in keep]
+    out = {"train": [], "tune": [], "test": []}
+    for d, r in catalogue:
+        if True:
             z = np.load(d / r["file"])
             st, a = z["state"], z["action"]
             assert st.shape[-1] == STATE_DIM_V3, f"{r['file']} is {st.shape[-1]}-d, not v3"
-            s = r["slot"]
-            key = "test" if s in TEST_SLOTS else ("tune" if s in TUNE_SLOTS else "train")
+            slot = r["slot"]
+            key = "test" if slot in TEST_SLOTS else ("tune" if slot in TUNE_SLOTS else "train")
             out[key].append((st, np.r_[a, a[-1]][: len(st)]))
     return out
 
@@ -186,12 +197,16 @@ def wandb_metrics(rows, split):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", nargs="+", default=DEFAULT_DATA)
-    ap.add_argument("--episodes", type=int, default=0, help="per collection; 0 = all")
+    ap.add_argument("--episodes", type=int, default=0,
+                    help="TOTAL episodes sampled at random across all collections; 0 = all")
+    ap.add_argument("--sample-seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=0, help="training seed (init + batch order)")
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
-    ap.add_argument("--out", default="checkpoints/oocdm/stage1.pt")
+    ap.add_argument("--out", default="", help="checkpoint path; default <run-dir>/model.pt. Never shared: "
+                                              "a smoke run overwrote the 6-epoch paper-shape checkpoint once")
     ap.add_argument("--json", default="")
     ap.add_argument("--run-dir", default="")
     ap.add_argument("--name", default="", help="run name; default oocdm-stage1-<timestamp>")
@@ -217,7 +232,7 @@ def main():
     LOGGER.info("run dir: %s", run_dir)
     LOGGER.info("schema partition: %s", assert_partition())
     t0 = time.time()
-    data = load(args.data, args.episodes)
+    data = load(args.data, args.episodes, args.sample_seed)
     LOGGER.info("episodes: train %d, tune %d, test %d (%.0fs)", len(data["train"]), len(data["tune"]),
                 len(data["test"]), time.time() - t0)
     assert_roundtrip(*data["train"][0])
@@ -235,6 +250,7 @@ def main():
     LOGGER.info("transitions: %s | capacity %s", ", ".join(f"{k} {len(p)}" for k, p in packs.items()), cap)
 
     dev = torch.device(args.device)
+    torch.manual_seed(args.seed)
     model = OOCDM(codecs, cap).to(dev)
     n_par, n_head = sum(x.numel() for x in model.parameters()), sum(len(v) for v in model.target_names.values())
     LOGGER.info("params: %.2fM, %d field heads", n_par / 1e6, n_head)
@@ -261,7 +277,7 @@ def main():
                 "control/params_m": n_par / 1e6, "control/field_heads": n_head}, 0)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(args.seed)
     tr = packs["train"]
     for ep in range(args.epochs):
         perm = rng.permutation(tr.pairs)
@@ -291,9 +307,12 @@ def main():
     final = wandb_metrics(rows, "test")
     log.update(final, args.epochs * len(tr.pairs))
     log.summary({k: v for k, v in final.items() if v is not None})
-    out = Path(args.out)
+    out = Path(args.out) if args.out else (run_dir / "model.pt")
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args)}, out)
+    # Codecs travel WITH the weights. They are fitted statistics -- categorical cardinalities are measured
+    # from data -- so refitting them on a different episode sample silently changes head widths and the
+    # checkpoint will not load (action_fn_rel came back 27 wide instead of 28).
+    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args), "codecs": codecs}, out)
     LOGGER.info("wrote %s (%d fields live on test)", out, len(live))
     log.artifact(out)
     (run_dir / "fields.json").write_text(json.dumps(rows, indent=1))
