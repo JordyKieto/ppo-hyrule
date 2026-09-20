@@ -9,7 +9,8 @@ what each change was a response to. Not an argument for a conclusion.
 in Object-Oriented Environments*, ICML 2024. Paper PDF and the authors' reference implementation are local
 (`~/Downloads/yu24j.pdf`, `~/Documents/dev/oocdm`).
 
-**Status:** Stage 0 complete (schema + field census, no training). Stage 1 in progress.
+**Status:** Stage 0 complete. Stage 1 first run complete and **it does not beat do-nothing** (section 11).
+Open work is section 12; nothing there is a nice-to-have, each item has a measured defect behind it.
 
 ---
 
@@ -275,3 +276,189 @@ varying actor counts plus an explainability artifact — which is the paper's ow
    fields is well outside what it tested.
 5. **This census is one task** (Deku Baba combat), one collection date. Which fields are live is
    task-specific; the method is not.
+
+
+---
+
+## 11. Stage 1 result: 6 of 49 fields beat do-nothing, and the model invents motion
+
+`scripts/train_oocdm.py`, full graph G1, 6 epochs, all four v3 collections (398 episodes, 203,424
+transitions), slot split train {1,2,3,5,6,10} / tune {4,8} / test {7,9}. 4.66M params, 77 field heads.
+wandb `zelda-rl-oocdm/xq6yb719`, checkpoint `checkpoints/oocdm/stage1.pt`, per-field table
+`runs/oocdm-stage1-g1/fields.json`.
+
+### The controls, which are the reason the rest is readable
+
+| control | result |
+|---|---|
+| identity init | untrained model is **exactly** do-nothing on train, tune and test |
+| permutation | swapping two Deku Babas swaps their predictions and moves nothing else: **0.00e+00** |
+| untrained test skill | worst \|skill\| **2.7e-03**, on `En_Dekubaba.yaw` |
+
+The identity-init control paid for itself immediately: it caught an untrained model scoring **skill -33 on
+`Link.hp`**, because codecs are fitted on TRAIN ONLY and a categorical value first seen at test time matched
+no identity slot, so the head fell back to class 0. Invisible on the train split. The UNKNOWN slot now
+carries the identity.
+
+The third control is also a worked example of AGENTS.md section 12. `En_Dekubaba.yaw` has the smallest
+identity error in the table (0.0034 deg), so a float round-trip of ~1e-5 deg shows up as a relative skill of
+2.7e-03. The number moved because the denominator shrank.
+
+### Headline: 6 / 49
+
+| outcome | count |
+|---|---|
+| beats do-nothing on **both** columns | **6** — `Link.grass`, `Link.melee_anim`, `Link.sf3`, `Room.scene`, `En_Dekubaba.fn_rel`, `En_Dekubaba.state_idx` |
+| beats it on changed steps only, pays on static steps | 30 |
+| beats it on neither | 13 |
+| **learned nothing at all** (skill\|chg exactly 0.000) | **7** |
+
+Best on changed steps: `En_St.pos` +0.718, `Link.melee_state` +0.558, `Link.fall_distance` +0.554,
+`Link.sf1` +0.473, `Link.sf3` +0.459, `Link.bg_flags` +0.454, `Link.speed` +0.421,
+`Link.ztarget_timer` +0.404, **`Link.pos` +0.268** (5.41 -> 3.96 world units).
+
+`En_St.pos` topping the table is not a win. Section 6.2 measured that class as swaying 0.32 world units; a
+near-periodic 0.3-unit sway is the easiest thing in the dataset.
+
+### The model invents motion, and that is not a denominator artifact
+
+`Link.pos` is +0.268 on changed steps and **-2.617 in aggregate**. During the run this was called a
+small-denominator artifact of the kind AGENTS.md section 12 warns about. **That reading was wrong for this
+field** and the decomposition shows why -- implied error on the steps where the field did NOT change, where
+do-nothing scores exactly 0 by construction:
+
+| field | chg% | error on UNCHANGED steps | gain on changed steps | net |
+|---|---|---|---|---|
+| `Link.ztarget_timer` | 2.3 | **1.50** | +1.58 | -1.43 |
+| **`Link.pos`** | 8.3 | **1.41 world units** | +1.45 | **-1.18** |
+| `Camera.eye` | 10.8 | 0.92 | -0.12 | -0.83 |
+| `Link.speed` | 3.2 | 0.23 | +1.33 | -0.18 |
+
+The model emits ~1.4 world units of motion per step while Link is standing still. At 10 Hz that is metres of
+drift in seconds, and it is section 22's failure in new clothes. The artifact reading IS correct for the
+genuinely rare fields (`En_Dekubaba.hp` at 0.02% change), where the aggregate ratio is unstable -- but it
+cannot be used to wave away `Link.pos` at 8.3%.
+
+### The seven dead heads are the reward function
+
+skill\|chg **exactly 0.000**: `Link.hp`, `Link.held_item`, `En_Dekubaba.hp`, `En_Dekubaba.present`,
+`En_Dekubaba.has_arrow`, `En_St.present`, `En_Sw.present`.
+
+Every one is a rare discrete event -- damage, death, despawn, pickup -- and between them they are most of
+what `CombatTracker.step()` reads to compute reward. Section 6 predicted this in as many words: per-field
+heads remove the capacity contention, not the class imbalance.
+
+### Verdict
+
+**Stage 1 does not beat do-nothing as a world model, and no rollout has been run.** Two caveats in both
+directions: the run is undertrained (loss 25.3 -> 9.2, still falling steeply at epoch 6) and single-seed
+(AGENTS.md section 7), and this is a SINGLE-STEP metric while the barometer is a ground-truth rollout
+(AGENTS.md section 8). These numbers are also not comparable to the latent trail's skill figures, which were
+computed in latent space rather than per field in world units.
+
+What the object-oriented factorisation did buy, and it is not nothing: every failure above is **localised to
+a named field with a named cause**, instead of one aggregate number that three hypotheses can explain.
+
+### Diagnosis: the heads have no change gate
+
+They regress a delta directly, so a small delta is smeared across every frame. Section 29 of the latent trail
+recorded that `TransitionHead`'s `moved` logit worked well (AP 0.435, 6.8x base) -- that gate is exactly what
+is missing, and the census `chg%` column is what says so. A per-field "did this change at all" head with the
+value conditioned on it addresses the spurious motion AND the seven dead heads at once, because a gate turns
+a regression problem into the imbalanced-classification problem this project already knows how to fix
+(section 3 of the latent trail: damage F1 0.286 -> 0.458 -> 0.746 -> 0.906).
+
+---
+
+## 12. Open work
+
+Ordered by (measured defect) / (cost), not by appeal. Every item names the evidence that motivates it, so
+none can be argued for or against from taste.
+
+### 12.1 Per-field change gate -- IN PROGRESS
+
+**Evidence:** section 11. 1.41 world units of spurious `Link.pos` motion on static steps; 7 heads at exactly
+0.000; 30 of 49 fields win on changed steps but pay on static ones.
+**Change:** one `changed` logit per field, value loss restricted to changed steps, `pos_weight` per field
+from the measured change rate, threshold calibrated on tune. Gate bias initialised negative so the identity
+init invariant survives.
+**Control:** `--no-gate` keeps the current arm; the 6-epoch run above is the matched baseline, same seed and
+config (AGENTS.md section 11 corollary -- train both arms, compare at matched epochs).
+
+### 12.2 Angle loss design
+
+**Evidence:** nine of twelve angle heads sat between -0.005 and +0.001 for four straight epochs.
+`Link.yaw` was -0.0000 through epoch 4 and reached only +0.012 on test; `En_Dekubaba.shape_yaw` -0.000;
+`Link.wall_yaw`, `Link.parallel_yaw`, `Link.floor_pitch` all ~0. The two angles that DID move,
+`En_St.yaw_to_player` and `En_Sw.yaw_to_player`, are the two whose delta is nonzero on ~18% of steps.
+**Cause:** the loss is `1 - cos(pred - true)` on a delta that is exactly 0 on ~90% of steps. At Delta=0 the
+loss is already at its minimum, so there is no gradient. This is a loss-design defect, NOT a capacity limit,
+and it is the per-field reappearance of the section 30 pathology.
+**Candidates:** the change gate (12.1) may fix it outright by separating "did it turn" from "by how much";
+otherwise a von Mises NLL with learned concentration, or a binned sector head (the transition head already
+uses 16 sectors and reached 0.532 direction accuracy).
+
+### 12.3 Rare-event supervision, per field
+
+**Evidence:** the 7 dead heads. `En_Dekubaba.hp` changes on 0.057% of object-steps and scored exactly 0.000
+at every epoch.
+**Change:** section 23's event oversampling, applied PER FIELD rather than to a shared batch -- which is only
+possible now that each field has its own loss term. Combine with the gate's `pos_weight`.
+**Why it matters more than its size suggests:** these fields are what the reward reads. A dream that never
+produces damage cannot train a combat policy, which is section 22's finding restated.
+
+### 12.4 Static geometry as a class (Wall / floor / ceiling)
+
+**Evidence:** `Link.dist_interact_wall` is a derived scalar with a sentinel (`id|chg` 399.96 in the Stage 0
+census), scored -1.783 on tune by epoch 5, and section 29 found its continuous head unlearned. More
+importantly, section 30 blamed a bimodality -- "Link keeps walking vs Link hits the wall and stops" -- for
+the failure of continuous latents and treated it as irreducible. **It is not irreducible, it is unobserved:**
+the branch is decided by geometry that is nowhere in the state.
+**The paper's precedent:** static entities are declared as ordinary classes with no action fields -- Trap and
+Food in Mouse, Mineral in StarCraft CMS -- so the same class-level attention handles them and the model can
+learn the global causality `Wall.pos -> Link.pos'`.
+**Verified feasible, `scripts/dump_collision.py`:** scene 0 has 1399 vertices and 2321 polygons, split by the
+ENGINE's own rule (`z_bgcheck.c:557`, normal.y > 0.5 floor, < -0.8 ceiling, else wall) into 443 floor /
+1584 wall / 294 ceiling. Only **16 walls lie within 300 units of Link**, so nearest-K with K ~ 8-16 is an
+object set, not a mesh.
+**And it needs no re-collection:** all 398 episodes are scene 0, room 0, so static collision is constant.
+Read the geometry once from a savestate and compute nearest-K offline from each recorded Link position.
+**Design:** `Wall` class, no action fields, fields `pos` (centroid) and `normal`; its own transition is the
+identity, exactly like `Mineral.Position`, so its entire value is as attention keys for `Link.pos'`.
+**Two traps to avoid:** every `Wall` field registers as CONSTANT and must be excluded from aggregates
+explicitly (section 6.1 already measures the table as 36% composition); and nearest-K re-sorts every step, so
+"wall 3" is not the same polygon across time -- attention does not care, but nothing downstream may treat the
+index as an identity. That is the same trap `targeted_row` was.
+
+### 12.5 Multi-step: the barometer has not been run
+
+**Evidence:** AGENTS.md section 8. Everything in section 11 is single-step. Section 22 is the record of what
+happens when single-step metrics are trusted: every number improved while the dream produced zero damage and
+zero kills on real action sequences.
+**Change:** replay real action sequences from real start states through the OOCDM, re-encoding the state each
+step, and score per field at h = 10 / 40 / 100 against the do-nothing control in world units --
+`scripts/eval_rollout_space.py` already has the harness and the control.
+**Until this runs, nothing here is a claim about a world model.**
+
+### 12.6 Stage 2: causal discovery
+
+Masking plus CMI, and the three controls that decide whether it did anything: discovered `G-hat` vs full `G1`
+vs the EMPTY graph; a **shuffled-class control** (assign actors to classes at random -- if that scores the
+same, class sharing contributed nothing, and the paper does not run this one); and edge-set Jaccard across
+>= 3 seeds, because if the graph is unstable then epsilon is deciding rather than the data. Stage 2 also
+needs the paper's per-target-field `f_global` restored (see the `OOCDM` docstring).
+
+### 12.7 Smaller, recorded so they are not rediscovered
+
+- **`Link.y_dist_to_ledge` is a sentinel, not a continuous quantity** (`id|chg` 399.96). Needs a Boolean
+  `has_ledge` companion, as `bc.py` already pairs `has_interact_wall` with `dist_interact_wall` -- or
+  deleting, if 12.4 makes it redundant.
+- **`En_Dekubaba.vel` is a dead field.** Always exactly 0 while the Baba moves on 6.2% of steps; the actor
+  moves without writing `vel`. Any head fed it is reading nothing.
+- **The collector filters to actor category 5.** Savestate `s03` contains 9 actor ids
+  (`0xa, 0xf, 0x15, 0x23, 0x2e, 0x55, 0x95, 0x11b, 0x125`) but the recorded 363-d state has only the three
+  enemies. `0x15` is `En_Item00` (collectibles). More classes are available than are being recorded.
+- **Training is CPU-bound in batch construction**, not on the GPU: `make_batch` re-runs the numpy codecs over
+  every field on every batch (~70% CPU with MPS as the device, 170s/epoch). Pre-encode once.
+- **Single seed.** AGENTS.md section 7. Section 25 measured seed spread larger than most effects in the
+  latent trail; nothing in section 11 has been repeated.

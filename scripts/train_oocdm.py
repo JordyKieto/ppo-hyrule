@@ -22,6 +22,13 @@ parameterisation that failure mode is always available, so it is measured direct
 A model that has learned nothing scores skill 0.000 on the left and 0.000 on the right. A model that has
 learned to copy scores ~0 on the left and NEGATIVE on the right.
 
+LOGGING
+-------
+Uses the project's RunLogger, so a run writes runs/<name>/train.log + updates.jsonl and streams to wandb
+(project `zelda-rl-oocdm`, override with --wandb-project or $WANDB_PROJECT). Pass --no-wandb for a local-only
+run. Per-field skill is logged per epoch as skill/<Class.field> and skill_chg/<Class.field> -- 77 series
+rather than one headline, because a single pooled number over these fields is 36% composition (Stage 0).
+
 CONTROLS RUN BEFORE TRAINING (AGENTS.md section 1)
 --------------------------------------------------
   identity init     the untrained model is asserted to be EXACTLY do-nothing, numerically
@@ -34,8 +41,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +55,7 @@ from zelda_rl.oocdm import (OOCDM, assert_identity_init, field_losses, fit_codec
                             make_batch, pack, predict_raw)
 from zelda_rl.oomdp import (SCHEMA_V3, assert_partition, assert_roundtrip, decompose,  # noqa: E402
                             err, prep, unit)
+from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
 from zelda_rl.state_layout import STATE_DIM_V3  # noqa: E402
 
 DEFAULT_DATA = ["datasets/transitions/v3-main/20260919-084052"]
@@ -138,22 +148,38 @@ def evaluate(model, p, codecs, device, batch_size=512, cap=0):
 
 
 def report(rows, model, title):
-    print(f"\n=== {title} " + "=" * max(0, 96 - len(title)))
-    print(f"  {'class.field':<28} {'unit':>6} {'chg%':>7} | {'identity':>9} {'model':>9} {'skill':>7} "
-          f"| {'ident|chg':>9} {'model|chg':>9} {'skill|chg':>9}")
+    LOGGER.info("=== %s %s", title, "=" * max(0, 90 - len(title)))
+    LOGGER.info("  %-28s %6s %7s | %9s %9s %7s | %9s %9s %9s", "class.field", "unit", "chg%",
+                "identity", "model", "skill", "ident|chg", "model|chg", "skill|chg")
     order = sorted(rows.items(), key=lambda kv: -kv[1]["chg"])
     live = [(k, r) for k, r in order if r["chg"] > 0]
     for k, r in live:
         c, t = k.split("|")
         u = unit(next(x for x in model.order if x.name == c).field(t))
-        print(f"  {k.replace('|', '.'):<28} {u:>6} {100 * r['chg']:7.3f} | {r['identity']:9.4f} "
-              f"{r['model']:9.4f} {r['skill']:7.3f} | {r['identity_chg']:9.4f} {r['model_chg']:9.4f} "
-              f"{r['skill_chg']:9.3f}")
+        LOGGER.info("  %-28s %6s %7.3f | %9.4f %9.4f %7.3f | %9.4f %9.4f %9.3f",
+                    k.replace("|", "."), u, 100 * r["chg"], r["identity"], r["model"], r["skill"],
+                    r["identity_chg"], r["model_chg"], r["skill_chg"])
     n_dead = len(order) - len(live)
     won = sum(1 for _, r in live if r["skill_chg"] > 0)
-    print(f"  ({n_dead} fields never change on these episodes and are omitted)")
-    print(f"  fields beating do-nothing ON CHANGED STEPS: {won} / {len(live)}")
+    LOGGER.info("  (%d fields never change on these episodes and are omitted)", n_dead)
+    LOGGER.info("  fields beating do-nothing ON CHANGED STEPS: %d / %d", won, len(live))
     return live
+
+
+def wandb_metrics(rows, split):
+    """Per-field series, not one pooled headline: Stage 0 measured a pooled average over these fields as
+    36% composition, so a single number would mostly report which fields are constant."""
+    live = {k: r for k, r in rows.items() if r["chg"] > 0}
+    m = {f"{split}/fields_live": len(live),
+         f"{split}/fields_beating_identity": sum(1 for r in live.values() if r["skill_chg"] > 0)}
+    if live:
+        m[f"{split}/won_frac"] = m[f"{split}/fields_beating_identity"] / len(live)
+        m[f"{split}/median_skill_chg"] = float(np.median([r["skill_chg"] for r in live.values()]))
+        m[f"{split}/median_skill"] = float(np.median([r["skill"] for r in live.values()]))
+    for k, r in live.items():
+        n = k.replace("|", ".")
+        m[f"skill_{split}/{n}"], m[f"skill_chg_{split}/{n}"] = r["skill"], r["skill_chg"]
+    return m
 
 
 def main():
@@ -166,13 +192,33 @@ def main():
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     ap.add_argument("--out", default="checkpoints/oocdm/stage1.pt")
     ap.add_argument("--json", default="")
+    ap.add_argument("--run-dir", default="")
+    ap.add_argument("--name", default="", help="run name; default oocdm-stage1-<timestamp>")
+    ap.add_argument("--wandb", dest="wandb", action="store_true", default=True)
+    ap.add_argument("--no-wandb", dest="wandb", action="store_false")
+    ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
+    ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
+    ap.add_argument("--wandb-group", default="stage1-G1")
     args = ap.parse_args()
 
-    print(f"schema partition: {assert_partition()}")
+    name = args.name or f"oocdm-stage1-{datetime.now():%Y%m%d-%H%M%S}"
+    run_dir = Path(args.run_dir or f"runs/{name}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log = RunLogger(run_dir, vars(args), use_wandb=args.wandb, project=args.wandb_project,
+                    entity=args.wandb_entity, run_name=name, resume=False,
+                    tags=["oocdm", "stage1", "graph-G1"], group=args.wandb_group)
+    if log.run is not None:
+        import wandb
+        wandb.define_metric("global_step")
+        for pre in ("train", "tune", "test", "loss", "skill_tune", "skill_chg_tune", "control"):
+            wandb.define_metric(f"{pre}/*", step_metric="global_step")
+
+    LOGGER.info("run dir: %s", run_dir)
+    LOGGER.info("schema partition: %s", assert_partition())
     t0 = time.time()
     data = load(args.data, args.episodes)
-    print(f"episodes: train {len(data['train'])}, tune {len(data['tune'])}, test {len(data['test'])} "
-          f"({time.time() - t0:.0f}s)")
+    LOGGER.info("episodes: train %d, tune %d, test %d (%.0fs)", len(data["train"]), len(data["tune"]),
+                len(data["test"]), time.time() - t0)
     assert_roundtrip(*data["train"][0])
 
     gs = [decompose(st, a) for st, a in data["train"][:64]]
@@ -180,25 +226,28 @@ def main():
     packs = {k: pack(v) for k, v in data.items() if v}
     cap = {c: max(p.capacity[c] for p in packs.values()) for c in packs["train"].capacity}
     packs = {k: p.pad_to(cap) for k, p in packs.items()}      # one capacity for every split
-    print(f"transitions: " + ", ".join(f"{k} {len(p)}" for k, p in packs.items()) + f" | capacity {cap}")
+    LOGGER.info("transitions: %s | capacity %s", ", ".join(f"{k} {len(p)}" for k, p in packs.items()), cap)
 
     dev = torch.device(args.device)
     model = OOCDM(codecs, cap).to(dev)
-    print(f"params: {sum(x.numel() for x in model.parameters()) / 1e6:.2f}M, "
-          f"{sum(len(v) for v in model.target_names.values())} field heads")
+    n_par, n_head = sum(x.numel() for x in model.parameters()), sum(len(v) for v in model.target_names.values())
+    LOGGER.info("params: %.2fM, %d field heads", n_par / 1e6, n_head)
 
     # Asserted on EVERY split, not just train: the first version of this passed on train and was wrong on
     # test, because codecs are fitted on train and an unseen categorical value had no identity slot.
     for k, pk in packs.items():
         assert_identity_init(model, make_batch(pk, codecs, model, pk.pairs[:256], dev))
     b0 = make_batch(packs["train"], codecs, model, packs["train"].pairs[:128], dev)
-    print(f"control -- identity init: untrained model is EXACTLY do-nothing on {', '.join(packs)}  OK")
-    print(f"control -- permutation:  {check_permutation(model, b0)}")
+    LOGGER.info("control -- identity init: untrained model is EXACTLY do-nothing on %s  OK", ", ".join(packs))
+    perm_msg = check_permutation(model, b0)
+    LOGGER.info("control -- permutation:  %s", perm_msg)
 
     base = evaluate(model, packs["test"], codecs, dev, cap=20000)
     worst = max(((abs(r["skill"]), k) for k, r in base.items()), default=(0.0, "-"))
-    print(f"control -- untrained test skill: worst |skill| {worst[0]:.2e} on {worst[1]} "
-          f"(nonzero only through the float round-trip of the angle codec)")
+    LOGGER.info("control -- untrained test skill: worst |skill| %.2e on %s (nonzero only through the float "
+                "round-trip of the angle codec)", worst[0], worst[1])
+    log.update({"control/untrained_worst_abs_skill": worst[0], "control/permutation_ok": float("OK" in perm_msg),
+                "control/params_m": n_par / 1e6, "control/field_heads": n_head}, 0)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     rng = np.random.default_rng(0)
@@ -215,20 +264,32 @@ def main():
             opt.step()
             tot += float(loss.detach()); nb += 1
         rows = evaluate(model, packs["tune"], codecs, dev, cap=20000)
-        won = sum(1 for r in rows.values() if r["chg"] > 0 and r["skill_chg"] > 0)
-        live = sum(1 for r in rows.values() if r["chg"] > 0)
-        print(f"epoch {ep + 1}/{args.epochs}  loss {tot / max(nb, 1):8.3f}  "
-              f"tune fields beating do-nothing on changed steps: {won}/{live}  "
-              f"({time.time() - t1:.0f}s)")
+        step = (ep + 1) * len(tr.pairs)
+        m = wandb_metrics(rows, "tune")
+        m["train/loss"] = tot / max(nb, 1)
+        m["train/epoch"] = ep + 1
+        m["train/sec_per_epoch"] = time.time() - t1
+        m.update({f"loss/{k.replace('|', '.')}": float(v.detach()) for k, v in L.items()})
+        log.update(m, step)
+        LOGGER.info("epoch %d/%d  loss %8.3f  tune fields beating do-nothing on changed steps: %d/%d  (%.0fs)",
+                    ep + 1, args.epochs, m["train/loss"], m["tune/fields_beating_identity"],
+                    m["tune/fields_live"], m["train/sec_per_epoch"])
 
     rows = evaluate(model, packs["test"], codecs, dev)
     live = report(rows, model, f"TEST slots {sorted(TEST_SLOTS)}, {args.epochs} epochs")
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args)}, args.out)
-    print(f"\nwrote {args.out}")
+    final = wandb_metrics(rows, "test")
+    log.update(final, args.epochs * len(tr.pairs))
+    log.summary({k: v for k, v in final.items() if v is not None})
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"model": model.state_dict(), "capacity": cap, "args": vars(args)}, out)
+    LOGGER.info("wrote %s (%d fields live on test)", out, len(live))
+    log.artifact(out)
+    (run_dir / "fields.json").write_text(json.dumps(rows, indent=1))
     if args.json:
-        Path(args.json).write_text(json.dumps({k: v for k, v in rows.items()}, indent=1))
-        print(f"wrote {args.json}")
+        Path(args.json).write_text(json.dumps(rows, indent=1))
+    LOGGER.info("wrote %s", run_dir / "fields.json")
+    log.close()
 
 
 if __name__ == "__main__":
