@@ -205,6 +205,10 @@ def main():
     ap.add_argument("--no-gate", dest="gate", action="store_false",
                     help="the matched baseline arm: regress the value directly, as the first Stage 1 run did")
     ap.add_argument("--w-gate", type=float, default=1.0, help="weight on the gate BCE terms")
+    ap.add_argument("--gate-attached", dest="gate_detach", action="store_false", default=True,
+                    help="let the gate loss reshape the shared trunk (measured harmful, section 13)")
+    ap.add_argument("--value-on-changed", action="store_true",
+                    help="restrict the value loss to changed steps (measured harmful, section 13)")
     args = ap.parse_args()
 
     name = args.name or f"oocdm-stage1-{datetime.now():%Y%m%d-%H%M%S}"
@@ -231,19 +235,24 @@ def main():
     gs = [decompose(st, a) for st, a in data["train"][:160]]
     # TRAIN ONLY (no test leakage into a scale), and the delta scale is measured over the same steps the
     # value head is trained on -- changed steps when the gate is on, all steps when it is off.
-    codecs = fit_codecs(gs, changed_only=args.gate)
+    # The delta scale must match where the VALUE head trains, which since section 13 is all steps by
+    # default -- not where the gate is. Tying this to --gate was wrong.
+    codecs = fit_codecs(gs, changed_only=args.value_on_changed)
     packs = {k: pack(v) for k, v in data.items() if v}
     cap = {c: max(p.capacity[c] for p in packs.values()) for c in packs["train"].capacity}
     packs = {k: p.pad_to(cap) for k, p in packs.items()}      # one capacity for every split
     LOGGER.info("transitions: %s | capacity %s", ", ".join(f"{k} {len(p)}" for k, p in packs.items()), cap)
 
     dev = torch.device(args.device)
-    model = OOCDM(codecs, cap, use_gate=args.gate).to(dev)
+    model = OOCDM(codecs, cap, use_gate=args.gate, value_on_changed=args.value_on_changed,
+                  gate_detach=args.gate_detach).to(dev)
     if args.gate:
         rates = change_rates(packs["train"], model)
         pw = model.set_change_rates(rates)
         rare = sorted(pw.items(), key=lambda kv: -kv[1])[:5]
-        LOGGER.info("change gate ON; pos_weight from measured train change rates, top 5: %s",
+        LOGGER.info("change gate ON (%s trunk, value on %s); pos_weight top 5: %s",
+                    "detached" if args.gate_detach else "ATTACHED",
+                    "changed steps" if args.value_on_changed else "all steps",
                     ", ".join(f"{k.replace('|', '.')} {v:.0f}x (chg {100 * rates[k]:.3f}%)" for k, v in rare))
     else:
         LOGGER.info("change gate OFF (matched baseline arm)")

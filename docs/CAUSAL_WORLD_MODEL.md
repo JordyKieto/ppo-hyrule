@@ -388,7 +388,7 @@ init invariant survives.
 **Control:** `--no-gate` keeps the current arm; the 6-epoch run above is the matched baseline, same seed and
 config (AGENTS.md section 11 corollary -- train both arms, compare at matched epochs).
 
-### 12.2 Angle loss design
+### 12.2 Angle loss design -- binning FALSIFIED, see 13.6
 
 **Evidence:** nine of twelve angle heads sat between -0.005 and +0.001 for four straight epochs.
 `Link.yaw` was -0.0000 through epoch 4 and reached only +0.012 on test; `En_Dekubaba.shape_yaw` -0.000;
@@ -533,7 +533,99 @@ runnable so they can be re-tested rather than argued about.
   |152| under a Gaussian NLL. The first fix fell back per episode, which silently reinstated the bug for
   exactly the rare fields that needed it, since most episodes contain no changed step at all.
 
-### 13.5 Still open
+### 13.5 Full run: the gate is a floor-enforcer, not a fix
+
+Settled config (detached gate, value head on all steps, thresholds calibrated on tune), 6 epochs, all four
+v3 collections, same seed and split as the ungated baseline. wandb `62m7ob2n`, checkpoint
+`checkpoints/oocdm/stage1_gate_detach.pt`.
+
+| TEST slots {7,9}, 6 epochs | ungated baseline | gate detached |
+|---|---|---|
+| `Link.pos` error on steps where Link did NOT move | **1.4129** | **0.0000** |
+| `Link.ztarget_timer` | 1.5031 | 0.0000 |
+| `Camera.eye` | 0.9160 | 0.0000 |
+| fields WORSE than do-nothing in aggregate | 36 | **2** |
+| **fields beating do-nothing in aggregate** | **6** | **6** |
+| fields beating do-nothing on changed steps | 36 | 8 |
+| heads that learned nothing (skill\|chg == 0) | 7 | **41** |
+| `Link.pos` (aggregate / changed) | -2.617 / +0.268 | +0.000 / +0.000 |
+
+**The spurious motion is completely gone** -- 1.41 world units per static step down to exactly zero, which
+was the concrete failure section 11 named -- and fields actively worse than do-nothing fell from 36 to 2.
+
+**And it bought no capability whatsoever.** Six fields beat do-nothing in aggregate in BOTH arms. The gate
+converted "worse than do-nothing on 36 fields" into "identical to do-nothing on 41 fields": it removed losses
+without adding a single win, and paid `Link.pos`'s +0.268 on changed steps to do it. One field got clearly
+worse, `En_Dekubaba.state_idx` at +0.150 -> **-1.879** aggregate; it fires and pays.
+
+So the gate is an honest reporter of a bad value head, not a fix for one. It is still worth keeping for 12.5,
+the multi-step barometer -- a dream that does nothing beats one drifting 1.41 units per step, which is
+precisely how section 22 failed -- but it is not progress on prediction.
+
+**12.3 is a null result as well.** All seven dead heads are still exactly 0.000; `pos_weight` at 200x did not
+open `En_Dekubaba.hp`. The dead count went 7 -> 41.
+
+One methodological note, recorded because it was got wrong in-flight: at epoch 3 the trend (value loss
+falling while gates-off climbed 12 -> 17 -> 24) was called a monotonic convergence to do-nothing. Epoch 4
+broke it in both columns (11 beating, 20 off) and the counts then oscillated 10, 10, 6, 11, 8, 8. That was a
+3-point trend read as a law. The mean-regression argument stands on the probe's DIRECT magnitude
+measurements (0.41 and 0.09 of truth), not on this curve.
+
+### 13.6 Binned direction + magnitude: falsified, and informatively
+
+Section 12.2's premise was section 29's: a regressed delta is minimised by the conditional mean and shrinks,
+so bin it, because "a mode does not shrink". The oracle ceiling was measured FIRST (bin the TRUE delta and
+reconstruct): `Link.pos` **0.692**, `En_Dekubaba.pos` 0.739, `Camera.eye` 0.666 -- quantisation is not the
+limit, so the experiment was worth running.
+
+| `Link.pos`, matched subset and epochs | continuous | binned |
+|---|---|---|
+| magnitude ratio | 0.410 | **1.158** |
+| direction error | 105.2 deg | **78.8 deg** |
+| **val\|chg** | **+0.064** | **-0.193** |
+
+**Binning did exactly what it was designed to do and made the field worse.** Shrinkage is fixed (0.41 ->
+1.16) and direction improved below 90 deg for the first time -- and full magnitude in a direction still 79
+deg off is worse than a small magnitude in the wrong direction. Shrinkage was partly protecting us.
+
+**Magnitude was never the binding constraint; direction is.** The section 29 analogy does not hold, because
+there the direction head was separately trained and working.
+
+### 13.7 The control that should have run first: pos + k*vel beats the model
+
+AGENTS.md section 1 demands a free-signal control and section 28 names this exact one -- "with velocity in z,
+next position is linear extrapolation". Stage 1's control table has identity, untrained, permutation and
+shuffled-class, but **no trivial-baseline control for the value head**, so four architecture experiments were
+scored against a floor that was too low.
+
+Measured on all four v3 collections, changed steps, XZ plane:
+
+| predictor | MAE | val\|chg |
+|---|---|---|
+| do-nothing | 6.533 | +0.000 |
+| `vel[t] * 1.0` | 5.341 | +0.183 |
+| **`vel[t] * 1.67` (least squares)** | **4.855** | **+0.257** |
+| off-wall | 5.160 | +0.294 |
+| touching a wall | 3.839 | +0.028 |
+
+**A zero-parameter linear extrapolation scores +0.257. The trained 4.7M-parameter value head scores +0.064**,
+with 79-105 deg direction error against velocity's **13.5 deg**, using an input it already has.
+`zelda_rl.oocdm.velocity_baseline` now reports this on every probe run.
+
+The first version of this control was scored over all three components and read **-0.057**, i.e. it said the
+baseline LOSES. `vel_y` has a median of -4.0 on 100% of steps -- gravity pulling against the ground -- while
+`pos_y` barely moves, so the naive predictor injected a spurious vertical component. The control was flawed,
+not the metric. A broken control that exonerates the model is the most expensive kind.
+
+**This demotes both candidate fixes.** Binning is falsified above. Static geometry (12.4) is real --
+velocity extrapolation drops to +0.028 when touching a wall, against +0.294 off-wall -- but off-wall
+performance is where the model is losing, so collisions are not the blocker either.
+
+**The question for the next experiment is narrower and stranger than any of them: why can a 4.7M-parameter
+model with `vel` as an input not match a linear function of `vel`?** Until that is answered, no further
+architecture is worth training.
+
+### 13.8 Still open
 
 Direction remains the weak axis: `Link.pos` sits at ~105 deg median error with 24.8% of predictions within
 45 deg, and magnitude at 0.41 of the truth. Section 29 hit the same wall and its fix was binning -- "direction

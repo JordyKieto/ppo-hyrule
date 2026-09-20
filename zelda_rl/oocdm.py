@@ -65,6 +65,37 @@ from zelda_rl.oomdp import (SCHEMA_V3, TURNS, Field, ObjClass, ObjectGroup, Sche
 
 IDENTITY_LOGIT = 8.0        # logit margin that makes argmax == the current value at init
 GATE_INIT_BIAS = -8.0       # change-gate bias at init: p(changed) ~ 3e-4, so the model starts as do-nothing
+
+# --- Binned direction + magnitude for VECTOR fields (docs/CAUSAL_WORLD_MODEL.md 12.2) --------------------
+# A regressed delta is minimised by the conditional MEAN, which shrinks: the probe measured Link.pos at 0.41
+# of the true magnitude and En_St.pos at 0.09, and section 29 of the latent trail measured 9.3x too small
+# before it binned. "A mode does not shrink" is the reason binning worked there and the reason to try it here.
+#
+# Bin 0 of the magnitude axis is EXACTLY ZERO, which is not cosmetic: it keeps a zero-init head predicting no
+# change, so `assert_identity_init` holds for the value head on its own rather than only because the gate
+# happens to be shut.
+N_DIR_SECTORS = 16
+MAG_EDGES = (0.0, 0.5, 1.5, 3.0, 6.0, 12.0, 24.0, 48.0)     # lower edge of each bin; bin 0 is exactly 0
+
+
+def dir_units() -> np.ndarray:
+    a = (np.arange(N_DIR_SECTORS) + 0.5) * (2 * np.pi / N_DIR_SECTORS)
+    return np.stack([np.cos(a), np.sin(a)], 1).astype(np.float32)
+
+
+def mag_centers() -> np.ndarray:
+    hi = list(MAG_EDGES[1:]) + [96.0]                        # open top bin gets a representative
+    c = [0.0] + [(lo + h) / 2 for lo, h in zip(MAG_EDGES[1:], hi[1:])]
+    return np.asarray(c, np.float32)
+
+
+def bin_delta(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """XZ delta (..., 2) -> (direction sector, magnitude bin). Bin 0 means 'did not move'."""
+    mag = np.linalg.norm(d, axis=-1)
+    ang = np.arctan2(d[..., 1], d[..., 0]) % (2 * np.pi)
+    sec = np.minimum((ang / (2 * np.pi / N_DIR_SECTORS)).astype(np.int64), N_DIR_SECTORS - 1)
+    mb = np.searchsorted(np.asarray(MAG_EDGES[1:]), mag, side="right")
+    return sec, mb.astype(np.int64)
 UNKNOWN = -1                # categorical index for a value never seen while fitting
 
 
@@ -84,6 +115,7 @@ class FieldCodec:
     std: np.ndarray             # (size,)
     dstd: np.ndarray            # (size,) std of the ONE-STEP DELTA -- what the head actually regresses
     values: np.ndarray          # (n,) observed values, for categorical/boolean
+    binned: bool = False        # vector fields only: predict (XZ sector, magnitude bin, dy) not a raw delta
 
     @property
     def kind(self) -> str:
@@ -107,11 +139,15 @@ class FieldCodec:
         raise ValueError(k)
 
     @property
+    def n_bin_out(self) -> int:
+        return N_DIR_SECTORS + len(MAG_EDGES) + 1        # dir logits | mag logits | dy
+
+    @property
     def n_out(self) -> int:
         """Width of the head's output for this field."""
         k = self.kind
         if k in ("real", "count"):
-            return self.field.vtype.size
+            return self.n_bin_out if self.binned else self.field.vtype.size
         if k == "angle":
             return 2                              # (cos, sin) of the DELTA
         if k == "bits":
@@ -146,9 +182,18 @@ class FieldCodec:
 
     # -- target side --------------------------------------------------------------------------------------
     def target(self, cur: np.ndarray, nxt: np.ndarray) -> np.ndarray:
-        """(cur, nxt) raw -> the head's training target, in the head's own parameterisation."""
+        """(cur, nxt) raw -> the head's training target, in the head's own parameterisation.
+
+        Binned vector fields return [sector, magbin, dy/dstd_y] as float; the loss casts the first two back
+        to indices. Packing them together keeps one target array per field, so nothing downstream needs a
+        second code path for the shape.
+        """
         k = self.kind
         if k in ("real", "count"):
+            if self.binned:
+                d = nxt - cur
+                sec, mb = bin_delta(d[..., [0, 2]])
+                return np.stack([sec, mb, d[..., 1] / self.dstd[1]], -1).astype(np.float32)
             return ((nxt - cur) / self.dstd).astype(np.float32)       # standardised delta
         if k == "angle":
             d = wrap(self._rad(nxt) - self._rad(cur))[..., 0]
@@ -163,6 +208,15 @@ class FieldCodec:
         and by every metric, so predictions are always scored in the field's own units."""
         k = self.kind
         if k in ("real", "count"):
+            if self.binned:
+                nd, nm = N_DIR_SECTORS, len(MAG_EDGES)
+                sec = out[..., :nd].argmax(-1)
+                mb = out[..., nd:nd + nm].argmax(-1)
+                xz = mag_centers()[mb][..., None] * dir_units()[sec]
+                d = np.zeros_like(cur)
+                d[..., 0], d[..., 2] = xz[..., 0], xz[..., 1]
+                d[..., 1] = out[..., -1] * self.dstd[1]
+                return cur + d
             return cur + out * self.dstd
         if k == "angle":
             d = np.arctan2(out[..., 1], out[..., 0])[..., None]
@@ -180,7 +234,8 @@ def pack_bits(b: np.ndarray) -> np.ndarray:
 
 
 def fit_codecs(groups: Iterable[dict[str, ObjectGroup]], schema: Schema = SCHEMA_V3,
-               changed_only: bool = True) -> dict[str, dict[str, FieldCodec]]:
+               changed_only: bool = True, vector_bins: bool = False,
+               ) -> dict[str, dict[str, FieldCodec]]:
     """Measure every codec's constants from decomposed episodes. Returns {class: {field: codec}}.
 
     Scales come from the data the model will see, restricted to steps where the object EXISTS -- a despawned
@@ -241,7 +296,9 @@ def fit_codecs(groups: Iterable[dict[str, ObjectGroup]], schema: Schema = SCHEMA
             out[cname][fname] = FieldCodec(cname, f, mean.astype(np.float32),
                                            np.maximum(std, 1e-3).astype(np.float32),
                                            np.maximum(dstd, 1e-3).astype(np.float32),
-                                           values.astype(np.float32))
+                                           values.astype(np.float32),
+                                           binned=bool(vector_bins and f.vtype.kind == "real"
+                                                       and f.vtype.size == 3))
     return out
 
 
@@ -438,7 +495,7 @@ class OOCDM(nn.Module):
         self.log_scale = nn.ParameterDict({
             f"{c.name}|{t}": nn.Parameter(torch.zeros(codecs[c.name][t].n_out))
             for c in self.order for t in self.target_names[c.name]
-            if codecs[c.name][t].kind in ("real", "count")})
+            if codecs[c.name][t].kind in ("real", "count") and not codecs[c.name][t].binned})
 
     def forward(self, batch: dict) -> dict[str, dict[str, torch.Tensor]]:
         """batch['x'][cls][field] (B, n_obj, in_dim); batch['mask'][cls] (B, n_obj);
@@ -588,7 +645,15 @@ def field_losses(model: "OOCDM", out: dict, batch: dict) -> dict[str, torch.Tens
                     if not bool(v.any()):
                         continue
             k = cod.kind
-            if k in ("real", "count"):
+            if k in ("real", "count") and cod.binned:
+                # A mode does not shrink: direction and magnitude are CLASSIFIED, so the optimum is the
+                # modal bin rather than the conditional mean that collapses a regressed delta toward zero.
+                nd, nm = N_DIR_SECTORS, len(MAG_EDGES)
+                sec, mb, dy = tgt[..., 0].long(), tgt[..., 1].long(), tgt[..., 2]
+                l = (Fn.cross_entropy(pred[..., :nd][v], sec[v])
+                     + Fn.cross_entropy(pred[..., nd:nd + nm][v], mb[v])
+                     + ((pred[..., -1] - dy) ** 2)[v].mean())
+            elif k in ("real", "count"):
                 s = model.log_scale[f"{c.name}|{t}"]
                 e = 0.5 * ((pred - tgt) / s.exp()) ** 2 + s                   # Gaussian NLL, learned scale
                 l = e.mean(-1)[v].mean()
@@ -716,3 +781,35 @@ def calibrate_thresholds(model: "OOCDM", p: Packed, codecs, device, batch_size: 
                     acc[i] += float(np.where(fire, e_md, e_id).sum())
     model.train()
     return {k: float(grid[int(np.argmin(a))]) for k, a in tot.items()}
+
+
+# --------------------------------------------------------------------------------------------------------
+# Trivial baselines. AGENTS.md section 1 demands a free-signal control, and section 28 names this exact one:
+# "with velocity in z, next position is linear extrapolation". It was not run before Stage 1's value heads
+# were built, and four architecture experiments were scored against a floor that was too low as a result.
+#
+# Measured on all four v3 collections, changed steps, XZ plane: do-nothing MAE 6.533, pos + 1.67*vel MAE
+# 4.855 -> val|chg +0.257, against the trained value head's +0.064. Any value head that does not beat this
+# has not earned its parameters.
+# --------------------------------------------------------------------------------------------------------
+def velocity_baseline(p: Packed, cls: str = "Link", pos: str = "pos", vel: str = "vel",
+                      plane=(0, 2)) -> dict[str, float]:
+    """`delta = k * vel[t]` with k fitted by least squares. Returns the control every value head is held to.
+
+    Scored in the PLANE by default: vel_y has a median of -4.0 on every step (gravity pulling against the
+    ground) while pos_y barely moves, so a naive 3-component version of this control scored -0.057 and hid
+    the fact that the baseline beats the model.
+    """
+    t = p.pairs
+    a, v, m = p.attrs[cls][pos], p.attrs[cls][vel], p.mask[cls]
+    ok = m[t] & m[t + 1]
+    d = (a[t + 1] - a[t])[ok][:, list(plane)]
+    u = v[t][ok][:, list(plane)]
+    moved = np.linalg.norm(d, axis=1) > 0
+    d, u = d[moved], u[moved]
+    if not len(d):
+        return {}
+    k = float((d * u).sum() / max((u * u).sum(), 1e-9))
+    e_id, e_v = np.abs(d).mean(1), np.abs(d - k * u).mean(1)
+    return {"k": k, "n": len(d), "identity_mae": float(e_id.mean()), "baseline_mae": float(e_v.mean()),
+            "val_chg": float(1 - e_v.mean() / e_id.mean())}

@@ -48,7 +48,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.oocdm import (OOCDM, change_rates, field_losses, fit_codecs, make_batch,  # noqa: E402
-                            pack, predict_raw)
+                            pack, predict_raw, velocity_baseline)
 from zelda_rl.oomdp import decompose, err, prep, unit  # noqa: E402
 
 GRID = (0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.01)     # 1.01 = never fire
@@ -80,6 +80,8 @@ def main():
     ap.add_argument("--gate", dest="gate", action="store_true", default=True)
     ap.add_argument("--gate-attached", dest="gate_detach", action="store_false", default=True,
                     help="let the gate loss backprop into the shared trunk (measured harmful)")
+    ap.add_argument("--vector-bins", action="store_true",
+                    help="binned XZ direction + magnitude heads for 3-vector fields (section 12.2)")
     ap.add_argument("--value-on-changed", action="store_true",
                     help="restrict the value loss to changed steps (the original design; measured harmful)")
     ap.add_argument("--no-gate", dest="gate", action="store_false",
@@ -104,7 +106,8 @@ def main():
         (te_eps if r["slot"] in (7, 9) else tr_eps).append(e)
 
     # The delta scale must match the steps the value head trains on, or the targets are out of scale.
-    codecs = fit_codecs([decompose(s, x) for s, x in tr_eps[:160]], changed_only=a.value_on_changed)
+    codecs = fit_codecs([decompose(s, x) for s, x in tr_eps[:160]], changed_only=a.value_on_changed,
+                        vector_bins=a.vector_bins)
     tr, te = pack(tr_eps), pack(te_eps)
     cap = {c: max(tr.capacity[c], te.capacity[c]) for c in tr.capacity}
     tr, te = tr.pad_to(cap), te.pad_to(cap)
@@ -120,6 +123,10 @@ def main():
     print("  subset change rates vs pooled census:  " + "   ".join(
         f"{k.replace('|', '.')} {100 * rates.get(k, 0):.2f}% (census {v}%)" for k, v in ref.items()))
 
+    vb = velocity_baseline(te)
+    if vb:
+        print(f"  CONTROL  Link.pos = pos + {vb['k']:.2f}*vel  ->  val|chg {vb['val_chg']:+.3f} "
+              f"(XZ, {vb['n']} changed steps). A value head that does not beat this has earned nothing.")
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr)
     rng = np.random.default_rng(0)
     for ep in range(a.epochs):
