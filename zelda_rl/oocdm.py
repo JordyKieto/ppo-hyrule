@@ -395,6 +395,62 @@ class OOCGraph:
         return "\n".join(lines[: top + 1])
 
 
+
+# --------------------------------------------------------------------------------------------------------
+# Mask generators (paper section 4.4, ../oocdm/alg/model/mask_generator.py).
+#
+# Training optimises the average instance log-likelihood under THREE masks at once:
+#
+#     loss = -(ll_graph + ll_full + ll_random) / 3        (train_ooc.py:90)
+#
+# ll_full     keeps the model good at the full graph, which is what CMI is measured against.
+# ll_random   each edge kept with probability p_edge, RESAMPLED EVERY BATCH. This is the term that teaches
+#             the model to answer "what would you predict WITHOUT this parent?" -- the question causal
+#             discovery asks it. Without it, CMI interrogates a model that has never seen a masked input.
+# ll_graph    the current graph estimate, empty at init, sharpening the model on what it currently believes.
+# --------------------------------------------------------------------------------------------------------
+class MaskGen:
+    def local(self, cls: str, batch: int, device) -> torch.Tensor: raise NotImplementedError
+    def glob(self, cls: str, batch: int, device) -> torch.Tensor: raise NotImplementedError
+
+
+class FullMask(MaskGen):
+    def __init__(self, graph: "OOCGraph"):
+        self.g = graph
+
+    def local(self, cls, batch, device):
+        return torch.ones(len(self.g.target_names[cls]), len(self.g.field_names[cls]),
+                          dtype=torch.bool, device=device)
+
+    def glob(self, cls, batch, device):
+        return torch.ones(self.g.n_out, len(self.g.field_names[cls]), dtype=torch.bool, device=device)
+
+
+class GraphMask(MaskGen):
+    def __init__(self, graph: "OOCGraph"):
+        self.g = graph
+
+    def local(self, cls, batch, device):
+        return self.g.local_mask(cls, device)
+
+    def glob(self, cls, batch, device):
+        return self.g.global_mask(cls, device)
+
+
+class RandomMask(MaskGen):
+    """Each edge kept independently with probability `p_edge`, resampled per batch AND per batch element."""
+
+    def __init__(self, graph: "OOCGraph", p_edge: float = 0.9):
+        self.g, self.p = graph, p_edge
+
+    def local(self, cls, batch, device):
+        return torch.rand(batch, len(self.g.target_names[cls]), len(self.g.field_names[cls]),
+                          device=device) <= self.p
+
+    def glob(self, cls, batch, device):
+        return torch.rand(batch, self.g.n_out, len(self.g.field_names[cls]), device=device) <= self.p
+
+
 class MultiLinear(nn.Module):
     """n independent Linear layers applied along a named axis. The paper's parameter sharing device: the
     weight is indexed by FIELD, and the object axis is a batch dim, so every instance of a class shares it."""
@@ -431,8 +487,9 @@ class MaskedFieldLinear(nn.Module):
 
         out[b,o,n,e] = sum_{f,k} x[b,o,f,k] * mask[n,f] * W[n,f,k,e]
 
-    A per-batch-element mask -- which the paper's RandomMaskGenerator produces -- cannot be folded and will
-    need the expanded path. That is P1; this is P0.
+    A per-batch-element mask -- which the paper's RandomMaskGenerator produces -- cannot be folded, because
+    the weight would have to differ per batch element. Those take the expanded path, which materialises
+    (B, n_obj, n_target, n_field, d). That is why P1 trains at a smaller batch.
     """
 
     def __init__(self, n_target: int, n_field: int, d: int, d_out: int):
@@ -442,9 +499,15 @@ class MaskedFieldLinear(nn.Module):
         nn.init.kaiming_uniform_(self.w.view(n_target, n_field * d, d_out), a=5 ** 0.5)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """x (B, n_obj, n_field, d); mask (n_target, n_field) -> (B, n_obj, n_target, d_out)."""
-        w = self.w * mask[:, :, None, None]         # b=batch o=object f=field k=embed n=target e=out
-        return torch.einsum("bofk,nfke->bone", x, w) + self.b
+        """x (B, n_obj, n_field, d); mask (n_target, n_field) or (B, n_target, n_field).
+
+        -> (B, n_obj, n_target, d_out).   b=batch o=object f=field k=embed n=target e=out
+        """
+        if mask.dim() == 2:                                     # graph / full: fold into the weight
+            return torch.einsum("bofk,nfke->bone", x, self.w * mask[:, :, None, None]) + self.b
+        # random: the mask differs per batch element, so zero the embeddings instead (paper's masked_retain)
+        xm = x.unsqueeze(2) * mask.unsqueeze(1).unsqueeze(-1)   # (B, n_obj, n_target, n_field, d)
+        return torch.einsum("bonfk,nfke->bone", xm, self.w) + self.b
 
 
 class ClassModule(nn.Module):
@@ -515,16 +578,18 @@ class OOCDM(nn.Module):
     def set_graph(self, g: "OOCGraph") -> None:
         self.graph = g
 
-    def forward(self, batch: dict) -> dict[str, torch.Tensor]:
+    def forward(self, batch: dict, maskgen: "MaskGen | None" = None) -> dict[str, torch.Tensor]:
         """batch['x'][cls][field] (B, n_obj, in_dim); 'mask'[cls] (B, n_obj); 'raw'[cls][field] for the
-        identity residual. Returns {'Cls|field': (B, n_obj, n_out)}."""
+        identity residual. `maskgen` selects which graph the forward is run under (paper section 4.4);
+        the default is the current graph estimate. Returns {'Cls|field': (B, n_obj, n_out)}."""
         dev = batch["mask"][self.order[0].name].device
-        g = self.graph
+        mg = maskgen or GraphMask(self.graph)
+        bsz = batch["mask"][self.order[0].name].shape[0]
         local, glob, obj_mask = {}, [], []
         for c in self.order:
             m = self.mods[c.name]
             l, gl = m.encode([batch["x"][c.name][f] for f in self.field_names[c.name]],
-                             g.local_mask(c.name, dev), g.global_mask(c.name, dev))
+                             mg.local(c.name, bsz, dev), mg.glob(c.name, bsz, dev))
             local[c.name] = l
             glob.append(gl)                                    # (B, n_obj_c, n_out_total, d_g)
             obj_mask.append(batch["mask"][c.name])
@@ -534,7 +599,7 @@ class OOCDM(nn.Module):
         out, base = {}, 0
         for c in self.order:
             m, n_obj = self.mods[c.name], self.capacity[c.name]
-            cols = [g.gout[(c.name, t)] for t in self.target_names[c.name]]
+            cols = [self.graph.gout[(c.name, t)] for t in self.target_names[c.name]]
             Gc = G[:, :, cols, :]                              # (B, n_obj_all, n_t, d_g)
             q = m.fq(local[c.name])                            # (B, n_obj_c, n_t, d_k)
             k, v = m.fk(Gc), m.fv(Gc)                          # (B, n_obj_all, n_t, d_k/d_v)

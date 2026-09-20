@@ -51,8 +51,9 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.oocdm import (OOCDM, OOCGraph, assert_identity_init, field_losses,  # noqa: E402
-                            fit_codecs, make_batch, pack, predict_raw, velocity_baseline)
+from zelda_rl.oocdm import (OOCDM, FullMask, GraphMask, OOCGraph, RandomMask,  # noqa: E402
+                            assert_identity_init, field_losses, fit_codecs, make_batch, pack,
+                            predict_raw, velocity_baseline)
 from zelda_rl.oomdp import (SCHEMA_V3, assert_partition, assert_roundtrip, decompose,  # noqa: E402
                             err, prep, unit)
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
@@ -217,6 +218,10 @@ def main():
     ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
     ap.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
     ap.add_argument("--wandb-group", default="oocdm")
+    ap.add_argument("--objective", choices=("g1", "paper"), default="g1",
+                    help="g1 = single full-mask NLL (Stage 1). paper = -(ll_graph+ll_full+ll_random)/3, "
+                         "train_ooc.py:90, with the graph EMPTY at init. P1.")
+    ap.add_argument("--p-edge", type=float, default=0.9, help="RandomMaskGenerator keep-probability")
     ap.add_argument("--hand-graph", action="store_true",
                     help="P0 gate (docs section 16): mask Link.pos' to the parents the ridge probe says it "
                          "needs, leave every other field at the full graph. One variable.")
@@ -257,6 +262,12 @@ def main():
     dev = torch.device(args.device)
     torch.manual_seed(args.seed)
     model = OOCDM(codecs, cap).to(dev)
+    if args.objective == "paper":
+        # The paper starts from an EMPTY graph and lets discovery add edges (train_ooc.py __init__).
+        model.set_graph(OOCGraph(model.order, model.field_names, model.target_names, full=False))
+        LOGGER.info("objective = paper: -(ll_graph + ll_full + ll_random)/3, p_edge %.2f, graph EMPTY at "
+                    "init (%d edges). P1 plumbs the objective; it needs P2's discovery to add edges.",
+                    args.p_edge, model.graph.n_edges())
     if args.hand_graph:
         # Ridge on the model's own input: vel alone +0.219, all 38 Link fields -0.066 (section 16). If
         # masking is the mechanism the paper says it is, restricting THIS ONE target to those parents should
@@ -309,10 +320,21 @@ def main():
     for ep in range(args.epochs):
         perm = rng.permutation(tr.pairs)
         tot, nb, t1 = 0.0, 0, time.time()
+        tg = tf = trd = 0.0
         for s in range(0, len(perm) - args.batch, args.batch):
             b = make_batch(tr, codecs, model, perm[s: s + args.batch], dev)
-            L = field_losses(model, model(b), b)
-            loss = sum(L.values())
+            if args.objective == "paper":
+                gmask, fmask, rmask = GraphMask(model.graph), FullMask(model.graph), \
+                    RandomMask(model.graph, args.p_edge)
+                Lg = sum(field_losses(model, model(b, gmask), b).values())
+                Lf = sum(field_losses(model, model(b, fmask), b).values())
+                Lr = sum(field_losses(model, model(b, rmask), b).values())
+                loss = (Lg + Lf + Lr) / 3.0
+                tg += float(Lg.detach()); tf += float(Lf.detach()); trd += float(Lr.detach())
+                L = {}
+            else:
+                L = field_losses(model, model(b), b)
+                loss = sum(L.values())
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
             opt.step()
@@ -324,9 +346,19 @@ def main():
         m["train/epoch"] = ep + 1
         m["train/sec_per_epoch"] = time.time() - t1
         m.update({f"loss/{k.replace('|', '.')}": float(v.detach()) for k, v in L.items()})
+        if args.objective == "paper":
+            # logged separately exactly as train_ooc.py does: if these three do not DIVERGE, the 3-term
+            # objective has collapsed to one term and the random-mask training is doing nothing.
+            m["train/ll_graph"], m["train/ll_full"], m["train/ll_random"] = (tg / max(nb, 1), tf / max(nb, 1),
+                                                                            trd / max(nb, 1))
+            m["train/ll_spread"] = max(m["train/ll_graph"], m["train/ll_full"], m["train/ll_random"]) - \
+                min(m["train/ll_graph"], m["train/ll_full"], m["train/ll_random"])
         log.update(m, step)
-        LOGGER.info("epoch %d/%d  loss %8.3f  tune beating do-nothing on changed steps: %d/%d  (%.0fs)",
-                    ep + 1, args.epochs, m["train/loss"], m["tune/fields_beating_identity"],
+        extra = ("" if args.objective != "paper" else
+                 "  [graph %.2f full %.2f random %.2f spread %.3f]" % (
+                     m["train/ll_graph"], m["train/ll_full"], m["train/ll_random"], m["train/ll_spread"]))
+        LOGGER.info("epoch %d/%d  loss %8.3f%s  tune beating do-nothing on changed steps: %d/%d  (%.0fs)",
+                    ep + 1, args.epochs, m["train/loss"], extra, m["tune/fields_beating_identity"],
                     m["tune/fields_live"], m["train/sec_per_epoch"])
 
     rows = evaluate(model, packs["test"], codecs, dev)

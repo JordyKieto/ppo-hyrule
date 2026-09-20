@@ -914,6 +914,37 @@ Note for the implementer: `MaskedFieldLinear` folds the mask into the weight, wh
 graph mask is identical for every batch element. `RandomMaskGenerator` produces a **per-batch-element** mask
 and needs the expanded path.
 
+### 17.3b P1 result: the objective is plumbed and verified
+
+`runs/p1-paper-obj`, wandb `vxgnxfjj`, group `oocdm-p1`. Same 120-episode subset, seed 0, batch 128.
+
+    epoch 1/2  loss 9.223  [graph 10.07  full 8.71  random 8.89  spread 1.364]  540s
+
+**`ll_spread` = 1.364, not zero** -- the three terms genuinely diverge, so the random-mask term is doing
+work and P2's CMI will interrogate a model that has seen masked inputs. And the ORDERING is the real
+verification, because it is monotone in the number of available parents:
+
+| term | loss | parents available |
+|---|---|---|
+| `ll_graph` (empty graph) | **10.07** | none -- the head can only predict do-nothing |
+| `ll_random` (`p_edge` 0.9) | 8.89 | 90% |
+| `ll_full` (`G1`) | **8.71** | all |
+
+That ordering cannot arise unless the masks reach the computation and genuinely remove information, which is
+the property P2 depends on.
+
+**P1 is plumbing, not improvement, and its numbers are not comparable to P0's.** Tune performance dropped
+26/44 -> 11/44 because a third of the objective is now a term that can only predict do-nothing. This is
+expected: the graph is empty until P2 adds edges.
+
+**COME BACK TO THIS -- speed.** 540s/epoch against 109s at `G1`, a 5x cost from three forwards per batch plus
+the expanded `masked_retain` path that a per-batch-element random mask requires. Two things follow. P2's CMI
+adds roughly 170 more forwards per graph update (85 global input fields + 85 local across classes) -- those
+use BATCH-INDEPENDENT dropped masks so they take the cheap folded path, but the count still has to be sized
+before it is launched. And if P1's cost becomes the bottleneck, the fix is to fold the random mask per batch
+rather than per batch element; that is a deviation from `RandomMaskGenerator` and must be proposed, not
+assumed.
+
 ### 17.4 P2 -- discovery
 
 Add (5), (8), (9). For each class-level edge, compare log-likelihood under the full graph against the graph
