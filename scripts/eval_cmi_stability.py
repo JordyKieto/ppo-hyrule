@@ -16,6 +16,21 @@ If agreement climbs toward ~0.8 the estimator is simply sample-starved and we si
 low, these effects are not identifiable at `causal_threshold` on the data we have, which is a finding about
 the method here rather than a knob to turn -- it would mean recording more gameplay, not spending more
 compute.
+
+TWO THINGS THIS SCRIPT GOT WRONG THE FIRST TIME
+------------------------------------------------
+**Sample size.** The paper computes CMI over its ENTIRE buffer -- `get_causal_graph` iterates
+`self.buffer.epoch(...)` and its buffers hold 10,000-50,000 transitions. The first sweep here topped out at
+1,024, i.e. 10-50x below the method as specified, so its non-monotone Jaccard (0.341 / 0.553 / 0.382) said
+nothing about whether the method works.
+
+**`epsilon` is not a constant.** The paper TUNES it per environment: its table gives 0.3, 0.1, 0.2, 0.03,
+0.3, 0.1 across six environments, a 10x spread. Treating 0.1 as canonical was an error. Tuning it is what the
+authors do, not a fudge.
+
+Both are fixed here, and the second is nearly free: CMI values do not depend on `epsilon`, so one pass per
+seed is computed and `epsilon` is then swept OFFLINE over the stored numbers. One run gives the sample-size
+answer and the whole Jaccard-vs-epsilon curve.
 """
 from __future__ import annotations
 
@@ -46,9 +61,13 @@ def main():
     ap.add_argument("--ckpt", default="runs/p1-paper-obj/model.pt")
     ap.add_argument("--data", nargs="+", default=[f"datasets/transitions/v3-{k}/20260919-084052"
                                                   for k in ("main", "approach", "moves", "scenarios")])
-    ap.add_argument("--batches", type=int, nargs="+", default=[2, 4, 8])
-    ap.add_argument("--batch-size", type=int, default=128)
+    ap.add_argument("--batches", type=int, nargs="+", default=[5])
+    ap.add_argument("--batch-size", type=int, default=2048, help="CMI is no_grad; big batches are ~7x "
+                                                                 "cheaper per transition than 128")
     ap.add_argument("--threshold", type=float, default=0.1)
+    ap.add_argument("--eps", type=float, nargs="+",
+                    default=[0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5],
+                    help="epsilon grid, swept offline. The paper's six environments use 0.03 to 0.3.")
     ap.add_argument("--out", default="runs/cmi_stability.json")
     a = ap.parse_args()
 
@@ -67,25 +86,37 @@ def main():
     print(f"\n  {'transitions':>12} {'edges A':>8} {'edges B':>8} {'shared':>7} {'Jaccard':>8} {'secs':>6}")
     rows = []
     for nb in a.batches:
-        sets, t0 = [], time.time()
+        n_tr = nb * a.batch_size
+        cmi_by_seed, t0 = [], time.time()
         for sd in (0, 1):
-            p = pack(episodes(cat, 100 + sd, max(25, 12 * nb))).pad_to(ck["capacity"])
+            n_eps = max(40, int(np.ceil(n_tr / 450)) * 2)      # ~450 transitions per episode
+            p = pack(episodes(cat, 100 + sd, n_eps)).pad_to(ck["capacity"])
             _, cmi = discover_graph(m, p, ck["codecs"], dev, a.threshold, n_batches=nb,
                                     batch_size=a.batch_size, seed=sd)
-            sets.append({k for k, v in cmi.items() if v > a.threshold})
-        A, B = sets
-        j = len(A & B) / max(len(A | B), 1)
-        rows.append({"transitions": nb * a.batch_size, "a": len(A), "b": len(B),
-                     "shared": len(A & B), "jaccard": j, "secs": time.time() - t0,
-                     "stable_edges": sorted(A & B)})
-        print(f"  {nb * a.batch_size:>12} {len(A):>8} {len(B):>8} {len(A & B):>7} {j:>8.3f} "
-              f"{time.time() - t0:>6.0f}")
+            cmi_by_seed.append(cmi)
+        C0, C1 = cmi_by_seed
+        secs = time.time() - t0
+        # epsilon is swept OFFLINE: CMI does not depend on it, so this costs nothing
+        print(f"\n  {n_tr} transitions, {secs:.0f}s")
+        print(f"    {'epsilon':>8} {'edges A':>8} {'edges B':>8} {'shared':>7} {'Jaccard':>8}")
+        curve = []
+        for e in a.eps:
+            A = {k for k, v in C0.items() if v > e}
+            B = {k for k, v in C1.items() if v > e}
+            j = len(A & B) / max(len(A | B), 1)
+            curve.append({"eps": e, "a": len(A), "b": len(B), "shared": len(A & B), "jaccard": j,
+                          "stable": sorted(A & B)})
+            print(f"    {e:>8.3f} {len(A):>8} {len(B):>8} {len(A & B):>7} {j:>8.3f}")
+        best = max(curve, key=lambda r: (r["jaccard"], r["shared"]))
+        print(f"    -> best epsilon {best['eps']:.3f}: Jaccard {best['jaccard']:.3f}, "
+              f"{best['shared']} reproducible edges")
+        rows.append({"transitions": n_tr, "secs": secs, "curve": curve,
+                     "cmi_seed0": {k: v for k, v in C0.items() if v > 1e-4}})
+        print(f"\n    reproducible edges at the best epsilon:")
+        for edge in best["stable"][:25]:
+            print(f"      {C0[edge]:+8.4f}  {edge}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(rows, indent=1))
-    best = rows[-1]
-    print(f"\nedges reproduced at the largest size ({best['transitions']} transitions):")
-    for e in best["stable_edges"][:20]:
-        print(f"    {e}")
     print(f"\nwrote {a.out}")
 
 

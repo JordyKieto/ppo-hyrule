@@ -384,6 +384,30 @@ class OOCGraph:
         cols = [self.gin[(cls, f)] for f in self.field_names[cls]]
         return torch.as_tensor(self.global_matrix[:, cols], dtype=torch.bool, device=device)
 
+    def state_dict(self) -> dict:
+        """Serialisable form, so a run can resume with the graph it had (paper: train_ooc.py save/load)."""
+        return {"global": self.global_matrix.tolist(),
+                "local": {k: v.tolist() for k, v in self.local.items()}}
+
+    def load_state_dict(self, d: dict) -> "OOCGraph":
+        self.global_matrix = np.asarray(d["global"], bool)
+        self.local = {k: np.asarray(v, bool) for k, v in d["local"].items()}
+        return self
+
+    def edge_set(self) -> set:
+        """Edges as printable names, for diffing one iteration's graph against the last."""
+        out = set()
+        for (tc, tf), J in self.gout.items():
+            for (sc, sf), I in self.gin.items():
+                if self.global_matrix[J, I]:
+                    out.add(f"G {sc}.{sf} -> {tc}.{tf}'")
+        for c, m in self.local.items():
+            for j, t in enumerate(self.target_names[c]):
+                for i, f in enumerate(self.field_names[c]):
+                    if m[j, i]:
+                        out.add(f"L {c}.{f} -> {t}'")
+        return out
+
     def describe(self, top: int = 12) -> str:
         lines = [f"OOCG: {self.n_edges()} of {self.n_out * self.n_in + sum(m.size for m in self.local.values())}"
                  f" candidate edges active"]
