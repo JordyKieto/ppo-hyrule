@@ -1499,3 +1499,41 @@ Still untried from the same design list: categorical / VQ latents (the DreamerV3
 physically impossible interpolations), and signed-distance encoding of collision in place of the 9 binary
 `bgCheckFlags` bits -- where `dist_interact_wall` MAE 2.8-2.9 against a 2.9 mean-predictor shows the current
 continuous head is not learned at all.
+
+## 30. Categorical / VQ latents: the identity is the global optimum of per-group cross-entropy
+
+Motivation (sound, and still sound): MSE to a continuous z_{t+1} is minimised by the conditional MEAN, so where
+the next state is bimodal -- Link keeps walking vs Link hits the wall and stops -- the optimum is a midpoint the
+game cannot occupy. Discrete latents (DreamerV3) cannot interpolate: the forward latent is always a corner of the
+simplex. Implemented as `bc.st_onehot` (straight-through hard one-hot over G groups of C classes) plus
+`dynamics.CategoricalPredictor` (per-group class logits, cross-entropy, LOGIT RESIDUAL `scale * z + f(z,a)` with
+f zero-init so an untrained predictor is EXACTLY the identity).
+
+Four shapes, all 4 epochs, everything else identical to the MLP control:
+
+| shape | width | capacity | best skill | decode | dist MAE | enemy-hit AP |
+|---|---|---|---|---|---|---|
+| 32x4   |  128 |  64 bits | -0.139 | 737 | 76.6 | 0.0003 |
+| 32x32  | 1024 | 160 bits | -0.023 | 677 | 51.5 | 0.187 |
+| 256x4  | 1024 | 512 bits | **+0.000** | 607 | 44.0 | 0.139 |
+| MLP shallow+tanh (control) | 128 | continuous | -2.547 | **439** | **41.4** | **0.384** |
+
+**`skill +0.000` with tune pred 0.00686 exactly equal to identity 0.00686 is the whole result: the predictor
+learned to copy z_t.** Only ~4% of groups flip per step, so per-group cross-entropy is minimised by predicting
+"no change", and there is no gradient pressure toward the rare flips that ARE the dynamics. Every shape won skill
+by this route, and monotonically more so with size (-0.139 -> -0.023 -> +0.000). Against the matched-epoch MLP
+control, everything that depends on the predicted latent is worse: link_pos MAE 0.596 vs 0.367, enemy-hit AP 0.139
+vs 0.384, Link-hit 0.168 vs 0.466, displacement ratio 0.60x vs 1.21x, decode 607 vs 439.
+
+MOVED AP (0.378 vs 0.362) and distance (44.0 vs 41.4) tie only because both come from the TRANSITION HEAD, which
+reads (z_t, a_t) directly and never consumes the predictor's output.
+
+Note on shape, since "just make it bigger" is the obvious next thought: latent width is G*C but capacity is
+G*log2(C), so classes cost width linearly and buy capacity only logarithmically. 256x256 would be a
+**65,536-dimensional** latent for 2048 bits (0.03 bits/dim) at ~50x the compute; 256x4 gives 512 bits at width
+1024 (0.50 bits/dim). Groups are the efficient knob. Capacity did behave as predicted -- 32x4 -> 256x4 moved
+distance MAE 76.6 -> 44.0 and decode 737 -> 607 -- it simply cannot fix an objective whose optimum is the identity.
+
+This is NOT a refutation of DreamerV3's discrete latents. Dreamer pairs them with a KL to a *learned prior*,
+stochastic sampling, and training against reward on *imagined* rollouts. A bare next-step cross-entropy on a
+latent that moves 0.04 per step has copying as its global optimum, whatever the latent is made of.

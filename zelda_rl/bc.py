@@ -263,6 +263,20 @@ def _layer(i, o, std=np.sqrt(2)):
     return l
 
 
+def st_onehot(logits: "torch.Tensor", groups: int, classes: int) -> "torch.Tensor":
+    """Straight-through hard one-hot over `groups` independent categorical variables of `classes` each.
+
+    Forward pass is a HARD one-hot, so the latent can only ever be a corner of the simplex -- there is no
+    "halfway inside the wall" state for an L2 loss to settle on. Backward pass is the softmax gradient
+    (DreamerV3's straight-through estimator), so the encoder still trains densely.
+    """
+    b = logits.shape[:-1]
+    lg = logits.reshape(*b, groups, classes)
+    p = torch.softmax(lg, -1)
+    hard = torch.zeros_like(p).scatter_(-1, p.argmax(-1, keepdim=True), 1.0)
+    return (hard + p - p.detach()).reshape(*b, groups * classes)
+
+
 def enc_arch(ck: dict) -> dict:
     """Encoder architecture flags out of a checkpoint, defaulting to the deep + LayerNorm original.
 
@@ -270,7 +284,8 @@ def enc_arch(ck: dict) -> dict:
     caller assuming one. Checkpoints written before §29 have neither key and rebuild exactly as before.
     """
     return {"out_act": ck.get("enc_out", "ln"), "shallow": bool(ck.get("enc_shallow", False)),
-            "arch": ck.get("enc_kind", "mlp")}
+            "arch": ck.get("enc_kind", "mlp"), "cat_groups": ck.get("cat_groups", 32),
+            "cat_classes": ck.get("cat_classes", 4)}
 
 
 class BCNet(nn.Module):
@@ -286,7 +301,8 @@ class BCNet(nn.Module):
                  latent: int = 128, hidden: int = 256, row_hidden: int = 96, id_vocab: int = 256, id_emb: int = 8,
                  layernorm: bool = True, dropout: float = 0.0, gru: int = 0,
                  out_act: str | None = None, shallow: bool = False, arch: str = "mlp",
-                 tf_dim: int = 128, tf_layers: int = 2, tf_heads: int = 4):
+                 tf_dim: int = 128, tf_layers: int = 2, tf_heads: int = 4,
+                 cat_groups: int = 32, cat_classes: int = 4):
         """`out_act` and `shallow` default to the pre-existing deep + LayerNorm encoder, so every checkpoint
         written before they existed rebuilds identically. See `enc_arch()` and §29 for why they exist: measured
         untrained on identical features and at matched latent movement (move/rand ~0.098 for all six), the
@@ -317,7 +333,15 @@ class BCNet(nn.Module):
                                     _layer(hidden, hidden), nn.ReLU(), nn.Dropout(dropout),
                                     _layer(hidden, latent)))
         self.out_act, self.shallow = out_act or ("ln" if layernorm else "none"), shallow
-        self.ln = {"ln": nn.LayerNorm(latent), "tanh": nn.Tanh(), "none": nn.Identity()}[self.out_act]
+        self.cat_groups, self.cat_classes = cat_groups, cat_classes
+        if self.out_act == "cat":
+            assert latent == cat_groups * cat_classes, (
+                f"categorical latent needs latent == groups*classes, got {latent} != "
+                f"{cat_groups}*{cat_classes}")
+            self.ln = nn.Identity()          # the trunk output IS the logits; st_onehot() does the rest
+        else:
+            self.ln = {"ln": nn.LayerNorm(latent), "tanh": nn.Tanh(),
+                       "none": nn.Identity()}[self.out_act]
         self.gru = nn.GRUCell(latent, gru) if gru else None
         self.action = _layer(gru or latent, n_actions, 0.01)
         self.aux = nn.ModuleDict({k: _layer(latent, 1, 0.1) for k in self.AUX})
@@ -330,12 +354,14 @@ class BCNet(nn.Module):
             tok = torch.cat([(self.link_tok(link) + self.type_emb[0]).unsqueeze(-2),
                              self.row_tok(torch.cat([rows, e], -1)) + self.type_emb[1]], -2)
             pad = torch.cat([torch.zeros_like(mask[..., :1]), 1.0 - mask], -1).bool()   # absent rows masked out
-            return self.ln(self.tf_out(self.tf(tok, src_key_padding_mask=pad)[..., 0, :]))
+            o = self.tf_out(self.tf(tok, src_key_padding_mask=pad)[..., 0, :])
+            return st_onehot(o, self.cat_groups, self.cat_classes) if self.out_act == "cat" else self.ln(o)
         h = self.row_enc(torch.cat([rows, e], -1)) * m
         n = m.sum(-2).clamp(min=1.0)
         mean = h.sum(-2) / n
         mx = (h - (1 - m) * 1e4).max(-2).values * (m.sum(-2) > 0)
-        return self.ln(self.trunk(torch.cat([link, mean, mx], -1)))
+        o = self.trunk(torch.cat([link, mean, mx], -1))
+        return st_onehot(o, self.cat_groups, self.cat_classes) if self.out_act == "cat" else self.ln(o)
 
     def heads(self, z):
         return {k: self.aux[k](z).squeeze(-1) for k in self.AUX}

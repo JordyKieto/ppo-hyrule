@@ -43,7 +43,7 @@ from zelda_rl.bc import (LINK_HP_VALUES, MELEE_STATE_VALUES, N_LINK_ACTIONS, ROW
                          featurise, hp_class)
 from zelda_rl.dynamics import (MAG_EDGES, N_DIR_SECTORS, N_MAG_BINS, TransitionHead,  # noqa: E402
                                build_predictor, dir_unit_vectors, mag_centers)
-from zelda_rl.bc import N_ROWS  # noqa: E402
+from zelda_rl.bc import N_ROWS, st_onehot  # noqa: E402
 from scripts.train_bc_decode import DEFAULT_DATA, CONT, load_many, transition_frames  # noqa: E402
 
 DYING = 8
@@ -90,13 +90,16 @@ def main():
                     help="feed the predictor a STRUCTURED control (stick direction as a unit vector plus one "
                          "flag per button) instead of a flat one-hot over the 63 combined actions, so a "
                          "direction seen with one button generalises to the same direction with another.")
+    ap.add_argument("--cat-groups", type=int, default=32,
+                    help="with --enc-out cat: independent categorical variables (latent must be groups*classes)")
+    ap.add_argument("--cat-classes", type=int, default=4)
     ap.add_argument("--enc-kind", default="mlp", choices=("mlp", "transformer"),
                     help="transformer: self-attention over 17 state tokens (1 Link + 16 actor rows) instead "
                          "of mean/max pooling the rows into the trunk")
     ap.add_argument("--film-action", action="store_true",
                     help="condition the predictor by FiLM (gamma(a)*h+beta(a)) instead of concatenating the "
                          "action, so 9 action dims cannot be swamped by 128 latent dims")
-    ap.add_argument("--enc-out", default="ln", choices=("ln", "tanh", "none"),
+    ap.add_argument("--enc-out", default="ln", choices=("ln", "tanh", "none", "cat"),
                     help="latent output activation. 'ln' is the original; 'tanh' measured +0.73 skill over it")
     ap.add_argument("--enc-shallow", action="store_true",
                     help="one linear layer to the latent instead of the 2-hidden-layer trunk (+0.36 skill)")
@@ -224,7 +227,8 @@ def main():
           f"w_decode {a.w_decode} w_pred {a.w_pred} | whiten {a.whiten}")
 
     enc = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=meta["n_actions"],
-                latent=a.latent, gru=0, out_act=a.enc_out, shallow=a.enc_shallow, arch=a.enc_kind)
+                latent=a.latent, gru=0, out_act=a.enc_out, shallow=a.enc_shallow, arch=a.enc_kind,
+                cat_groups=a.cat_groups, cat_classes=a.cat_classes)
     if bc_ck is not None:
         a.latent = bc_ck["latent"]
         enc.load_state_dict(bc_ck["model"])
@@ -233,7 +237,24 @@ def main():
         enc.eval()
     dec = (UnifiedDecoder(latent=a.latent) if a.unified_decoder else StateDecoder(latent=a.latent))
     NA = meta["n_actions"]
-    pred = build_predictor(a.latent, NA, factored=a.factored_action, film=a.film_action)
+    CAT = a.enc_out == "cat"
+    pred = build_predictor(a.latent, NA, factored=a.factored_action, film=a.film_action,
+                           categorical=CAT, groups=a.cat_groups, classes=a.cat_classes)
+
+    def step_pred(za, target=None):
+        """One predictor step, plus its loss against `target`.
+
+        Categorical: CROSS-ENTROPY on per-group class logits, which is the whole point -- L2 to a continuous
+        next latent is minimised by the conditional mean, and the mean of "kept walking" and "hit the wall" is
+        a state the game cannot be in. Continuous: MSE, as before.
+        """
+        if CAT:
+            lg = pred.logits(za)
+            zn = st_onehot(lg, a.cat_groups, a.cat_classes)
+            return zn, (pred.ce(lg, target) if target is not None else None)
+        zn = pred(za)
+        return zn, (F.mse_loss(zn, target) if target is not None else None)
+
     # Action-conditioned transition head. Motion and combat events are read from (z_t, a_t) directly rather
     # than decoded out of z_{t+1}, because the action barely survives into the latent (inverse dynamics
     # 0.089 vs a 0.220 ceiling) and these are exactly the quantities that depend on it.
@@ -435,11 +456,12 @@ def main():
                                                   replace=False, p=DEEP_P))
                 zz, lp, wsum = E(zi), torch.zeros(()), 0.0
                 for j in range(a.unroll):
-                    zz = pred(torch.cat([zz, A[zi + j * K]], -1))
+                    _za = torch.cat([zz, A[zi + j * K]], -1)
                     with torch.no_grad():
                         zt = E(zi + (j + 1) * K)                 # stop-gradient target, as in JEPA
                     w = a.unroll_decay ** j
-                    lp = lp + w * F.mse_loss(zz, zt)
+                    zz, _l = step_pred(_za, zt)
+                    lp = lp + w * _l
                     if a.w_decpred > 0:                          # decode EVERY rollout step: momentum over time
                         ld = ld + a.w_decpred * w * decode_loss(
                             dec(zz), zi + (j + 1) * K, dec(zz.detach()) if a.detach_pos else None)
@@ -453,8 +475,7 @@ def main():
                     zi, zp = i[nx], z[nx]
                     with torch.no_grad():
                         zt = E(zi + K)
-                    zh = pred(torch.cat([zp, A[zi]], -1))
-                    lp = F.mse_loss(zh, zt)
+                    zh, lp = step_pred(torch.cat([zp, A[zi]], -1), zt)
                     # DECODE THE PREDICTION. Without this the predictor's only supervision is L2 to the true
                     # next latent in 128-d space -- and L2 there is dominated by whatever directions carry the
                     # most variance, while velocity and position are tiny components. So a prediction can be
@@ -838,6 +859,7 @@ def main():
                 # differ, and saving the reference silently mis-normalises every consumer of this checkpoint
                 # (train_dream_ppo, play_dream_policy, the probes).
                 "norm": norm.state_dict(), "split": split, "pred_residual": True, "pred_factored": a.factored_action, "pred_film": a.film_action,
+                "pred_categorical": a.enc_out == "cat", "cat_groups": a.cat_groups, "cat_classes": a.cat_classes,
                 "unified_decoder": a.unified_decoder,
                 "thead": thead.state_dict(), "moved_thresh": moved_thresh, "moved_calib": moved_calib,
                 "event_calib": event_calib, "latent": a.latent, "link_dim": T["link"].shape[1],

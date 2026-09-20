@@ -56,7 +56,10 @@ class FlatPredictor(nn.Module):
 
 
 def build_predictor(latent: int, n_actions: int, residual: bool = True, hidden: int = 512,
-                    factored: bool = False, film: bool = False) -> nn.Module:
+                    factored: bool = False, film: bool = False, categorical: bool = False,
+                    groups: int = 32, classes: int = 4) -> nn.Module:
+    if categorical:
+        return CategoricalPredictor(latent, n_actions, hidden, groups, classes, factored=factored)
     if film:
         return FiLMPredictor(latent, n_actions, hidden, factored=factored)
     if factored:
@@ -72,6 +75,12 @@ def load_predictor(ck: dict, latent: int, n_actions: int) -> nn.Module:
     shape rather than trusting the flag to be present, so old artefacts keep working.
     """
     sd = ck["pred"]
+    if ck.get("pred_categorical") or ck.get("enc_out") == "cat":
+        m = CategoricalPredictor(latent, n_actions, groups=ck.get("cat_groups", 32),
+                                 classes=ck.get("cat_classes", 4),
+                                 factored=any(k == "table" for k in sd))
+        m.load_state_dict(sd); m.eval()
+        return m
     if ck.get("pred_film") or any(k.startswith("film.") for k in sd):
         m = FiLMPredictor(latent, n_actions, factored=any(k == "table" for k in sd))
         m.load_state_dict(sd); m.eval()
@@ -276,3 +285,51 @@ class FiLMPredictor(nn.Module):
 
     def forward(self, za: torch.Tensor) -> torch.Tensor:
         return za[..., :self.latent] + self.delta(za)
+
+
+class CategoricalPredictor(nn.Module):
+    """Predict the next latent as CLASS LOGITS per group, not as a point in R^128.
+
+    Why: with a continuous latent, MSE to z_{t+1} is minimised by the conditional MEAN. Where the next state is
+    genuinely bimodal -- Link keeps walking vs Link hits the wall and stops -- the mean is the midpoint, which is
+    a state the game cannot be in ("halfway inside the wall"). Measured symptoms of exactly that: regressed
+    displacement magnitude 1.19 against a true 11.03 (9.3x too small), and the same collapse made HP unusable
+    until it was classified (damage F1 0.286 -> 0.906). A mode does not shrink; a mean does.
+
+    With `groups` independent categoricals the transition is a classification per group, trained with
+    cross-entropy, and the forward latent is always a corner of the simplex (see `bc.st_onehot`).
+
+    LOGIT RESIDUAL. logits = scale * z_t + f(z_t, a_t) with f zero-initialised. Since z_t is one-hot, at init
+    argmax(logits) per group IS the current class, so an untrained predictor is EXACTLY the identity -- the same
+    control every other predictor here preserves, and the one the skill metric is defined against.
+    """
+
+    def __init__(self, latent: int, n_actions: int, hidden: int = 512, groups: int = 32, classes: int = 4,
+                 factored: bool = True, scale: float = 10.0):
+        super().__init__()
+        assert latent == groups * classes, f"{latent} != {groups}*{classes}"
+        self.latent, self.n_actions = latent, n_actions
+        self.groups, self.classes, self.scale, self.factored = groups, classes, scale, factored
+        a_dim = FACTORED_DIM if factored else n_actions
+        if factored:
+            self.register_buffer("table", torch.from_numpy(factor_actions(n_actions)))
+        self.net = nn.Sequential(nn.Linear(latent + a_dim, hidden), nn.ReLU(),
+                                 nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, latent))
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def logits(self, za: torch.Tensor) -> torch.Tensor:
+        z, oh = za[..., :self.latent], za[..., self.latent:]
+        a = oh @ self.table if self.factored else oh
+        return self.scale * z + self.net(torch.cat([z, a], -1))
+
+    def forward(self, za: torch.Tensor) -> torch.Tensor:
+        from zelda_rl.bc import st_onehot
+        return st_onehot(self.logits(za), self.groups, self.classes)
+
+    def ce(self, logits: torch.Tensor, z_target: torch.Tensor) -> torch.Tensor:
+        """Cross-entropy against the target one-hot's class index, averaged over groups."""
+        import torch.nn.functional as F
+        lg = logits.reshape(-1, self.groups, self.classes)
+        tgt = z_target.reshape(-1, self.groups, self.classes).argmax(-1)
+        return F.cross_entropy(lg.reshape(-1, self.classes), tgt.reshape(-1))
