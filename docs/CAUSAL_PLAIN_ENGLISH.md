@@ -84,14 +84,34 @@ It is a stop rather than a nuisance because the next step is to feed the discove
 Do that with a list that is two-thirds noise and everything afterwards is built on sand -- and it would
 *look* like progress, which is worse than failing loudly.
 
-## What is happening right now
+## It was short of data, and two settings were wrong
 
-Re-running the search with 2x and 4x more gameplay to see whether the two runs start agreeing.
+Re-running the search on **10x more gameplay** fixed most of it. Two mistakes on our side:
 
-- **If agreement climbs to around 80%** -> it was just short of data. We use the bigger sample and carry on
-  to the last step.
-- **If it stays low** -> these effects cannot be reliably detected on the gameplay we have. That is a real
-  result, and the answer would be to record more gameplay rather than to buy more compute.
+1. We were searching using about 250 moments of gameplay. **The paper uses its entire memory -- 10,000 to
+   50,000.** We were running the method at a fiftieth of its intended scale.
+2. We treated the sensitivity dial as a fixed constant. **The paper tunes it per game** -- their own six
+   environments use six different values spanning a 10x range.
+
+Fixed both: agreement went from **19% to 66%**, and the edges we know are real came back -- including
+"velocity moves Link", which had gone missing entirely at the small scale.
+
+## Then we closed the loop
+
+The real method alternates: search for the links, train the model using only those links, search again with
+the improved model, and so on until the answer stops changing. Three rounds:
+
+| round | links found | changed since last | agreement |
+|---|---|---|---|
+| 1 | 48 | all new | -- |
+| 2 | 39 | 20 dropped, 11 added | 48% |
+| 3 | 48 | **2 dropped**, 11 added | **74%** |
+
+**It is settling.** Churn collapsed from 20 links changing to 2, and agreement rose to 74%. Meanwhile the
+model itself improved every round -- its prediction of where Link moves next roughly doubled, and six more
+quantities started beating the "assume nothing happens" baseline.
+
+That is the phase working as intended: better links make a better model, which finds better links.
 
 ## The honest scoreboard
 

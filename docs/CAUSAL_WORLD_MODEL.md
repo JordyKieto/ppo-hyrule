@@ -1097,3 +1097,49 @@ Three caveats, recorded rather than smoothed:
 `graph/frac_active`, and a `graph/kind` + `graph/hand_parents` summary -- because two runs differing ONLY in
 their causal graph are otherwise indistinguishable in wandb. The velocity baseline is logged as
 `control/velocity_baseline_val_chg` for the same reason. Every run from here is wandb-audited by default.
+
+---
+
+## 18. Datasets: what we train on, and where it lives
+
+| collection | episodes | `Link.pos` changes | note |
+|---|---|---|---|
+| `v3-main` | 121 | 14.1% of steps | combat; Link often stationary |
+| `v3-approach` | 70 | -- | approach scenarios |
+| `v3-moves` | 56 | -- | movement scenarios |
+| `v3-scenarios` | 151 | -- | mixed |
+| **all four** | **398** | **24.9%** | 203,424 transitions, 363-d v3 state |
+
+The data itself is small -- **16 MB across 403 files** (`episodes/*.npz` + `manifest.jsonl`, and `dataset.json`
+in `v3-main` only, which is all `load_many` needs). The 5.3 GB per directory is `instances/env*/StateSaves`,
+Dolphin emulator savestates, correctly gitignored by `*.s[0-9][0-9]`.
+
+**S3.** The v1 dataset was already backed up; the v3 collections we have used all session were NOT. They are
+now, under the existing convention and verified episode-for-episode:
+
+    s3://zelda-rl/zelda/combat/deku-baba/transitions/v3-main/20260919-084052/        121 episodes
+    s3://zelda-rl/zelda/combat/deku-baba/transitions/v3-approach/20260919-084052/     70
+    s3://zelda-rl/zelda/combat/deku-baba/transitions/v3-moves/20260919-084052/        56
+    s3://zelda-rl/zelda/combat/deku-baba/transitions/v3-scenarios/20260919-084052/   151
+
+To restore (AWS profile `race-wm`, us-west-1, same profile `build_savestate_manifest.py` uses):
+
+    aws s3 sync s3://zelda-rl/zelda/combat/deku-baba/transitions/ datasets/transitions/ --profile race-wm
+
+### 18.1 A silent bug: every run before P2 trained on ONE collection
+
+`scripts/train_oocdm.py`'s `DEFAULT_DATA` was `v3-main` alone, and no run passed `--data`. So the
+random-sampling-across-collections fix made earlier was real but **unreachable** -- Stage 1, P0 and P1 all
+trained on one of four collections while the code and docs implied otherwise. `--episodes 120` from a
+121-episode collection also meant those runs had essentially no episode sampling at all.
+
+It matters for reading their numbers, because the two sets are not the same problem:
+
+| | `Link.pos` changes | trivial `pos + k*vel` control |
+|---|---|---|
+| `v3-main` only (Stage 1, P0, P1) | 14.1% | **+0.275** |
+| all four (P2 onward) | 24.9% | **+0.205** |
+
+So P0's gate result (+0.134 -> +0.207, section 17.7) was measured on the narrower, easier collection, and
+**P2's numbers are not directly comparable to it.** Each must be read against its own velocity control.
+`DEFAULT_DATA` is now all four collections, with the reason recorded at the definition.

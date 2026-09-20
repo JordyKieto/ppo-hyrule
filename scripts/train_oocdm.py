@@ -59,7 +59,13 @@ from zelda_rl.oomdp import (SCHEMA_V3, assert_partition, assert_roundtrip, decom
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
 from zelda_rl.state_layout import STATE_DIM_V3  # noqa: E402
 
-DEFAULT_DATA = ["datasets/transitions/v3-main/20260919-084052"]
+# ALL FOUR collections by default. This was v3-main alone, and because no run passed --data explicitly,
+# every Stage 1 / P0 / P1 run trained on one collection while the code and docs said otherwise. v3-main has
+# Link.pos changing on 14.1% of steps against 24.9% across all four, and the trivial velocity control scores
+# +0.275 there against +0.205 on the full set -- so it is an easier, narrower problem, and numbers from the
+# two are not comparable.
+DEFAULT_DATA = [f"datasets/transitions/v3-{k}/20260919-084052"
+                for k in ("main", "approach", "moves", "scenarios")]
 TRAIN_SLOTS, TUNE_SLOTS, TEST_SLOTS = {1, 2, 3, 5, 6, 10}, {4, 8}, {7, 9}
 # P0's hand-specified parent set for Link.pos', from the ridge probe in docs/CAUSAL_WORLD_MODEL.md 16.
 HAND_PARENTS = ["pos", "vel", "speed", "stick", "bg_flags"]
