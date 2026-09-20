@@ -451,6 +451,32 @@ class RandomMask(MaskGen):
         return torch.rand(batch, self.g.n_out, len(self.g.field_names[cls]), device=device) <= self.p
 
 
+
+class DroppedMask(MaskGen):
+    """The full graph with ONE input field removed -- the counterfactual CMI is measured against.
+
+    Batch-independent, so it takes the cheap folded path. `drop_global` removes a (class, field) column from
+    the global matrix for every target; `drop_local` removes a field from one class's local matrix.
+    """
+
+    def __init__(self, graph: "OOCGraph", drop_global: tuple[str, str] | None = None,
+                 drop_local: tuple[str, str] | None = None):
+        self.g, self.dg, self.dl = graph, drop_global, drop_local
+
+    def local(self, cls, batch, device):
+        m = torch.ones(len(self.g.target_names[cls]), len(self.g.field_names[cls]),
+                       dtype=torch.bool, device=device)
+        if self.dl is not None and self.dl[0] == cls:
+            m[:, self.g.field_names[cls].index(self.dl[1])] = False
+        return m
+
+    def glob(self, cls, batch, device):
+        m = torch.ones(self.g.n_out, len(self.g.field_names[cls]), dtype=torch.bool, device=device)
+        if self.dg is not None and self.dg[0] == cls:
+            m[:, self.g.field_names[cls].index(self.dg[1])] = False
+        return m
+
+
 class MultiLinear(nn.Module):
     """n independent Linear layers applied along a named axis. The paper's parameter sharing device: the
     weight is indexed by FIELD, and the object axis is a batch dim, so every instance of a class shares it."""
@@ -764,3 +790,92 @@ def velocity_baseline(p: Packed, cls: str = "Link", pos: str = "pos", vel: str =
     e_id, e_v = np.abs(d).mean(1), np.abs(d - k * u).mean(1)
     return {"k": k, "n": len(d), "identity_mae": float(e_id.mean()), "baseline_mae": float(e_v.mean()),
             "val_chg": float(1 - e_v.mean() / e_id.mean())}
+
+
+# --------------------------------------------------------------------------------------------------------
+# Causal discovery (paper section 4.3, ../oocdm/scripts_/train_ooc.py:get_causal_graph).
+#
+#   CMI(edge) = E[ log f(V' | full graph) ] - E[ log f(V' | full graph minus that edge) ]
+#
+# and the edge is kept when CMI > causal_threshold. No second model is trained: the SAME predictor is asked
+# both questions, which is only meaningful because the random-mask term of P1 taught it to answer with
+# parents missing.
+#
+# KNOWN APPROXIMATION, recorded rather than hidden: the paper's heads all emit proper distributions, so its
+# log f is a log-probability. Ours does too for real/count (Gaussian), categorical and boolean (softmax) and
+# bits (Bernoulli) -- but the ANGLE head emits a direction, not a distribution, and its `1 - cos` loss is a
+# monotone surrogate rather than a log-probability. Differences are still signed correctly for a given field,
+# but the nats scale is wrong for angles, so `causal_threshold` does not mean the same thing for them.
+# --------------------------------------------------------------------------------------------------------
+def field_logprob(model: "OOCDM", out: dict, batch: dict) -> dict[str, np.ndarray]:
+    """Per-(object, step) log f(V' | parents) for every field, masked to valid entries."""
+    res = {}
+    for c in model.order:
+        for t in model.target_names[c.name]:
+            key = f"{c.name}|{t}"
+            cod, pred, tgt = model.codecs[c.name][t], out[key], batch["y"][c.name][t]
+            v = batch["valid"][c.name][t]
+            if not bool(v.any()):
+                continue
+            k = cod.kind
+            if k in ("real", "count"):
+                sc = model.log_scale[key]
+                lp = (-0.5 * ((pred - tgt) / sc.exp()) ** 2 - sc - 0.5 * np.log(2 * np.pi)).sum(-1)
+            elif k == "angle":
+                u = pred / pred.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+                lp = (u * tgt).sum(-1) - 1.0                        # surrogate, see the note above
+            elif k == "bits":
+                lp = -Fn.binary_cross_entropy_with_logits(pred, tgt, reduction="none").sum(-1)
+            else:
+                lp = -Fn.cross_entropy(pred.flatten(0, 1), tgt[..., 0].flatten(0, 1),
+                                       reduction="none").view(tgt.shape[:-1])
+            res[key] = lp[v].detach().cpu().numpy()
+    return res
+
+
+@torch.no_grad()
+def discover_graph(model: "OOCDM", p: Packed, codecs, device, threshold: float = 0.1,
+                   n_batches: int = 4, batch_size: int = 128, seed: int = 0,
+                   verbose: bool = False) -> tuple["OOCGraph", dict]:
+    """One pass of the paper's causal discovery. Returns (graph, {edge: cmi})."""
+    model.eval()
+    idx = np.random.default_rng(seed).permutation(p.pairs)[: n_batches * batch_size]
+    chunks = [idx[i: i + batch_size] for i in range(0, len(idx), batch_size)]
+    batches = [make_batch(p, codecs, model, ch, device) for ch in chunks]
+
+    def mean_lp(maskgen):
+        acc: dict[str, list] = {}
+        for b in batches:
+            for k, v in field_logprob(model, model(b, maskgen), b).items():
+                acc.setdefault(k, []).append(v)
+        return {k: float(np.concatenate(v).mean()) for k, v in acc.items()}
+
+    g = model.graph
+    full = mean_lp(FullMask(g))
+    out = OOCGraph(model.order, model.field_names, model.target_names, full=False)
+    cmis: dict[str, float] = {}
+
+    for c in model.order:                                            # GLOBAL edges: Cl.U -> Ck.V'
+        for f in model.field_names[c.name]:
+            dropped = mean_lp(DroppedMask(g, drop_global=(c.name, f)))
+            for key, lp in full.items():
+                cmi = lp - dropped.get(key, lp)
+                cmis[f"G {c.name}.{f} -> {key.replace('|', '.')}'"] = cmi
+                if cmi > threshold:
+                    tc, tf = key.split("|")
+                    out.global_matrix[out.gout[(tc, tf)], out.gin[(c.name, f)]] = True
+
+    for c in model.order:                                            # LOCAL edges: C.U -> V'
+        for f in model.field_names[c.name]:
+            dropped = mean_lp(DroppedMask(g, drop_local=(c.name, f)))
+            for t in model.target_names[c.name]:
+                key = f"{c.name}|{t}"
+                if key not in full:
+                    continue
+                cmi = full[key] - dropped.get(key, full[key])
+                cmis[f"L {c.name}.{f} -> {t}'"] = cmi
+                if cmi > threshold:
+                    out.local[c.name][model.target_names[c.name].index(t),
+                                      model.field_names[c.name].index(f)] = True
+    model.train()
+    return out, cmis

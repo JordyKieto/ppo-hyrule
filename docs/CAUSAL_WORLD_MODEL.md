@@ -954,6 +954,56 @@ graph each iteration; stop when it has been stable for `n_iter_stable`.
 Cost: one graph update needs roughly `n_field` forward passes for the global edges plus `n_field` per class
 for the local ones -- about 180 passes over a batch set, once per update rather than per batch.
 
+### 17.4b P2 result: discovery recovers the physics
+
+`discover_graph` ported from `train_ooc.py:get_causal_graph`. CMI per class-level edge, threshold 0.1, run
+against the P0 checkpoint on 256 held-out transitions.
+
+**`Link.pos'`'s parents, discovered rather than specified:**
+
+| CMI | edge |
+|---|---|
+| **+0.5228** | `Link.vel -> pos'` |
+| **+0.2526** | `Link.bg_flags -> pos'` |
+| +0.0172 | `Link.stick -> pos'` |
+| +0.0050 | `Link.y_dist_to_ledge -> pos'` |
+| ~0 | everything else |
+
+It found **velocity and collision** on its own -- the actual physics, and two of the five fields hand-picked
+for P0 from the ridge probe. `stick` is an order of magnitude lower, consistent with section 13.7's finding
+that a commanded direction sits 66 deg from the real displacement at 10 Hz: what you pressed matters far less
+over one step than where you were already going and what you are touching.
+
+**Other top edges, all mechanically sensible:**
+
+| CMI | edge | reading |
+|---|---|---|
+| +0.7770 | `Link.vel -> fall_distance'` | falling is integrated velocity |
+| +0.4495 | `En_Dekubaba.fn_rel -> timer'` | a Baba's action function drives its own timer |
+| +0.4380 | `Link.melee_state -> speed'` | swinging a sword stops you |
+| +0.3740 | **`En_Dekubaba.has_arrow -> Link.sf1'`** | a GLOBAL edge -- the paper's `Cl.U -> Ck.V'` firing on a real cross-object interaction |
+
+**The graph is extremely sparse: 31 of 8,286 candidate edges at threshold 0.1 -- 0.37%.** CMI median is
+exactly 0.0000 and p90 is exactly 0.0000, so the overwhelming majority of candidate parents carry no
+information whatsoever. That is section 16's diagnosis confirmed from the other direction: the model was
+being handed thousands of inputs of which a few dozen matter.
+
+**Cost, measured not estimated.** 170 dropped-mask forwards per graph update (85 input fields x global +
+local), 299 ms each at batch 128 on MPS: **51 s at 1 CMI batch, 66 s at 2, 204 s at 4.** Workable once per
+epoch; the paper recomputes every iteration, which at this cost we cannot.
+
+**Known approximation, recorded not hidden.** The paper's heads all emit distributions so its `log f` is a
+log-probability. Ours is too for real/count (Gaussian), categorical/boolean (softmax) and bits (Bernoulli),
+but the ANGLE head emits a direction and its `1 - cos` is a monotone surrogate. Differences stay correctly
+signed per field, but the nats scale is wrong for angles, so `causal_threshold` does not mean the same thing
+for them. The clean fix is a von Mises head, which is a change to the model and therefore a proposal.
+
+**Two open questions before the update loop (component 9).** Whether 31 edges is too aggressive -- sparsity
+is the goal but a graph this thin could starve fields that genuinely need parents -- and whether CMI is
+stable at 256 transitions against a 0.1-nat threshold, which is the seed/Jaccard control from P3 pulled
+forward. Both are being measured against the P1 checkpoint, which is the one the method actually specifies,
+since it was trained with the random-mask term that makes CMI well-posed.
+
 ### 17.5 P3 -- the paper's own controls
 
 These are the results the paper reports, and the only ones that say whether any of this works.
