@@ -1,5 +1,8 @@
 # Causal object-oriented world model: background, schema, and the Stage 0 field census
 
+**Field-by-field results: [`FIELD_SCORECARD.md`](FIELD_SCORECARD.md)** -- one row per declared field, with
+sample counts, all three P3 arms side by side, and a verdict.
+
 **Plain-English companion: [`CAUSAL_PLAIN_ENGLISH.md`](CAUSAL_PLAIN_ENGLISH.md)** -- same facts, no jargon.
 This file is the record of authority; if the two ever disagree, this one is right.
 
