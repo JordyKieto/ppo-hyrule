@@ -767,3 +767,38 @@ discovered graph beats the full graph, or whether class sharing contributes anyt
 | **shuffled-class** (does class sharing do anything?) | **NEVER RUN** -- tests the paper's premise |
 | **seed variance** (AGENTS.md section 7) | **NEVER RUN** -- everything is single-seed |
 | **multi-step rollout** (AGENTS.md section 8, the barometer) | **NEVER RUN** |
+
+
+---
+
+## 15. The barometer, run at last: the dream travels 4% of the real distance
+
+`scripts/eval_oocdm_rollout.py`, full-state autoregressive rollout -- all 77 fields predicted each step and
+fed back through `decompose -> model -> recompose` -- on 26 held-out episodes from test slots, real action
+sequences from real start states. Checkpoint `runs/paper-fast-s0/model.pt` (paper-shape, 120-episode random
+subset, 2 epochs, seed 0).
+
+| h | do-nothing | OOCDM | ratio | travelled dream / real |
+|---|---|---|---|---|
+| 1 | 23.52 | 23.62 | 1.00 | **0.2 / 25.3** |
+| 5 | 42.16 | 42.33 | 1.00 | 1.7 / 52.1 |
+| 10 | 73.04 | 73.08 | 1.00 | 3.5 / 93.3 |
+| 25 | 75.49 | 76.48 | 1.01 | **7.3 / 173.6** |
+
+**The model is inert.** It travels 0.8% of the true distance at h=1 and 4% at h=25, so its error equals
+do-nothing because it IS do-nothing. This is AGENTS.md section 2 earning its place: the error column alone
+reads "1.00x, tied", and only the travel column shows there is no model there. Section 22 found the same
+shape in the latent world model ("13x too slow early"); the object-oriented factorisation has not changed it.
+
+Two notes on the controls.
+
+**The velocity control is vacuous in a rollout and was removed from the table.** Episodes start from
+savestates where Link is stationary, so `vel_0` is zero and `pos + k*vel_0` is identical to do-nothing at
+every horizon. It remains a strong control for SINGLE-STEP prediction (+0.257, section 13.7), where the
+velocity is read from the real state each step. It cannot be carried into a rollout unchanged.
+
+**This is a 2-epoch model on a 120-episode subset**, chosen for a 4-minute loop rather than a 25-minute one.
+The 6-epoch full-data arm (section 14) scored `Link.pos` aggregate -2.617, i.e. it moved too MUCH rather
+than too little, so the inertness here may be undertraining. That is a testable difference and it is not yet
+tested -- but a model that must be trained to the point of over-moving before it moves at all is not
+obviously on a path to a usable dream either.

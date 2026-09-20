@@ -18,8 +18,14 @@ on real action sequences, and position ended worse than assuming Link never move
 CONTROLS
   do-nothing   the state frozen at s_0 forever. This is the floor; section 22's latent model lost to it at
                every horizon past 25 steps, and b88868f measured the latent recursion 3x worse at h=10.
-  velocity     s_0 position advanced by k * vel_0 each step, everything else frozen -- the free-signal
-               control from AGENTS.md section 1, which beats the trained single-step head (+0.257 vs +0.064).
+  velocity     s_0 position advanced by k * vel_0 each step, everything else frozen. NOTE: episodes start
+               from savestates where Link is stationary, so vel_0 is zero and this control is IDENTICAL to
+               do-nothing in a rollout. It is retained only so that fact stays visible.
+
+AGENTS.md section 2: predictability and informativeness are reported TOGETHER. An error equal to do-nothing
+is ambiguous -- the model may be tracking the truth as well as freezing does, or it may simply be producing
+no motion. So DISTANCE TRAVELLED is reported next to error, as section 22 did, and a dream that travels ~0
+while the truth travels tens of units is not a good model, whatever its error column says.
 """
 from __future__ import annotations
 
@@ -63,14 +69,13 @@ def roll(model, codecs, state0, actions, horizon, device):
     cur = state0.copy()[None]                                  # (1, width)
     traj = [cur[0].copy()]
     for t in range(horizon):
-        a = actions[t: t + 1]
-        p = pack([(cur, a)], SCHEMA_V3)
-        p.pad_to(model.capacity)
-        if len(p.pairs) == 0:                                  # a 1-step pack has no (t, t+1) pair
-            p.pairs = np.array([0])
+        # make_batch reads a (t, t+1) PAIR; a rollout step only has t. The current state is duplicated so
+        # the pair exists -- the t+1 slot is only used to build loss targets, which a rollout never computes.
+        a = np.repeat(actions[t: t + 1], 2)
+        p = pack([(np.repeat(cur, 2, axis=0), a)], SCHEMA_V3).pad_to(model.capacity)
         b = make_batch(p, codecs, model, np.array([0]), device)
         pred = predict_raw(model, model(b), b)
-        groups = decompose(cur, a, SCHEMA_V3)
+        groups = decompose(cur, actions[t: t + 1], SCHEMA_V3)
         for cname, grp in groups.items():
             for f in grp.cls.state_fields():
                 key = f"{cname}|{f.name}"
@@ -88,7 +93,8 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--data", nargs="+", default=[f"datasets/transitions/v3-{k}/20260919-084052"
                                                   for k in ("main", "approach", "moves", "scenarios")])
-    ap.add_argument("--episodes", type=int, default=12)
+    ap.add_argument("--episodes", type=int, default=40, help="candidates sampled; those shorter than the "
+                                                                   "horizon are dropped, so fewer are scored")
     ap.add_argument("--horizon", type=int, default=max(HORIZONS))
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
@@ -109,7 +115,8 @@ def main():
     LI = link_index(STATE_DIM_V3)
     px, pz = LI["pos_x"], LI["pos_z"]
     vx, vz = LI["vel_x"], LI["vel_z"]
-    acc = {h: {"model": [], "none": [], "vel": []} for h in HORIZONS if h <= a.horizon}
+    acc = {h: {"model": [], "none": [], "vel": [], "trav_m": [], "trav_r": []}
+           for h in HORIZONS if h <= a.horizon}
     for st, act in eps:
         traj = roll(model, codecs, st[0], act, a.horizon, dev)
         k = 1.7
@@ -118,14 +125,18 @@ def main():
             acc[h]["model"].append(np.linalg.norm(traj[h][[px, pz]] - truth))
             acc[h]["none"].append(np.linalg.norm(st[0][[px, pz]] - truth))
             acc[h]["vel"].append(np.linalg.norm(st[0][[px, pz]] + h * k * st[0][[vx, vz]] - truth))
+            # path length actually walked, dream vs real -- the informativeness half of AGENTS.md section 2
+            acc[h]["trav_m"].append(float(np.abs(np.diff(traj[: h + 1][:, [px, pz]], axis=0)).sum()))
+            acc[h]["trav_r"].append(float(np.abs(np.diff(st[: h + 1][:, [px, pz]], axis=0)).sum()))
     print(f"\nLink XZ position error, world units (mean over {len(eps)} episodes)")
-    print(f"  {'h':>4} {'do-nothing':>11} {'vel*1.7':>9} {'OOCDM':>9}   verdict")
+    print(f"  {'h':>4} {'do-nothing':>11} {'OOCDM':>9} {'ratio':>7} | {'travelled dream/real':>22}")
     for h in sorted(acc):
         m, n, v = (float(np.mean(acc[h][k])) for k in ("model", "none", "vel"))
-        best = min(m, n, v)
-        who = "OOCDM" if m == best else ("do-nothing" if n == best else "vel")
-        print(f"  {h:>4} {n:11.2f} {v:9.2f} {m:9.2f}   {who} wins"
-              + ("" if m == best else f"  (OOCDM {m / n:.2f}x do-nothing)"))
+        tm, tr = float(np.mean(acc[h]["trav_m"])), float(np.mean(acc[h]["trav_r"]))
+        print(f"  {h:>4} {n:11.2f} {m:9.2f} {m / n if n > 1e-9 else float('nan'):7.2f} | "
+              f"{tm:10.1f} / {tr:<10.1f}")
+    if False:
+        pass
 
 
 if __name__ == "__main__":
