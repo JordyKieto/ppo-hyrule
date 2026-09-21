@@ -51,6 +51,7 @@ from scripts.train_bc_decode import DEFAULT_DATA, load_many  # noqa: E402
 from zelda_rl.bc import (LINK_HP_VALUES, N_BABA_STATES, ROW_HP_VALUES, BCNet, Norm,  # noqa: E402
                          UnifiedDecoder, decode_targets, enc_arch, featurise, hp_class)
 from zelda_rl.dynamics import build_predictor  # noqa: E402
+from zelda_rl.reward_decode import RewardTargets  # noqa: E402
 
 
 def ln(x):
@@ -70,6 +71,25 @@ def main():
     ap.add_argument("--unroll-decay", type=float, default=0.97)
     ap.add_argument("--unroll-batch", type=int, default=256)
     ap.add_argument("--w-roll", type=float, default=1.0)
+    ap.add_argument("--w-abs", type=float, default=1.0,
+                    help="weight on the UN-normalised L1 term. The layer-normalised JEPA loss is exactly "
+                         "scale-invariant (verified: scaling the prediction 1000x leaves it identical to 6 "
+                         "decimals), so nothing bounds ||z|| and the rollout diverged to 2.2e11 by H=100. "
+                         "This term is the only thing that sees scale. 0 reproduces the paper's loss.")
+    ap.add_argument("--w-decpred", type=float, default=0.0,
+                    help="pressure for the PREDICTED latent to decode to the correct reward fields. The pure "
+                         "JEPA loss only asks z_hat to sit near z_next in latent space; this asks it to be a "
+                         "latent the reward can actually be read out of. Section 4 has this variant at -1.37 "
+                         "against pure JEPA's -1.78.")
+    ap.add_argument("--w-recon", type=float, default=1.0,
+                    help="with --unfreeze: keep stage 1's reconstruction loss on the REAL latent. Without it "
+                         "only the PREDICTED latent is pressured to decode, nothing holds the encoder to "
+                         "stage 1's quality, and it drifts -- measured: near_dist decode 17.5 -> 35.2 world "
+                         "units on the real latent. Ignored when the encoder is frozen.")
+    ap.add_argument("--unfreeze", action="store_true",
+                    help="train the encoder and decoder too. Targets stay stop-gradiented (no_grad E(s_next)) "
+                         "so the encoder cannot make its own future easier by smoothing itself -- the "
+                         "degenerate direction observed when it could. Collapse metrics matter here.")
     ap.add_argument("--factored", action="store_true", help="factored action input instead of a flat one-hot")
     ap.add_argument("--horizons", type=int, nargs="+", default=[10, 40, 100])
     ap.add_argument("--seed", type=int, default=0)
@@ -87,8 +107,6 @@ def main():
     enc.load_state_dict(ck["encoder"]); enc.eval()
     dec = UnifiedDecoder(latent=LAT, reward_only=ck.get("reward_only", True))
     dec.load_state_dict(ck["decoder"]); dec.eval()
-    for p in list(enc.parameters()) + list(dec.parameters()):
-        p.requires_grad_(False)
     norm, split = Norm.load(ck["norm"]), ck["split"]
 
     meta, state, act, slot, epid, obs, has_obs = load_many([a.data, *a.extra_data])
@@ -97,11 +115,28 @@ def main():
     Fn = norm.apply(featurise(state, link_v2=True, control_echo=ck.get("control_echo", False)))
     T = {k: torch.from_numpy(v) for k, v in Fn.items()}
 
+    def Enc(i):
+        return enc.encode(T["link"][i], T["rows"][i], T["ids"][i], T["mask"][i])
+
     with torch.no_grad():
-        Z = torch.cat([enc.encode(T["link"][i:i + 8192], T["rows"][i:i + 8192],
-                                  T["ids"][i:i + 8192], T["mask"][i:i + 8192])
-                       for i in range(0, len(state), 8192)])
+        Zfix = torch.cat([enc.encode(T["link"][i:i + 8192], T["rows"][i:i + 8192],
+                                     T["ids"][i:i + 8192], T["mask"][i:i + 8192])
+                          for i in range(0, len(state), 8192)])
     A = F.one_hot(torch.from_numpy(act.astype(np.int64)).clamp(0, NA - 1), NA).float()
+    if not a.unfreeze:
+        for q in list(enc.parameters()) + list(dec.parameters()):
+            q.requires_grad_(False)
+
+    # With a frozen encoder the latents are constant, so precompute once (epochs drop to ~2s). Unfrozen, they
+    # move every step and must be recomputed; Zfix is then only the initial reference for reporting.
+    def Zt(i):
+        return Zfix[i] if not a.unfreeze else Enc(i)
+
+    def Ztarget(i):
+        if not a.unfreeze:
+            return Zfix[i]
+        with torch.no_grad():
+            return Enc(i)                      # STOP-GRADIENT target, as in JEPA
 
     test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
     K = a.stride
@@ -119,11 +154,33 @@ def main():
           f"| stride {K} | unroll {a.unroll} ({len(deep):,} starts)")
 
     pred = build_predictor(LAT, NA, factored=a.factored)
-    opt = torch.optim.Adam(pred.parameters(), lr=a.lr)
+    params = list(pred.parameters()) + ([] if not a.unfreeze else
+                                        list(enc.parameters()) + list(dec.parameters()))
+    opt = torch.optim.Adam(params, lr=a.lr)
+    RT = RewardTargets(state, obs, epid, scale=ck["decode_scale"])
+    print(f"w_abs {a.w_abs} | w_decpred {a.w_decpred} | w_recon "
+          f"{a.w_recon if a.unfreeze else 0.0} | encoder {'TRAINED' if a.unfreeze else 'frozen'}")
+
+    def jloss(zp, zt):
+        """L1 on layer-normalised targets (the paper) + an un-normalised L1 term (the scale fix).
+
+        DEVIATION, agreed before coding: the layer-normalised term alone is scale-invariant, so `M` is free to
+        inflate ||z|| without penalty. Our own section 4 table already had the un-normalised variant ahead of
+        pure JEPA (-1.37 vs -1.78), so this moves toward a measured result rather than away from one.
+        """
+        return F.l1_loss(ln(zp), ln(zt)) + a.w_abs * F.l1_loss(zp, zt)
 
     def step_loss(i):
-        zp = pred(torch.cat([Z[i], A[i]], -1))
-        return F.l1_loss(ln(zp), ln(Z[i + K]))               # L1 on layer-normalised targets
+        """Teacher forcing: the input is the REAL latent, one step. Kept alongside the free-running rollout
+        term below, as V-JEPA 2-AC Eq. 2-3 specifies -- both, not one or the other."""
+        z0 = Zt(i)
+        zp = pred(torch.cat([z0, A[i]], -1))
+        L = jloss(zp, Ztarget(i + K))
+        if a.w_decpred > 0:
+            L = L + a.w_decpred * RT.loss(dec(zp), i + K)     # the prediction must DECODE correctly
+        if a.unfreeze and a.w_recon > 0:
+            L = L + a.w_recon * RT.loss(dec(z0), i)           # and the encoder must not drift off stage 1
+        return L
 
     for ep in range(a.epochs):
         pred.train()
@@ -134,11 +191,13 @@ def main():
             loss = step_loss(i)
             if a.unroll > 1 and a.w_roll > 0:
                 zi = torch.from_numpy(rng.choice(deep, min(a.unroll_batch, len(deep)), replace=False))
-                zz, rl, wsum = Z[zi], torch.zeros(()), 0.0
+                zz, rl, wsum = Zt(zi), torch.zeros(()), 0.0
                 for j in range(a.unroll):
                     zz = pred(torch.cat([zz, A[zi + j * K]], -1))
                     w = a.unroll_decay ** j
-                    rl = rl + w * F.l1_loss(ln(zz), ln(Z[zi + (j + 1) * K]))
+                    rl = rl + w * jloss(zz, Ztarget(zi + (j + 1) * K))
+                    if a.w_decpred > 0:
+                        rl = rl + w * a.w_decpred * RT.loss(dec(zz), zi + (j + 1) * K)
                     wsum += w
                 loss = loss + a.w_roll * rl / max(wsum, 1e-9)
             opt.zero_grad(); loss.backward()
@@ -148,18 +207,19 @@ def main():
         pred.eval()
         with torch.no_grad():
             iu = torch.from_numpy(tu)
-            zp = pred(torch.cat([Z[iu], A[iu]], -1))
-            pm = float(F.l1_loss(ln(zp), ln(Z[iu + K])))
-            im = float(F.l1_loss(ln(Z[iu]), ln(Z[iu + K])))
+            zp = pred(torch.cat([Ztarget(iu), A[iu]], -1))
+            pm = float(jloss(zp, Ztarget(iu + K)))
+            im = float(jloss(Ztarget(iu), Ztarget(iu + K)))
         print(f"  ep {ep+1:>3}/{a.epochs}  train {tl/nb:.5f} | tune {pm:.5f} identity {im:.5f} "
               f"skill {1-pm/max(im,1e-9):+.3f}  ({time.time()-t0:.0f}s)")
 
     # ---------------------------------------------------------------- 1. skill, both metrics
     with torch.no_grad():
         it = torch.from_numpy(te)
-        zp = pred(torch.cat([Z[it], A[it]], -1))
-        s_ln = 1 - float(F.l1_loss(ln(zp), ln(Z[it + K]))) / max(float(F.l1_loss(ln(Z[it]), ln(Z[it + K]))), 1e-9)
-        s_mse = 1 - float(F.mse_loss(zp, Z[it + K])) / max(float(F.mse_loss(Z[it], Z[it + K])), 1e-9)
+        Zi, Zn = Ztarget(it), Ztarget(it + K)
+        zp = pred(torch.cat([Zi, A[it]], -1))
+        s_ln = 1 - float(F.l1_loss(ln(zp), ln(Zn))) / max(float(F.l1_loss(ln(Zi), ln(Zn))), 1e-9)
+        s_mse = 1 - float(F.mse_loss(zp, Zn)) / max(float(F.mse_loss(Zi, Zn)), 1e-9)
     print(f"\n=== 1. SKILL on held-out slots ===\n  L1/layer-norm {s_ln:+.4f}   raw MSE {s_mse:+.4f}"
           f"   (0 = identical to 'assume no change')")
 
@@ -172,7 +232,7 @@ def main():
         Y[k] = ((Y[k] - np.asarray(mu)) / np.asarray(sd)).astype(np.float32)
     print("\n=== 2. DECODE OF THE PREDICTED LATENT vs of the real one (frozen stage-1 decoder) ===")
     with torch.no_grad():
-        dp, dr = dec(zp), dec(Z[it + K])
+        dp, dr = dec(zp), dec(Zn)
         tgt = it.numpy() + K
         m = torch.from_numpy(Y["row_present"][tgt]) > 0.5
         mb = torch.from_numpy(Y["row_is_baba"][tgt]) > 0.5
@@ -214,7 +274,7 @@ def main():
     print(f"\n=== 3. GROUND-TRUTH ROLLOUT from {len(starts)} real {where} start frames (world units, XZ) ===")
     print(f"  {'H':>5}{'do-nothing':>12}{'JEPA rollout':>14}{'true moved':>12}{'|z|':>8}")
     with torch.no_grad():
-        zr = Z[torch.from_numpy(starts)].clone()
+        zr = Ztarget(torch.from_numpy(starts)).clone()
         for t in range(H):
             oh = A[torch.from_numpy(starts + t)]
             zr = pred(torch.cat([zr, oh], -1))
@@ -225,6 +285,16 @@ def main():
                 mv = np.linalg.norm(truth[t + 1][:, [0, 2]] - start_pos[:, [0, 2]], axis=1).mean()
                 print(f"  {t+1:>5}{e_0:>12.1f}{e_m:>14.1f}{mv:>12.1f}{float(zr.norm(dim=-1).mean()):>8.1f}")
 
+    # ------------------------------------------- 5. collapse, which only matters once the encoder can move
+    with torch.no_grad():
+        zc = Zi - Zi.mean(0, keepdim=True)
+        ev = torch.linalg.eigvalsh(((zc.T @ zc) / max(len(zc) - 1, 1)).double()).clamp(min=1e-12)
+        pv = ev / ev.sum()
+        erank = float(torch.exp(-(pv * pv.log()).sum()))
+        mr = float((Zn - Zi).abs().mean()) / max(float((Zi - Zi[torch.randperm(len(Zi))]).abs().mean()), 1e-9)
+    print(f"\n=== 5. COLLAPSE (encoder {'TRAINED' if a.unfreeze else 'frozen'}) ===")
+    print(f"  effective rank {erank:.1f}/{LAT} | move/rand {mr:.3f} | stage 1 was 8.5/128 and 0.049")
+
     # ---------------------------------------------------------------- 4. inverse dynamics
     probe = nn.Sequential(nn.Linear(LAT * 3, 512), nn.ReLU(), nn.Linear(512, 512), nn.ReLU(),
                           nn.Linear(512, NA))
@@ -232,7 +302,9 @@ def main():
     av = torch.from_numpy(act.astype(np.int64)).clamp(0, NA - 1)
 
     def pair(i):
-        return torch.cat([Z[i], Z[i + K], Z[i + K] - Z[i]], -1)
+        with torch.no_grad():
+            z0, z1 = Ztarget(i), Ztarget(i + K)
+        return torch.cat([z0, z1, z1 - z0], -1)
 
     for _ in range(3):
         pp = rng.permutation(tr)
@@ -248,8 +320,14 @@ def main():
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"pred": pred.state_dict(), "pred_residual": True, "pred_factored": a.factored,
                 "enc_from": a.enc, "latent": LAT, "n_actions": NA, "stride": K,
-                "config": vars(a),
-                "metrics": {"skill_ln": s_ln, "skill_mse": s_mse, "inverse_top1": t1}}, a.out)
+                "w_abs": a.w_abs, "w_decpred": a.w_decpred, "unfreeze": a.unfreeze,
+                "encoder": enc.state_dict(), "decoder": dec.state_dict(), "norm": norm.state_dict(),
+                "split": split, "link_dim": ck["link_dim"], "row_dim": ck["row_dim"],
+                "decode_scale": RT.scale, "reward_only": True, "control_echo": ck.get("control_echo", False),
+                "enc_out": ck.get("enc_out", "ln"), "enc_shallow": ck.get("enc_shallow", False),
+                "enc_kind": ck.get("enc_kind", "mlp"), "config": vars(a),
+                "metrics": {"skill_ln": s_ln, "skill_mse": s_mse, "inverse_top1": t1,
+                            "effective_rank": erank, "move_ratio": mr}}, a.out)
     print(f"\n-> {a.out}")
 
 

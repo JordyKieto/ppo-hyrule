@@ -684,6 +684,20 @@ V2_BODY = ("link_speed", "link_wall_yaw", "link_floor_dy", "link_shape_yaw", "li
 V2_BODY_SPLIT = (1, 2, 1, 2, 2, 1, 1, 1)
 
 
+def transition_frames(y: np.ndarray, ep: np.ndarray) -> np.ndarray:
+    """Frames on either side of a change in `y`, within an episode. Shape follows y (frames, ...).
+
+    Lived in scripts/train_bc_decode.py; moved here because zelda_rl.reward_decode needs it and a library
+    importing from scripts/ is backwards. That module still re-exports it, so every existing importer works.
+    """
+    same = ep[1:] == ep[:-1]
+    ch = np.zeros_like(y, dtype=bool)
+    d = (y[1:] != y[:-1]) & same.reshape(-1, *([1] * (y.ndim - 1)))
+    ch[:-1] |= d
+    ch[1:] |= d
+    return ch
+
+
 def hp_class(v: np.ndarray, values) -> np.ndarray:
     """Nearest-value class index. HP is discrete, so it is decoded by classification, never regression:
     a regressed HP rounded to an integer turns numeric jitter into fabricated damage events."""

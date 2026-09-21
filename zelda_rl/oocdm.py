@@ -281,8 +281,16 @@ class Packed:
         return self
 
 
-def pack(episodes: Sequence[tuple[np.ndarray, np.ndarray]], schema: Schema = SCHEMA_V3) -> Packed:
-    """[(state (T, width), action (T,))] -> Packed. Capacity per class is measured, then asserted."""
+def pack(episodes: Sequence[tuple[np.ndarray, np.ndarray]], schema: Schema = SCHEMA_V3,
+         shuffle_classes: int | None = None) -> Packed:
+    """[(state (T, width), action (T,))] -> Packed. Capacity per class is measured, then asserted.
+
+    `shuffle_classes` is P3's control on the paper's own premise (docs 17.5). OOCDM exists because instances
+    of a class share dynamics; if that is doing no work here, then dealing the SAME objects into the SAME
+    class sizes AT RANDOM -- so `En_Dekubaba` holds a mix of Baba, Skulltula and Skullwalltula -- should score
+    the same. Sizes and object count are preserved exactly, so the only thing that changes is which instances
+    share a transition function. The paper does not run this control.
+    """
     decomposed = []
     cap: dict[str, int] = {c.name: 0 for c in schema.classes}
     from zelda_rl.oomdp import decompose
@@ -295,7 +303,28 @@ def pack(episodes: Sequence[tuple[np.ndarray, np.ndarray]], schema: Schema = SCH
     attrs: dict[str, dict[str, list]] = {c.name: {} for c in schema.classes}
     masks: dict[str, list] = {c.name: [] for c in schema.classes}
     pairs, eps, off = [], [], 0
+    row_classes = [c.name for c in schema.classes if c.block == "row"]
     for ep, g in enumerate(decomposed):
+        if shuffle_classes is not None:
+            # Redeal every actor object across the row classes at random, keeping each class's object count
+            # identical. Same objects, same sizes, different grouping.
+            rng = np.random.default_rng(shuffle_classes * 100003 + ep)
+            pool = [(cn, j) for cn in row_classes if cn in g for j in range(g[cn].n_obj)]
+            order = rng.permutation(len(pool))
+            k, redealt = 0, {}
+            for cn in row_classes:
+                if cn not in g:
+                    continue
+                n = g[cn].n_obj
+                picks = [pool[order[k + i]] for i in range(n)]
+                k += n
+                src = g[cn]
+                redealt[cn] = ObjectGroup(
+                    src.cls, [f"mix{i:02d}" for i in range(n)],
+                    {f: np.stack([g[pc].attrs[f][:, pj] for pc, pj in picks], 1) for f in src.attrs},
+                    np.stack([g[pc].mask[:, pj] for pc, pj in picks], 1))
+            g = {**g, **redealt}
+            decomposed[ep] = g
         T = len(next(iter(g.values())).mask)
         pairs.append(off + np.arange(T - 1))
         eps.append(np.full(T, ep, np.int64))
@@ -307,8 +336,9 @@ def pack(episodes: Sequence[tuple[np.ndarray, np.ndarray]], schema: Schema = SCH
                 m[:, : grp.n_obj] = grp.mask
             masks[c.name].append(m)
             for f in c.fields:
-                if f.role == "action" and c.name != "Link":
-                    continue
+                # Every action field is packed: action-role only means "never a prediction target"
+                # (targets come from state_fields()), it does not mean "not an input". This used to say
+                # `and c.name != "Controller"`, which silently dropped En_Dekubaba.noise.
                 size = 2 if f.name == "stick" else f.vtype.size
                 a = np.zeros((T, n, size), np.float32)
                 if grp is not None and f.name in grp.attrs:
@@ -377,7 +407,7 @@ class OOCGraph:
             self.global_matrix[J, self.gin[(cn, fn)]] = True
 
     def local_mask(self, cls: str, device) -> torch.Tensor:
-        return torch.as_tensor(self.local[cls], dtype=torch.bool, device=device)
+        return torch.as_tensor(self.local[cls], dtype=torch.bool, device=device)   # (0, n_f) if parent-only
 
     def global_mask(self, cls: str, device) -> torch.Tensor:
         """(n_out_total, n_field_of_this_class) -- the columns of the global matrix this class supplies."""
@@ -571,11 +601,19 @@ class ClassModule(nn.Module):
                  d_k: int, d_v: int, d_dec: int):
         super().__init__()
         self.cls_name, self.fields, self.targets = cls.name, list(fields), list(targets)
-        self.embed = HeteroEmbed([codecs[f].input_dim if f in codecs else 2 if f == "stick" else 1
+        # A codec-less field (action role) is fed raw, so its width is the width the SCHEMA declares --
+        # read from the definition, never hand-counted. This used to be `2 if f == "stick" else 1`, which
+        # silently truncated any action field wider than 1 the moment one existed (noise, size 4).
+        self.embed = HeteroEmbed([codecs[f].input_dim if f in codecs else cls.field(f).vtype.size
                                   for f in self.fields], d)
         n_f, n_t = len(self.fields), len(self.targets)
-        self.f_local = MaskedFieldLinear(n_t, n_f, d, d_h)
+        # Controller is PARENT-ONLY: 8 action fields, no state fields, so nothing predicts it. It still needs
+        # a global encoding so other classes can attend to it, but no local path, no queries and no heads.
         self.f_global = MaskedFieldLinear(n_out_total, n_f, d, d_g)
+        self.parent_only = n_t == 0
+        if self.parent_only:
+            return
+        self.f_local = MaskedFieldLinear(n_t, n_f, d, d_h)
         self.fq, self.fk, self.fv = MultiLinear(n_t, d_h, d_k), MultiLinear(n_t, d_g, d_k), \
             MultiLinear(n_t, d_g, d_v)
         self.dec1, self.dec2 = MultiLinear(n_t, d_h + d_v, d_dec), MultiLinear(n_t, d_dec, d_dec)
@@ -587,8 +625,10 @@ class ClassModule(nn.Module):
 
     def encode(self, xs: Sequence[torch.Tensor], local_mask: torch.Tensor, global_mask: torch.Tensor):
         x = self.embed(xs)                                              # (B, n_obj, n_field, d)
-        return (Fn.leaky_relu(self.f_local(x, local_mask)),             # (B, n_obj, n_t, d_h)
-                Fn.leaky_relu(self.f_global(x, global_mask)))           # (B, n_obj, n_out_total, d_g)
+        gl = Fn.leaky_relu(self.f_global(x, global_mask))               # (B, n_obj, n_out_total, d_g)
+        if self.parent_only:
+            return None, gl
+        return Fn.leaky_relu(self.f_local(x, local_mask)), gl
 
 
 class OOCDM(nn.Module):
@@ -611,15 +651,16 @@ class OOCDM(nn.Module):
         self.order = [c for c in schema.classes if capacity.get(c.name, 0) > 0]
         self.field_names, self.target_names = {}, {}
         for c in self.order:
-            self.field_names[c.name] = [f.name for f in c.fields
-                                        if f.name in codecs[c.name] or f.role == "action"]
+            cd = codecs.get(c.name, {})            # a parent-only class has no state fields, so no codecs
+            self.field_names[c.name] = [f.name for f in c.fields if f.name in cd or f.role == "action"]
             self.target_names[c.name] = (list(targets[c.name]) if targets else
-                                         [f.name for f in c.state_fields() if f.name in codecs[c.name]])
+                                         [f.name for f in c.state_fields() if f.name in cd])
         self.graph = graph or OOCGraph(self.order, self.field_names, self.target_names, full=True)
         n_out_total = self.graph.n_out
         self.mods = nn.ModuleDict({
-            c.name: ClassModule(c, codecs[c.name], self.field_names[c.name], self.target_names[c.name],
-                                n_out_total, d, d_h, d_g, d_k, d_v, d_dec) for c in self.order})
+            c.name: ClassModule(c, codecs.get(c.name, {}), self.field_names[c.name],
+                                self.target_names[c.name], n_out_total, d, d_h, d_g, d_k, d_v, d_dec)
+            for c in self.order})
         self.log_scale = nn.ParameterDict({
             f"{c.name}|{t}": nn.Parameter(torch.zeros(codecs[c.name][t].n_out))
             for c in self.order for t in self.target_names[c.name]
@@ -640,7 +681,8 @@ class OOCDM(nn.Module):
             m = self.mods[c.name]
             l, gl = m.encode([batch["x"][c.name][f] for f in self.field_names[c.name]],
                              mg.local(c.name, bsz, dev), mg.glob(c.name, bsz, dev))
-            local[c.name] = l
+            if l is not None:
+                local[c.name] = l
             glob.append(gl)                                    # (B, n_obj_c, n_out_total, d_g)
             obj_mask.append(batch["mask"][c.name])
         G = torch.cat(glob, 1)                                 # (B, n_obj_all, n_out_total, d_g)
@@ -649,6 +691,9 @@ class OOCDM(nn.Module):
         out, base = {}, 0
         for c in self.order:
             m, n_obj = self.mods[c.name], self.capacity[c.name]
+            if m.parent_only:                                  # Controller: a parent, never a target
+                base += n_obj
+                continue
             cols = [self.graph.gout[(c.name, t)] for t in self.target_names[c.name]]
             Gc = G[:, :, cols, :]                              # (B, n_obj_all, n_t, d_g)
             q = m.fq(local[c.name])                            # (B, n_obj_c, n_t, d_k)
@@ -703,12 +748,13 @@ def make_batch(p: Packed, codecs: dict[str, dict[str, FieldCodec]], model: "OOCD
         here, there = m[t], m[t + 1]
         mask[cn] = T(here, torch.bool)
         x[cn], raw[cn], y[cn], valid[cn] = {}, {}, {}, {}
+        cds = codecs.get(cn, {})          # parent-only classes (Controller) have no codecs
         for f in model.field_names[cn]:
-            cod = codecs[cn].get(f)
+            cod = cds.get(f)
             v = at[f][t]
             x[cn][f] = T(cod.encode_input(v) if cod is not None else v)
         for tgt in model.target_names[cn]:
-            cod, fld = codecs[cn][tgt], c.field(tgt)
+            cod, fld = cds[tgt], c.field(tgt)
             cur, nxt = at[tgt][t], at[tgt][t + 1]
             raw[cn][tgt] = T(cur)
             tv = cod.target(cur, nxt)
@@ -860,8 +906,36 @@ def field_logprob(model: "OOCDM", out: dict, batch: dict) -> dict[str, np.ndarra
 @torch.no_grad()
 def discover_graph(model: "OOCDM", p: Packed, codecs, device, threshold: float = 0.1,
                    n_batches: int = 4, batch_size: int = 128, seed: int = 0,
-                   verbose: bool = False) -> tuple["OOCGraph", dict]:
-    """One pass of the paper's causal discovery. Returns (graph, {edge: cmi})."""
+                   verbose: bool = False, keep_actions: bool = True,
+                   action_targets: Sequence[str] = ("Link", "Camera")) -> tuple["OOCGraph", dict]:
+    """One pass of the paper's causal discovery. Returns (graph, {edge: cmi}).
+
+    `keep_actions` forces every edge whose PARENT is an action field to stay in the graph, whatever its CMI.
+    NOT in Yu et al. -- it is prior knowledge, and it is here because CMI provably cannot find these edges
+    on this environment:
+
+    1. OoT is SECOND-ORDER. The stick sets acceleration, velocity follows, position follows velocity. Since
+       `pos_{t+1} ~= pos_t + vel_t`, the stick adds almost nothing GIVEN velocity for a single step -- and
+       "what does this parent add given the others" is exactly what CMI measures. The paper's environments
+       are first-order (`mouse.position += move`), so their action edges are trivially detectable. Measured:
+       the commanded direction sits 66 deg from the real displacement over one 10 Hz step.
+
+    2. CMI measures what the model ALREADY RELIES ON. A field the model has not learned to predict yields
+       ~0 CMI for every parent, so all its parents are pruned, so it can never learn. Seen directly: in
+       runs/ctrl-reframe, `Link.vel'` came back with NO parents at all, not even its own previous value, and
+       `Link.pos'` then integrates a velocity that nothing can change -- which is precisely the benchmark's
+       coasting dream (7.4% of real travel, steps of 0.2-1.3 units where the real ones are 14-25).
+
+    The justification is that controllability is a REQUIREMENT of a world model, not a quantity to be traded
+    for likelihood. A dream that ignores the controller can score well -- most of the time Link is roughly
+    where he was -- and still be useless, because an agent cannot learn anything by acting inside it.
+
+    `action_targets` scopes WHICH classes an action may reach, and it is not a detail. The first version
+    exempted every action onto every target -- 8 x 77 = 616 edges -- which forced in nonsense like
+    `btn_R -> En_Sw.yaw'` (the shield button rotating a Skullwalltula, an entity that never moves at all).
+    The controller commands LINK and the CAMERA; everything else in the room is affected THROUGH Link, and
+    those paths are ordinary edges that CMI is free to discover or prune on the evidence. 8 x (30 + 3) = 264.
+    """
     model.eval()
     idx = np.random.default_rng(seed).permutation(p.pairs)[: n_batches * batch_size]
     chunks = [idx[i: i + batch_size] for i in range(0, len(idx), batch_size)]
@@ -901,6 +975,29 @@ def discover_graph(model: "OOCDM", p: Packed, codecs, device, threshold: float =
                 if cmi > threshold:
                     out.local[c.name][model.target_names[c.name].index(t),
                                       model.field_names[c.name].index(f)] = True
+    if keep_actions:
+        # EXOGENOUS CONTROLLERS ONLY -- a class with action fields and NO state fields of its own, which is
+        # the Controller and nothing else. Selecting on `role == "action"` alone is wrong now that the enemy
+        # classes carry a `noise` action field: that selector would force En_Dekubaba.noise -> Link.pos',
+        # i.e. wire a random number straight into Link's position and protect it from pruning. Noise gets no
+        # exemption. It is uninformative by construction, so CMI pruning it is the CORRECT answer, not the
+        # deadlock the exemption exists to break.
+        exo = [c for c in model.order if any(f.role == "action" for f in c.fields)
+               and not any(f.role == "state" for f in c.fields)]
+        act = [(c.name, f.name) for c in exo for f in c.fields if f.role == "action"]
+        tgt_rows = [J for (tc, tf), J in out.gout.items() if tc in action_targets]
+        forced = 0
+        for cn, fn in act:
+            if (cn, fn) not in out.gin:
+                continue
+            I = out.gin[(cn, fn)]
+            for J in tgt_rows:                                     # only the classes the controller commands
+                out.global_matrix[J, I] = True
+            forced += len(tgt_rows)
+            if cn in action_targets and cn in out.local and fn in out.field_names[cn]:
+                out.local[cn][:, out.field_names[cn].index(fn)] = True
+                forced += out.local[cn].shape[0]
+        cmis["_forced_action_edges"] = float(forced)
     model.train()
     return out, cmis
 

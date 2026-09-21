@@ -62,6 +62,7 @@ Role = Literal["state", "action"]
 Kind = Literal["real", "angle", "count", "categorical", "bits", "boolean"]
 
 TURNS = 65536.0          # OoT binary angle unit (s16 covers one full turn)
+NOISE_DIM = 4            # width of the per-actor stochastic latent (paper: Mouse's Monster has DIM_NOISE)
 
 
 # --------------------------------------------------------------------------------------------------------
@@ -207,17 +208,24 @@ LINK = ObjClass("Link", "link", (
     Field("door_type", Categorical(), cols=("door_type",)),
     Field("door_direction", Categorical(), cols=("door_direction",)),
     Field("door_timer", Count(), cols=("door_timer",)),
-    # --- ACTION: what the agent commanded. Inputs only. Sourced from the action index, not from the state,
-    #     so there is no column for them and no way for them to leak into a target.
+), note="one instance. PURE STATE: the controller is its own object, see CONTROLLER.")
+
+CONTROLLER = ObjClass("Controller", "link", (
     Field("stick", Real(2, "unit vector", "world-relative stick direction"), role="action"),
     Field("stick_none", Boolean("neutral stick"), role="action"),
-    Field("btn_A", Boolean(), role="action"),
-    Field("btn_B", Boolean(), role="action"),
-    Field("btn_Z", Boolean(), role="action"),
-    Field("btn_R", Boolean(), role="action"),
+    Field("btn_A", Boolean("roll / talk"), role="action"),
+    Field("btn_B", Boolean("sword"), role="action"),
+    Field("btn_Z", Boolean("Z-target"), role="action"),
+    Field("btn_R", Boolean("shield"), role="action"),
     Field("btn_slingshot", Boolean(), role="action"),
     Field("btn_nut", Boolean(), role="action"),
-), note="one instance.")
+), note="one instance. The CONTROLLER as an object in its own right: it holds every command the agent "
+        "issues, and Link is pure state that the controller acts on. It has NO state fields -- nothing "
+        "predicts the controller, it is exogenous -- so it never appears as a target, only as a parent. "
+        "Every action->state link is therefore a GLOBAL edge `Controller.X -> Link.Y'`, which is the "
+        "paper's Cl.U -> Ck.V' form. Previously these eight fields were action-role fields ON Link, which "
+        "is what Yu et al. do (c_mouse.declear_field('move', role='action')); this splits them out so the "
+        "command channel is a first-class entity.")
 
 # Row block. `id` and `cat` are the CLASS DISCRIMINATOR (which class an object belongs to), not fields:
 # the paper takes class membership as given prior knowledge (section 3.2).
@@ -239,6 +247,17 @@ ACTOR_FIELDS: tuple[Field, ...] = (
     # paper's Assumption 4.1; as a per-actor boolean it is.
     Field("is_targeted", Boolean("Link's targeted_row == this row"), cols=()),
     Field("has_arrow", Boolean("Link's arrow_row == this row (Navi's attention arrow)"), cols=()),
+    # A Deku Baba DECIDES to lunge. That decision is driven by engine state we cannot read -- the actor's
+    # RNG and its exact animation frame -- so the behaviour is genuinely stochastic from our side. The paper
+    # models exactly this: `c_monster.declear_field('noise', Normal(DIM_NOISE))` gives the Mouse env's
+    # Monster, which hunts and therefore acts, a stochastic latent instead of an action field. Only units the
+    # AGENT controls get actions there (c_mouse.move, c_marine.action); enemies never do, because an action
+    # is something you SUPPLY at inference and a dream that is told the enemy's next move is useless.
+    #
+    # DEVIATION, recorded: the paper's noise is OBSERVED state it generates. Ours is not readable from RAM,
+    # so it is declared role='action' -- exogenous, sampled per step, never a prediction target. That gives
+    # the actor a stochastic driver without inventing a target we have no ground truth for.
+    Field("noise", Real(NOISE_DIM, "", "unobserved decision driver, sampled per step"), role="action"),
 )
 
 # Actor id -> class, read from the decompilation's own /* 0xNNNN */ comments in include/tables/actor_table.h.
@@ -285,7 +304,7 @@ class Schema:
         return {"local": local, "global": glob, "total": local + glob}
 
 
-SCHEMA_V3 = Schema((LINK, CAMERA, ROOM), ACTOR_CLASSES)
+SCHEMA_V3 = Schema((LINK, CONTROLLER, CAMERA, ROOM), ACTOR_CLASSES)
 
 
 # --------------------------------------------------------------------------------------------------------
@@ -360,7 +379,7 @@ class ObjectGroup:
 
 
 def decompose(state: np.ndarray, actions: np.ndarray | None = None,
-              schema: Schema = SCHEMA_V3) -> dict[str, ObjectGroup]:
+              schema: Schema = SCHEMA_V3, noise_seed: int = 0) -> dict[str, ObjectGroup]:
     """(T, width) flat state [+ (T,) action indices] -> {class name: ObjectGroup}.
 
     Actions are attached to Link as `role='action'` fields via `dynamics.factor_actions`, so the stick
@@ -391,10 +410,11 @@ def decompose(state: np.ndarray, actions: np.ndarray | None = None,
         assert len(a) == T, f"{len(a)} actions for {T} states"
         fa = factor_actions(N_COMBAT_ACTIONS_V5)[a]                               # (T, FACTORED_DIM)
         col = {n: i for i, n in enumerate(FACTORED_NAMES)}
-        g = out[LINK.name]
-        for f in LINK.action_fields():
+        attrs = {}
+        for f in CONTROLLER.action_fields():
             names = ("stick_x", "stick_z") if f.name == "stick" else (f.name,)
-            g.attrs[f.name] = fa[:, [col[n] for n in names]][:, None, :]
+            attrs[f.name] = fa[:, [col[n] for n in names]][:, None, :]
+        out[CONTROLLER.name] = ObjectGroup(CONTROLLER, ["controller"], attrs, np.ones((T, 1), bool))
 
     # --- actor classes out of the row block --------------------------------------------------------------
     present = rb[:, :, RIdx["present"]] > 0.5
@@ -422,6 +442,10 @@ def decompose(state: np.ndarray, actions: np.ndarray | None = None,
         slot_arr = np.asarray(slots)[None, :]
         attrs["is_targeted"] = (tgt[:, None] == slot_arr).astype(np.float32)[:, :, None]
         attrs["has_arrow"] = (arw[:, None] == slot_arr).astype(np.float32)[:, :, None]
+        # Sampled, not read: seeded per (episode, slot) so a given transition always gets the same draw and
+        # evaluation is reproducible. At rollout time a fresh draw makes the dream genuinely stochastic.
+        rs = np.random.default_rng(abs(hash((noise_seed, cname, tuple(slots)))) % (2 ** 32))
+        attrs["noise"] = rs.standard_normal((T, len(slots), NOISE_DIM)).astype(np.float32)
         out[cname] = ObjectGroup(c, [f"row{s:02d}" for s in slots], attrs, present[:, slots])
     return out
 

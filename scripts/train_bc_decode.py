@@ -105,14 +105,7 @@ def load(data_dir: Path):
     return (meta, np.concatenate(S), np.concatenate(act), np.concatenate(slot), np.concatenate(ep))
 
 
-def transition_frames(y: np.ndarray, ep: np.ndarray) -> np.ndarray:
-    """Frames on either side of a change in `y`, within an episode. Shape follows y (frames, ...)."""
-    same = ep[1:] == ep[:-1]
-    ch = np.zeros_like(y, dtype=bool)
-    d = (y[1:] != y[:-1]) & same.reshape(-1, *([1] * (y.ndim - 1)))
-    ch[:-1] |= d
-    ch[1:] |= d
-    return ch
+from zelda_rl.bc import transition_frames  # noqa: E402,F401  (moved to the library; re-exported here)
 
 
 def main():
