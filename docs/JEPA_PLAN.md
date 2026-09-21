@@ -159,3 +159,52 @@ gradient contribution, and BC top-1 is only 2.3–3.0× chance. This is closer t
 than to "BC + reconstruction". **If stage 2 shows this is a poor predictive surface, behaviour-cloning pressure
 is the lever to raise** — that is the documented reason BC was in the loss at all (§7: the exit episodes, which
 are consistent directional walking, moved action-recoverability 0.059 → 0.139, more than any architecture change).
+
+## Stage 2 result: FALSIFIED as written. The lever is now behaviour-cloning pressure.
+
+Four arms, each adding one thing, then 3 seeds of the best. Ground-truth rollout, world units, 50 held-out
+start frames, real action sequences (`AGENTS.md` §8):
+
+| arm | H=10 | H=40 | H=100 | ‖z‖@100 |
+|---|---|---|---|---|
+| do-nothing control | 75.1 | 106.5 | 161.6 | — |
+| pure JEPA (the paper's loss) | 232.4 | 38,601 | 6.8×10⁹ | 2.2×10¹¹ |
+| + un-normalised L1 term | 95.0 | 166.0 | 309.3 | 13.9 |
+| + decode pressure on the predicted latent | 80.0 | 147.3 | 261.3 | 16.4 |
+| + unfrozen encoder | 77.4 | 126.5 | 238.6 | 12.3 |
+| + real-latent reconstruction, seed 0 | 70.2 | 136.6 | 219.1 | 13.6 |
+| the same, seeds 1 / 2 | 75.3 / 76.8 | 127.2 / 146.6 | 230.8 / 233.0 | — |
+
+**Two findings that hold.**
+
+1. **The paper's loss cannot be used autoregressively here, for a mechanical reason.** `L1(layer_norm(z_pred),
+   layer_norm(z_target))` is *exactly* scale-invariant — verified by scaling a prediction 1×/2×/10×/1000× and
+   getting a bit-identical loss. Nothing bounds ‖z‖, so a residual predictor inflates 1.03× per step on
+   in-distribution inputs and accelerates once the rollout leaves the training range: ‖z‖ reached 2.2×10¹¹ and
+   position error 6.8×10⁹ world units by H=100. One un-normalised L1 term fixes it (7 orders of magnitude), and
+   this is not seed-sensitive.
+2. **Unfreezing the encoder requires keeping stage 1's reconstruction on the REAL latent.** With only the
+   predicted latent pressured to decode, the encoder drifts off stage 1: `near_dist` went 17.5 → 35.2 world
+   units. `--w-recon` restores it (18.2–25.0 across seeds).
+
+**What is falsified.** The plan's bar was "skill ≤ 0 against the identity ⇒ falsified". Skill is negative in
+every arm (best raw-MSE −0.267, and it got *worse* as the rollout got better, which is one more reason §2 exists).
+On the barometer the best configuration merely **ties** do-nothing at H=10 across seeds and is clearly worse at
+H=40 and H=100. Stage 3 does not start.
+
+**A claim retracted in the same session it was made**: "first rollout to beat the do-nothing control" was seed 0
+(70.2 vs 75.1). Seeds 1 and 2 give 75.3 and 76.8. It does not replicate — the §25 / rule-7 pattern again.
+
+**Collapse got worse, consistently.** Effective rank 7.0–7.4 of 128 across the three seeds against stage 1's
+8.5, and `move/rand` 0.037–0.039 against 0.049. Unfreezing costs latent rank even with stop-gradient targets.
+
+**So the lever is behaviour-cloning pressure, as called before stage 2 ran.** Stage 2's objective is no longer
+the bottleneck — the scale bug is fixed and decode pressure is in — and the surface is still not good enough.
+Stage 1 ran at `w_bc 0.05`, where reconstruction outweighed BC **33×** and BC top-1 reached only 2.3–3.0×
+chance. Inverse dynamics is 0.071–0.078 against a 0.220 ceiling, i.e. the transition still carries little of
+what the action did, which is precisely what BC pressure is supposed to supply. It should also raise the latent
+rank, since distinguishing states well enough to choose an action needs more than 7 dimensions.
+
+Next: sweep `w_bc` upward in stage 1 (0.05 → 0.5 → 2 → 10), and for each, report BC top-1, effective rank, the
+reward-field reconstruction (which must not regress) and stage 2's rollout. Reconstruction quality and action
+legibility are the two axes, and the sweep is looking for the knee.
