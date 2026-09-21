@@ -208,3 +208,53 @@ rank, since distinguishing states well enough to choose an action needs more tha
 Next: sweep `w_bc` upward in stage 1 (0.05 → 0.5 → 2 → 10), and for each, report BC top-1, effective rank, the
 reward-field reconstruction (which must not regress) and stage 2's rollout. Reconstruction quality and action
 legibility are the two axes, and the sweep is looking for the knee.
+
+## Pure JEPA (reconstruction pinned): it does NOT collapse, and it does NOT keep the state
+
+Encoder trained from scratch by the predictive objective ALONE -- no reconstruction, no BC. EMA target encoder
+with a stop-gradient (I-JEPA App. A), L1 on layer-normalised targets, teacher forcing plus a rollout term,
+stride 1. Deliberately no un-normalised term: that fix was needed for a FROZEN encoder, and with a trainable
+one `L1(z_hat, z_target)` is minimised by driving both to zero, i.e. it pays for collapse.
+
+**It did not collapse, and it is the LEAST collapsed latent measured in this project.**
+
+| epoch | train | tune | skill | std | min std | eff. rank | ‖z‖ | move/rand |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.1996 | 0.0441 | −0.446 | 0.4504 | 0.2012 | 10.7 | 11.32 | 0.062 |
+| 6 | 0.1541 | 0.0853 | −2.170 | 0.4466 | 0.1989 | 10.2 | 11.32 | 0.055 |
+
+Effective rank 10.2–10.7 against stage 1's 8.5 and stage 2's 7.4; no dead dimensions (min std 0.199); ‖z‖ dead
+stable at 11.32. So EMA + stop-gradient is sufficient here and the "encoder predicts zero" failure did not
+occur. Note the inverse relationship this exposes: **reconstruction pressure is what LOWERS the rank.**
+
+**But the state is not readable out of it.** Freeze the encoder, fit a reward-field decoder on top (post-hoc,
+no gradient to the encoder, as DINO-WM asks), against a control that does exactly the same on an UNTRAINED
+encoder's latent:
+
+| field | JEPA-trained | untrained control | stage 1 (reconstruction) |
+|---|---|---|---|
+| link_hp | 0.786 | **0.862** | 0.896–0.947 |
+| baba_count | 0.936 | **0.986** | 0.954–0.991 |
+| row_state | 0.966 | **0.970** | 0.994 |
+| targeted | 0.9986 | **0.9989** | 0.9996–1.0 |
+| link_pos | 35.1 | **29.0** | **9–11** |
+| row_pos | 18.3 | **17.8** | 12–20 |
+| row_hp | **0.902** | 0.899 | 0.899–0.903 |
+| near_dist | **48.0** | 53.6 | 17–35 |
+| row_dist | **34.9** | 38.0 | — |
+
+**The predictive objective is worse than random initialisation on 7 of 10 reward fields**, and 3–4× worse than
+reconstruction on Link's position (35.1 vs 9–11 world units). It does not merely fail to add state information;
+relative to a random projection it actively destroys it.
+
+So the answer to "can we encode the latent into the right state" under pure JEPA is **no**. Prediction alone has
+no reason to keep HP, position or counts -- they are exactly the quantities that are hard to predict, so an
+objective that only rewards predictability is better off discarding them. That is the same overfitting curve as
+every other arm (best tune at epoch 1, train falling while tune doubles), and the same identity-error decline
+(0.0305 → 0.0269) that says the encoder is smoothing itself.
+
+**Consequence for the plan.** Reconstruction is not a nice-to-have that can be pinned; it is the only thing
+keeping the reward's state in the latent. Stage 1's design is vindicated -- and the real tension is now explicit
+and measurable: reconstruction buys state fidelity and costs latent rank (8.5 vs 10.2), pure prediction buys rank
+and costs the state. Caveats: 6 epochs, one seed, 3 probe epochs (identical budget for both probe arms, so the
+comparison is fair even if the absolute numbers would improve).
