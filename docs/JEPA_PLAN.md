@@ -134,3 +134,28 @@ estimated ceiling, 0.532 vs 0.584).
 
 One stage at a time, controls finished before the next begins (§13.4). Stage 1 has four controls; none of them
 is optional, and stage 2 does not start while any is unrun.
+
+## Stage 1 result (3 seeds + a leak arm), and one open risk carried forward
+
+All four controls ran. Every reward field beats its floor: `targeted` 0.9996–1.0 (floor 0.235), `row_state`
+0.994 (0.640), `baba_count` 0.954–0.991 (0.759), `link_hp` 0.896–0.947 (0.811), `row_hp` 0.899–0.903 (0.009),
+`scene` recall 0.75–1.0 on 12 event frames at FPR 0.0001, `link_pos` ~9–11 world units (floor ~70),
+`near_dist` ~17–35, `row_pos` ~12–20. `room` is **untestable**: zero off-baseline frames in train or test, so
+the reward's room-change branch has no examples in 203k frames (the §6 exit problem again, for a second field).
+
+Leak probe: BC top-1 0.036–0.048 with `sf1_bit22`/`has_lockon` present, 0.044 with them zeroed — inside the
+seed spread, so no measurable leak and they stay as inputs.
+
+### OPEN RISK, noted and deliberately not fixed before stage 2
+
+**Effective rank 8.5–8.7 of 128 dimensions**, stable across all three seeds, with `move/rand` 0.048–0.050. The
+latent uses ~7% of its dimensions. Some of that is honest — the reward fields really are low-dimensional — but
+8.5 effective dimensions for 16 actor rows plus Link's eight quantities is low, and **a near-constant latent is
+the degenerate optimum of the stage-2 objective**: VQ scored skill +0.000 by exactly that route, its predictor
+provably copying `z_t`. So stage 2 must report skill and informativeness together (§2) and never skill alone.
+
+Second observation on the same axis: at `w_bc 0.05` the reconstruction term outweighed BC **33×** in actual
+gradient contribution, and BC top-1 is only 2.3–3.0× chance. This is closer to a pure reward-field autoencoder
+than to "BC + reconstruction". **If stage 2 shows this is a poor predictive surface, behaviour-cloning pressure
+is the lever to raise** — that is the documented reason BC was in the loss at all (§7: the exit episodes, which
+are consistent directional walking, moved action-recoverability 0.059 → 0.139, more than any architecture change).
