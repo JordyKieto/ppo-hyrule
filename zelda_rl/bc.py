@@ -766,7 +766,23 @@ class StateDecoder(nn.Module):
 #
 # Output keys are identical to StateDecoder's, so every consumer -- decoded_to_states, the training losses, the
 # probes -- works unchanged.
-def _decode_spec(n_rows=N_ROWS):
+# The ONLY fields CombatTracker.step / _left_reason / live_targets / nearest_target / _facing read out of a
+# state. Derived from that source, not recalled -- see docs/JEPA_PLAN.md for the field-to-reward-term table.
+# Two notes on what is and is not here:
+#   * `link_bits` is sf1 bits (7 DEAD, 22 SHIELD, 26 DAMAGED). The reward reads 7 and 22; 26 rides along in
+#     the 3-wide block. bc.py's older comment claimed the reward reads 26 -- it does not, damage comes from
+#     the HP difference.
+#   * `baba_count`, `near_dist`, `row_dist` and `link_facing_target` are AGGREGATES/DERIVATIONS of fields the
+#     reward reads, not extra state. Each is kept because deriving it downstream measured worse: the 4-way
+#     count head beats counting 16 rows (section 6), and a decoded distance beats differencing two absolute
+#     positions that each diverge (section 22). `link_facing_target` is exactly `_facing(cur, e)`.
+REWARD_GLOBAL = ("link_hp", "link_pos", "link_yaw", "link_bits", "targeted", "scene", "room",
+                 "baba_count", "near_dist")
+REWARD_ROW = ("row_present", "row_is_baba", "row_hp", "row_pos", "row_state", "row_dist",
+              "link_facing_target")
+
+
+def _decode_spec(n_rows=N_ROWS, reward_only: bool = False):
     g = [("link_hp", len(LINK_HP_VALUES), "logits"), ("link_pos", 3, "real"), ("link_yaw", 2, "unit"),
          ("link_bits", 3, "bits"), ("targeted", n_rows + 1, "logits"), ("scene", 2, "logits"),
          ("room", MAX_ROOM, "logits"), ("baba_count", N_BABA_COUNT, "logits"),
@@ -788,16 +804,23 @@ def _decode_spec(n_rows=N_ROWS):
          ("row_pos", 3, "real"), ("row_state", N_BABA_STATES, "logits"), ("row_facing_link", 2, "unit"),
          ("row_timer", 1, "real"), ("row_vel", 3, "real"), ("link_facing_target", 2, "unit"),
          ("row_dist", 1, "real")]
+    if reward_only:
+        g = [e for e in g if e[0] in REWARD_GLOBAL]
+        r = [e for e in r if e[0] in REWARD_ROW]
+        missing = (set(REWARD_GLOBAL) - {e[0] for e in g}) | (set(REWARD_ROW) - {e[0] for e in r})
+        assert not missing, f"reward fields absent from the decode spec: {sorted(missing)}"
     return g, r
 
 
 class UnifiedDecoder(nn.Module):
     """z -> every decoded field, from one trunk and one output layer, sliced by `_decode_spec`."""
 
-    def __init__(self, latent: int = 128, hidden: int = 512, n_rows: int = N_ROWS):
+    def __init__(self, latent: int = 128, hidden: int = 512, n_rows: int = N_ROWS,
+                 reward_only: bool = False):
         super().__init__()
         self.n_rows = n_rows
-        self.gspec, self.rspec = _decode_spec(n_rows)
+        self.reward_only = reward_only
+        self.gspec, self.rspec = _decode_spec(n_rows, reward_only=reward_only)
         self.gw = sum(w for _, w, _ in self.gspec)
         self.rw = sum(w for _, w, _ in self.rspec)
         self.trunk = nn.Sequential(_layer(latent, hidden), nn.ReLU(), _layer(hidden, hidden), nn.ReLU())
