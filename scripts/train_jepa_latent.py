@@ -288,8 +288,14 @@ def main():
     test_slots, tune_slots = set(pm["split"]["val_slots"]), set(pm["split"].get("tune_slots", []))
     slot = np.asarray(np.load(Path(a.packed) / "slot.npy", mmap_mode="r")[:N])
     tr = np.flatnonzero((runlen >= a.horizon) & ~np.isin(slot, list(test_slots | tune_slots)))
-    tu = np.flatnonzero((runlen >= max(a.eval_h)) & np.isin(slot, list(tune_slots)))
-    print(f"train starts {len(tr):,} (H>={a.horizon}) | tune starts {len(tu):,} (H>={max(a.eval_h)})")
+    # ONE EVAL SUBSET PER HORIZON, not the intersection. Taking starts with runlen >= max(eval_h) makes the
+    # H=1 number depend on which OTHER horizons were requested: adding H=20 restricted every horizon to frames
+    # 20+ steps from an episode end, a slower-moving subset where persistence at H10 is 14.30 instead of 25.92,
+    # so the same model scores lower on every horizon. Per-horizon subsets keep each number comparable across
+    # runs, and H=1 is then measured on essentially the whole tune split.
+    tu = {h: np.flatnonzero((runlen >= h) & np.isin(slot, list(tune_slots))) for h in a.eval_h}
+    print(f"train starts {len(tr):,} (H>={a.horizon}) | tune starts per horizon: "
+          + ", ".join(f"H{h} {len(v):,}" for h, v in tu.items()))
 
     from zelda_rl.bc import BABA_ID
     enc = Encoder(a.dim, a.heads, a.rows).to(dev)
@@ -436,7 +442,17 @@ def main():
         return sum(L.values()), L
 
     @torch.no_grad()
-    def evaluate(sel_np, horizons):
+    def evaluate(tu_by_h, horizons, n):
+        """Roll each horizon on ITS OWN valid subset, so a number never depends on which other horizons were
+        asked for."""
+        out = {}
+        for h in horizons:
+            pool = tu_by_h[h]
+            out.update(_eval_one(pool[:n], h))
+        return out
+
+    @torch.no_grad()
+    def _eval_one(sel_np, H):
         """SKILL against the persistence control, on the DECODED reward fields -- what the dream consumes.
 
         Persistence is the true state at t held constant, the same control every other result here is scored
@@ -448,9 +464,9 @@ def main():
         z = z0 = enc(tokens(i))
         S0 = start_state(i)
         true0 = lpos[sel_np]
-        for h in range(1, max(horizons) + 1):
+        for h in range(1, H + 1):
             z = trans(z, onehot(i + h - 1))
-            if h not in horizons:
+            if h != H:
                 continue
             o = dec(z, z0, S0)
             T = targets(i, i + h)
@@ -478,6 +494,14 @@ def main():
             occ = occupancy_target(T["l_cell"], T["a_cell"], m, T["is_baba"], T["hp_alive"], grid.n)
             out[f"h{h}/grid_iou"] = float(((o["grid"] > 0) & (occ > 0.5)).sum()
                                           / (((o["grid"] > 0) | (occ > 0.5)).sum().clamp(min=1)))
+            # LATENT DRIFT DIAGNOSTIC. The transition is a residual applied h times, so a small systematic
+            # update compounds; rolled to 20 steps having been trained on 5, position error hit 80.13 against a
+            # persistence baseline of 23.91. These two numbers say whether that is the latent EXPLODING (norm
+            # grows) or merely going somewhere the decoder cannot read (norm fine, distance from the real
+            # encoding large). Measure before fixing -- AGENTS.md 22.
+            out[f"h{h}/z_norm"] = float(z.norm(dim=-1).mean())
+            out[f"h{h}/z0_norm"] = float(z0.norm(dim=-1).mean())
+            out[f"h{h}/z_drift"] = float((z - tgt_enc(tokens(i + h))).norm(dim=-1).mean())
         enc.train(); trans.train(); dec.train()
         return out
 
@@ -514,7 +538,7 @@ def main():
                 agg[k] = agg.get(k, 0.0) + float(v.detach())
             if not np.isfinite(g):
                 print(f"  !! non-finite gradient at step {nb_}"); break
-        ev = evaluate(tu[:a.eval_n], a.eval_h)
+        ev = evaluate(tu, a.eval_h, a.eval_n)
         hh = a.eval_h
         row = {"epoch": ep + 1, "loss": tot / max(nb_, 1), "grad": gn / max(nb_, 1),
                **{k: v / max(nb_, 1) for k, v in agg.items()}, **ev}
@@ -523,6 +547,9 @@ def main():
               + "  ".join(f"H{h} skill {ev[f'h{h}/pos_skill']:+.4f}" for h in hh) + f"  ({time.time()-t0:.0f}s)")
         print("      pos err/pers: " + "  ".join(
             f"H{h} {ev[f'h{h}/pos_err']:.2f}/{ev[f'h{h}/pos_pers']:.2f}" for h in hh))
+        print("      latent: " + "  ".join(
+            f"H{h} |z| {ev[f'h{h}/z_norm']:.2f} drift {ev[f'h{h}/z_drift']:.2f}" for h in hh)
+            + f"   |z0| {ev[f'h{hh[0]}/z0_norm']:.2f}")
         print("      hp acc/pers:  " + "  ".join(
             f"H{h} {ev[f'h{h}/hp_acc']:.3f}/{ev[f'h{h}/hp_pers']:.3f}" for h in hh)
             + "   state " + " ".join(f"H{h} {ev[f'h{h}/state_acc']:.3f}" for h in hh)
