@@ -440,6 +440,21 @@ def cmd_status(a) -> None:
 
 def cmd_sync(a) -> None:
     st = load_state(a.experiment)
+    if a.datasets:
+        # Dataset collection, not training: every pod writes its own episodes, so pull each rank into its own
+        # subdirectory. `load_many` takes a list of directories and only the FIRST needs dataset.json, so the
+        # per-rank layout concatenates without any merge step.
+        name = Path(a.datasets.rstrip("/")).name
+        total_eps = 0
+        for pod in select(st, a.ranks):
+            dest = REPO / "datasets" / "transitions" / name / f"rank{pod['rank']:02d}"
+            dest.mkdir(parents=True, exist_ok=True)
+            rsync(pod, [f"{R_REPO}/{a.datasets.rstrip('/')}/"], str(dest) + "/", pull=True)
+            n = len(list((dest / "episodes").glob("*.npz"))) if (dest / "episodes").exists() else 0
+            total_eps += n
+            log(f"rank{pod['rank']}: {n} episodes -> {dest.relative_to(REPO)}")
+        log(f"synced {total_eps} episodes total into datasets/transitions/{name}/")
+        return
     inbox = REPO / "checkpoints" / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     for pod in select(st, a.ranks):
@@ -578,11 +593,14 @@ def main() -> None:
     p.add_argument("--num-envs", type=int, default=0)
     p.add_argument("--train-args", default="")
     p.add_argument("--run-tag", default="", help="suffix for run names + wandb group (e.g. rupees7)")
-    p.add_argument("--script", default="train_ppo.py", help="trainer under scripts/ (train_ppo.py | train_combat.py)")
+    p.add_argument("--script", default="train_ppo.py", help="trainer under scripts/ (train_ppo.py | train_combat.py | collect_transitions.py)")
     p.add_argument("--wandb-project", default="zelda-rl-goal-ppo")
     p = add("status", cmd_status)
     p.add_argument("--lines", type=int, default=2)
-    add("sync", cmd_sync)
+    p = add("sync", cmd_sync)
+    p.add_argument("--datasets", default=None,
+                   help="pull a dataset dir (e.g. datasets/transitions/v4-scale/<ts>) from every "
+                        "pod into datasets/transitions/<name>/rank<NN>/ instead of runs/+checkpoints")
     p = add("ssh", cmd_ssh, ranks=False)
     p.add_argument("--rank", type=int, default=0)
     p.add_argument("cmd", nargs=argparse.REMAINDER)

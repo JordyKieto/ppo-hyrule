@@ -43,6 +43,31 @@ DEFAULT_MIX = [
     ("checkpoints/inbox/deku-combat-gru-v2b_u00100.pt", 130, 15),
     ("checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt", 150, 20),
 ]
+# Equal-parts-BAD-PLAY mix. The default mix is weighted toward competent play, which is the wrong shape for a
+# world model: a policy that clears the room never takes damage and never dies, so the rare outcomes the reward
+# actually terminates on are absent. Measured on 61 episodes of the default mix: 47 success, 11 timeout, only
+# 2 deaths, 1 room-exit.
+#
+# Two corrections are baked in here:
+#   * RANDOM-INIT policies, not just early checkpoints. `deku-combat_r5_u00005` has already had 5 PPO updates
+#     and prefers some actions; an untrained net samples near-uniformly, so it wanders, walks out of the room
+#     and blunders into Babas with no learned avoidance.
+#   * Weighted toward the MIDDLE. The lowest-skill checkpoint does not die -- it times out at 0/3 kills after
+#     1800 steps because it never engages. Deaths and Link damage come from G30-G90: good enough to approach a
+#     Baba, bad enough to lose to it.
+BAD_PLAY_MIX = [
+    ("checkpoints/random/random-init-s0.pt", 0, 12),
+    ("checkpoints/random/random-init-s1.pt", 0, 8),
+    ("checkpoints/inbox/deku-combat_r5_u00005.pt", 5, 20),
+    ("checkpoints/inbox/deku-combat-gru-v2_u00030.pt", 30, 13),
+    ("checkpoints/inbox/deku-combat_r2_u00030.pt", 30, 12),
+    ("checkpoints/inbox/deku-combat-gru-v2b_u00060.pt", 90, 20),
+    ("checkpoints/inbox/deku-combat-gru-v2b_u00080.pt", 110, 6),
+    ("checkpoints/inbox/deku-combat-gru-v2b_u00100.pt", 130, 5),
+    ("checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt", 150, 4),
+]
+MIX_PRESETS = {"default": None, "badplay": BAD_PLAY_MIX}
+
 MAX_ENEMIES = MAX_ENEMIES_  # 16: slots start with 9 cat-5 actors (3 Baba + 3 0x0095 + 3 0x0037); headroom for spawns
 DEKU_STATES_DIR = "datasets/zelda/combat/deku-baba/states"   # NOT the live Dolphin slots: those hold Gohma states now
 # Layout lives in zelda_rl/state_layout.py so the collector and the world model cannot drift apart.
@@ -124,10 +149,13 @@ def main():
     ap.add_argument("--realtime", action="store_true", help="cap emulation at 1x (debugging only)")
     ap.add_argument("--no-obs", action="store_true", help="skip the 483-d policy obs (game state + action only)")
     ap.add_argument("--mix", default=None, help="JSON [[path, global_update, episodes], ...] instead of the default mix")
+    ap.add_argument("--mix-preset", default="default", choices=sorted(MIX_PRESETS),
+                    help="named mix; 'badplay' is equal-parts low-skill incl. random-init, for deaths/damage. "
+                         "A preset rather than a JSON path so a 39-pod fleet needs no shared file.")
     args = ap.parse_args()
 
     torch.set_num_threads(args.torch_threads)
-    mix = json.loads(args.mix) if args.mix else DEFAULT_MIX
+    mix = (json.loads(args.mix) if args.mix else (MIX_PRESETS[args.mix_preset] or DEFAULT_MIX))
     scale = args.episodes / sum(n for _, _, n in mix)
     quota = [(p, g, max(1, round(n * scale))) for p, g, n in mix]
     slots = [int(s) for s in args.slots.split(",")]
@@ -152,7 +180,7 @@ def main():
           f"state {STATE_DIM}d (link {LINK_DIM} + {MAX_ENEMIES}x{ENEMY_DIM}) | obs {cfg['obs_dim']}d | -> {out}\n"
           f"  slots {args.slots_dir}: babas per slot {babas}")
     for (p, g, n), (_, c, ck) in zip(quota, models):
-        print(f"    G{g:<4} u{ck['update']:<4} {n:>3} eps  {Path(p).name}")
+        print(f"    G{g:<4} u{ck.get('update', 0):<4} {n:>3} eps  {Path(p).name}")
 
     N = args.workers
     backend = "Metal" if args.windowed else "Null"
