@@ -52,6 +52,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.train_bc_decode import DEFAULT_DATA, load_many  # noqa: E402
 from zelda_rl.bc import LI, RI, _split  # noqa: E402
+from zelda_rl import wm_data
 from zelda_rl.navgrid import NavGrid  # noqa: E402
 from zelda_rl.tokens import ACTOR_DIM, LINK_DIM, REL_CLIP, SF1_KEEP, build  # noqa: E402
 
@@ -159,6 +160,10 @@ def main():
                          "ones, so the loss PUNISHES predicting no-movement -- correct 94%% of the time. "
                          "Measured: dcell accuracy 0.966 at epoch 1 collapsing to 0.52 by epoch 12. Rare-event "
                          "weighting is right for HP detection and wrong for position accuracy.")
+    ap.add_argument("--packed", default=None,
+                    help="directory written by scripts/pack_dataset.py. Skips load_many and "
+                         "tokenisation entirely: mmaps the packed arrays and moves them to the "
+                         "device. The full v5 load is ~25 min and OOMed a 188 GB pod; this is ~1 min.")
     ap.add_argument("--max-frames", type=int, default=None,
                     help="cap the load, sampling episodes uniformly at random across ALL --data/--extra-data "
                          "shards. This machine has 16 GB and a frame costs ~3 KB of state+tokens, so the full "
@@ -250,107 +255,68 @@ def main():
             print(f"note: {extra} episode file(s) on disk are not in any manifest and will NOT be used "
                   f"(run scripts/rebuild_manifests.py; whatever it cannot add is a corrupt .npz)")
         print(f"shards: {len(dirs)} dirs matching {a.shards} (all complete)")
-    # want_obs=False: this model never touches the 483-d obs, and it is 57% of the memory.
-    meta, state, act, slot, epid, obs, has = load_many(dirs, want_obs=False,
-                                                      max_frames=a.max_frames, seed=a.seed)
-    NA = meta["n_actions"]
-    test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
-    tr_m = ~np.isin(slot, list(test | tune))
-    lk, rows, _ = _split(state)
-    if a.rows < rows.shape[1]:
-        occupied = int((rows[:, :, RI["present"]] > 0.5).any(0).nonzero()[0].max()) + 1
+    # ---- BOTH PATHS CONVERGE ON `P`: the dict of packed numpy arrays defined by zelda_rl.wm_data. The token
+    # and target maths lives THERE, not here, so the in-memory path and scripts/pack_dataset.py cannot drift
+    # apart and make a sweep number incomparable to a run number.
+    if a.packed:
+        pm = json.load(open(Path(a.packed) / "meta.json"))
+        N = int(pm["n_frames"])
+        if a.rows != pm["rows"]:
+            sys.exit(f"--rows {a.rows} but {a.packed} was packed with rows={pm['rows']}")
+        NA, sdy, sc, split = pm["n_actions"], pm["d_link_y"], pm["scales"], pm["split"]
+        grid = NavGrid.load(pm["grid"])
+        P = {k: np.load(Path(a.packed) / f"{k}.npy", mmap_mode="r")[:N]
+             for k in wm_data.field_shapes(pm["rows"], pm["link_dim"], pm["actor_dim"])}
+        print(f"packed dataset {a.packed}: {N:,} frames | {pm['bytes_per_frame']} B/frame | "
+              f"grid {grid.n}x{grid.n} | rows {pm['rows']}")
+    else:
+        # want_obs=False: this model never touches the 483-d obs, and it is 57% of the memory.
+        meta, state, act, slot, epid, obs, has = load_many(dirs, want_obs=False,
+                                                          max_frames=a.max_frames, seed=a.seed)
+        NA, N = meta["n_actions"], len(state)
+        _, _rows, _ = _split(state)
+        occupied = int((_rows[:, :, RI["present"]] > 0.5).any(0).nonzero()[0].max()) + 1
         if occupied > a.rows:
             sys.exit(f"--rows {a.rows} would DROP actors: slot {occupied - 1} is occupied somewhere in this "
                      f"data. Actor slots are stable across time, so they cannot be compacted -- raise --rows.")
-        print(f"actor slots: {occupied} ever occupied of {rows.shape[1]} -> keeping {a.rows}")
-        rows = rows[:, :a.rows].copy()
-    _pres = rows[:, :, RI["present"]] > 0.5
-    prep = _prep0
-    grid = (NavGrid.load(prep["grid"]) if prep else
-            NavGrid.fit(np.concatenate([lk[:, [LI["pos_x"], LI["pos_z"]]],
-                                        rows[:, :, [RI["pos_x"], RI["pos_z"]]][_pres]]), n=a.grid))
-    print(f"nav grid {grid.n}x{grid.n} | cell {np.round(grid.cell,1)} world units")
-    T, sc = build(state, epid, train_mask=tr_m, grid=grid,
-                  scales=(prep["scales"] if prep else None))
-    if a.rows < T["actors"].shape[1]:                       # keep T consistent with the sliced `rows`
-        for _k in ("actors", "ids", "cats", "states", "mask", "actor_rcell", "actor_off", "cell_xy"):
-            T[_k] = T[_k][:, :a.rows].copy()
+        print(f"actor slots: {occupied} ever occupied of {_rows.shape[1]} -> keeping {a.rows}")
+        _trm = ~np.isin(slot, list(set(split["val_slots"]) | set(split.get("tune_slots", []))))
+        if _prep0:
+            sc, grid, sdy = _prep0["scales"], NavGrid.load(_prep0["grid"]), _prep0["d_link_y"]
+        else:
+            sc, grid, sdy = wm_data.fit_prep(state, epid, _trm, a.rows, a.grid)
+        print(f"nav grid {grid.n}x{grid.n} | cell {np.round(grid.cell,1)} world units")
+        P = wm_data.tokens_and_targets(state, act, slot, epid, grid=grid, scales=sc, d_link_y=sdy,
+                                       rows_keep=a.rows, n_actions=NA)
+        del state, _rows
 
-    # ---- targets, all DELTAS or EVENTS, never absolutes
-    nxt = np.minimum(np.arange(len(state)) + 1, len(state) - 1)
-    ok = np.r_[epid[1:] == epid[:-1], False]
-    lpos = lk[:, [LI["pos_x"], LI["pos_z"]]]
-    # DELTA scales, fitted on the DELTAS -- not the position scales. Positions span +-420/810 world units while
-    # a single step moves ~1-13, so dividing a delta by the position scale makes the target ~0.002 and the
-    # position head's loss numerically negligible beside the other heads. Measured consequence of getting this
-    # wrong: dpos error 3.45 -> 4.12 world units over 20 epochs against a persistence baseline of 1.045, i.e.
-    # the head drifted while its loss term was too small to matter. Same principle as normalising the inputs,
-    # applied to the targets.
-    # position targets in the GRID CODEC: which of the 5x5 neighbouring cells, plus the offset change
-    lc_n, lo_n = grid.to_cell(lpos[nxt])
-    lc_c, lo_c = T["link_cell"], T["link_off"]
-    dcell = np.clip(lc_n - lc_c, -(DW // 2), DW // 2) + DW // 2
-    dcell_i = (dcell[:, 0] * DW + dcell[:, 1]).astype(np.int64)
-    doff = (lo_n - lo_c).astype(np.float32)
-    print(f"dcell: SAME CELL on {float((dcell_i[tr_m & ok] == CENTRE).mean()):.1%} of steps | "
-          f"doff range [{doff.min():.2f}, {doff.max():.2f}]")
-    rdy = (lk[nxt, LI["pos_y"]] - lk[:, LI["pos_y"]])
-    sdy = prep["d_link_y"] if prep else float(max(np.percentile(np.abs(rdy[tr_m & ok]), 99.5), 1e-3))
-    sc["d_link_y"] = sdy
-    dy = np.clip(rdy / sdy, -1, 1).astype(np.float32)[:, None]
-    ys, yc = np.sin(lk[:, LI["yaw"]] * 2 * np.pi / 65536.0), np.cos(lk[:, LI["yaw"]] * 2 * np.pi / 65536.0)
-    dyaw = np.stack([np.sin(lk[nxt, LI["yaw"]] * 2 * np.pi / 65536.0) - ys,
-                     np.cos(lk[nxt, LI["yaw"]] * 2 * np.pi / 65536.0) - yc], 1).astype(np.float32)
-    hp_ev = np.where(lk[nxt, LI["hp"]] < lk[:, LI["hp"]], 1, np.where(lk[nxt, LI["hp"]] > lk[:, LI["hp"]], 2, 0))
-    sf1 = lk[:, LI["sf1"]].astype(np.int64)
-    bits_now = np.stack([((sf1 >> i) & 1) for i in SF1_KEEP], 1).astype(np.float32)
-    bits_nxt = np.stack([((sf1[nxt] >> i) & 1) for i in SF1_KEEP], 1).astype(np.float32)
-    scene_now = (lk[:, LI["scene"]] != 0).astype(np.int64)
-    scene_nxt = (lk[nxt, LI["scene"]] != 0).astype(np.int64)
-    rpos = rows[:, :, [RI["pos_x"], RI["pos_z"]]]
-    rc_n, ro_n = grid.to_cell(rpos[nxt].reshape(-1, 2))
-    rc_n, ro_n = rc_n.reshape(len(state), -1, 2), ro_n.reshape(len(state), -1, 2)
-    rc_c, ro_c = grid.to_cell(rpos.reshape(-1, 2))
-    rc_c, ro_c = rc_c.reshape(len(state), -1, 2), ro_c.reshape(len(state), -1, 2)
-    rdc = np.clip(rc_n - rc_c, -(DW // 2), DW // 2) + DW // 2
-    r_dcell_i = (rdc[..., 0] * DW + rdc[..., 1]).astype(np.int64)
-    r_doff = (ro_n - ro_c).astype(np.float32)
-    r_hp_ev = np.where(rows[nxt, :, RI["hp"]] < rows[:, :, RI["hp"]], 1,
-                       np.where(rows[nxt, :, RI["hp"]] > rows[:, :, RI["hp"]], 2, 0))
-    pres_now = T["mask"]
-    pres_nxt = (rows[nxt, :, RI["present"]] > 0.5).astype(np.float32)
-    st_now = T["states"]
-    st_nxt = rows[nxt, :, RI["state_idx"]].astype(np.int64).clip(0, N_STATES - 1)
+    test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
+    ok = np.asarray(P["ok"])
+    slot = np.asarray(P["slot"])
+    lpos = np.asarray(P["lpos"])
+    nxt = np.minimum(np.arange(N) + 1, N - 1)
+    tr_m = ~np.isin(slot, list(test | tune))
+    # host-side copies for the grid decode in eval / rollout (cheap: 6 B/frame)
+    T = {"link_cell": np.asarray(P["link_cell"]).astype(np.int64),
+         "link_off": np.asarray(P["link_off"]).astype(np.float32)}
+    dcell_i, hp_ev = np.asarray(P["dcell"]), np.asarray(P["hp_ev"])
+    r_hp_ev, pres_now = np.asarray(P["r_hp_ev"]), np.asarray(P["mask"])
+    print(f"dcell: SAME CELL on {float((dcell_i[tr_m & ok] == CENTRE).mean()):.1%} of steps")
 
     dev = torch.device(a.device)
-    # ---- RESIDENT DATASET. Stored in the NARROWEST dtype each field admits and cast per batch, so the whole
-    # thing fits in VRAM and training does no host-device transfer at all. f32 tokens + f32 targets + a f32
-    # one-hot action is 3.3 KB/frame = 298 GB over 91.5M frames; this is ~590 B/frame = ~54 GB.
-    #   f16  continuous fields, all already scaled to [-1,1] by tokens.py, so f16's 3 decimal digits are ample
-    #   uint8 every index and mask (cells 0-63, rel-cells 0-30, ids 0-255, states 0-9, masks 0/1)
-    #   the action stays an INDEX; the 63-wide one-hot is built on the device per batch (it was 252 B/frame)
-    # `rel_xz` is dropped: it was a verbatim copy of actors[:, :, :2] and is now sliced out of it per batch.
-    F16 = ("link", "actors", "link_off", "actor_off", "cell_xy")
-    U8 = ("ids", "cats", "states", "mask", "link_cell", "actor_rcell")
-    tt = {}
-    for k, v in T.items():
-        if k == "start_idx":
-            continue
-        t = torch.from_numpy(v)
-        tt[k] = (t.half() if k in F16 else t.to(torch.uint8) if k in U8 else t).to(dev)
-    YF16 = ("doff", "dy", "dyaw", "r_doff")
-    YU8 = ("dcell", "hp_ev", "scene_now", "scene_nxt", "r_dcell", "r_hp_ev",
-           "bits_now", "bits_nxt", "pres_now", "pres_nxt", "st_now", "st_nxt")
-    Y = {}
-    for k, v in dict(dcell=dcell_i, doff=doff, dy=dy, dyaw=dyaw, hp_ev=hp_ev, bits_now=bits_now,
-                     bits_nxt=bits_nxt, scene_now=scene_now, scene_nxt=scene_nxt, r_dcell=r_dcell_i,
-                     r_doff=r_doff, r_hp_ev=r_hp_ev, pres_now=pres_now, pres_nxt=pres_nxt,
-                     st_now=st_now, st_nxt=st_nxt).items():
-        t = torch.from_numpy(v)
-        Y[k] = (t.half() if k in YF16 else t.to(torch.uint8) if k in YU8 else t).to(dev)
-    A = torch.from_numpy(act.astype(np.int64)).clamp(0, NA - 1).to(torch.uint8).to(dev)
+    # Resident on the device in the packed dtypes, cast per batch. `pres_now`/`st_now` are bit-identical to
+    # `mask`/`states` so they are ALIASED rather than stored twice, and `rel_xz` is sliced out of `actors`.
+    TOK = ("link", "actors", "ids", "cats", "states", "mask", "link_cell", "link_off",
+           "actor_rcell", "actor_off", "cell_xy")
+    TGT = ("dcell", "doff", "dy", "dyaw", "hp_ev", "bits_now", "bits_nxt", "scene_now", "scene_nxt",
+           "r_dcell", "r_doff", "r_hp_ev", "pres_nxt", "st_nxt")
+    tt = {k: torch.from_numpy(np.ascontiguousarray(P[k])).to(dev) for k in TOK}
+    tt["link_off"] = tt["link_off"].half()        # f32 on the host for the decode, f16 on the device
+    Y = {k: torch.from_numpy(np.ascontiguousarray(P[k])).to(dev) for k in TGT}
+    Y["pres_now"], Y["st_now"] = tt["mask"], tt["states"]
+    A = torch.from_numpy(np.ascontiguousarray(P["act"])).to(dev)
     _nbytes = sum(v.element_size() * v.nelement() for v in list(tt.values()) + list(Y.values())) + A.nelement()
-    print(f"resident dataset: {_nbytes / 2**30:.1f} GiB on {dev} ({_nbytes / max(len(state), 1):.0f} B/frame)")
+    print(f"resident dataset: {_nbytes / 2**30:.1f} GiB on {dev} ({_nbytes / max(N, 1):.0f} B/frame)")
 
     _LONG = ("ids", "cats", "states", "link_cell", "actor_rcell")     # embedding lookups need an index dtype
     _YLONG = ("dcell", "hp_ev", "scene_now", "scene_nxt", "r_dcell", "r_hp_ev", "st_now", "st_nxt")
@@ -413,7 +379,7 @@ def main():
             t = (e - a.warmup) / max(a.epochs - a.warmup, 1e-9)
             return 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_at)
-    print(f"{len(state):,} frames | train {len(tr):,} tune {len(tu):,} test {len(te):,} | link tok {LINK_DIM} "
+    print(f"{N:,} frames | train {len(tr):,} tune {len(tu):,} test {len(te):,} | link tok {LINK_DIM} "
           f"actor tok {ACTOR_DIM} | d {a.dim} heads {a.heads} | params {sum(p.numel() for p in net.parameters())/1e6:.2f}M")
 
     amp = bool(a.amp and dev.type == "cuda")
@@ -482,7 +448,7 @@ def main():
         pc = dp[0].argmax(-1).cpu().numpy()
         pcell = np.stack([pc // DW, pc % DW], 1) - DW // 2 + T["link_cell"][sel]
         pred_xz = grid.from_cell(pcell, (T["link_off"][sel] + dp[1].float().cpu().numpy()).clip(-0.5, 0.5))
-        true_xz = lpos[nxt][sel]
+        true_xz = lpos[nxt[sel]]
         werr = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
         pers = float(np.linalg.norm(lpos[sel] - true_xz, axis=1).mean())
         dcell_acc = float((dp[0].argmax(-1) == yg("dcell", iu)).float().mean())
@@ -554,7 +520,7 @@ def main():
                 tok["link_cell"] = torch.from_numpy(cell).to(dev).long()
                 tok["link_off"] = torch.from_numpy(off).to(dev).float()
                 if h in horizons:
-                    true_xz = lpos[np.minimum(idx_np + h, len(state) - 1)]
+                    true_xz = lpos[np.minimum(idx_np + h, N - 1)]
                     pred_xz = grid.from_cell(cell, off)
                     err = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
                     per = float(np.linalg.norm(start_xz - true_xz, axis=1).mean())
