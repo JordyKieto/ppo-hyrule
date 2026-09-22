@@ -160,6 +160,38 @@ fan out over.
 `load_many()` takes a list of directories and only the first needs `dataset.json`, so per-rank directories
 concatenate with no merge step.
 
+## Fast iteration: pack ONCE, then every run starts in ~2.5 minutes
+
+The packed dataset is the only artefact a training run needs. Keep it in S3 and NOTHING ever repacks.
+
+```sh
+# ONCE per dataset (~40 min for v5). Streams episodes in chunks; peak RSS a few GB.
+python scripts/pack_dataset.py /workspace/v5/rank000 --extra /workspace/v5 '/workspace/v5/rank*' \
+    --out /workspace/packed/v5 --rows 9
+aws s3 sync /workspace/packed/v5/ s3://zelda-rl/zelda/packed/v5/ --profile race-wm   # make it durable
+
+# EVERY run after that, on any pod:
+aws s3 sync s3://zelda-rl/zelda/packed/v5/ /workspace/packed/v5/ --profile race-wm   # ~49 GiB
+python scripts/train_wm_tokens.py --packed /workspace/packed/v5 --rows 9 --device cuda --amp ...
+```
+
+| | before | after |
+|---|---|---|
+| time to first epoch | ~25 min (103k .npz opens + decompress + tokenise) | **~2.5 min** (mmap 49 GiB at 347 MB/s) |
+| peak host RAM | ~266 GB — **OOM-killed on a 188 GB pod** | a few GB |
+| what a fresh pod needs | 26 GB of .npz + the whole tokenisation pipeline | 49 GiB of .npy + meta.json |
+
+**`/workspace` is a POD volume and is destroyed when the pod is terminated.** That is how a 20M-transition
+dataset was lost once already (`AGENTS.md` §15-16). The packed set goes to S3 the moment it is built, verified
+by comparing every file's size remotely, not by trusting the exit code.
+
+**`--max-frames` is not how you iterate quickly any more.** It exists for a laptop; on a pod, load the whole
+packed set and cut epochs instead, so the numbers stay comparable to the full run.
+
+Measured on the H100, allocating the real arrays rather than estimating: the full 91,626,189-frame set is
+**48.6 GiB resident**, and a real training step at batch 16384 / dim 384 peaks at **52.0 GiB of 79.2**, i.e.
+activations cost only 3.4 GiB and there is ~25 GiB spare for a bigger model.
+
 ## Training the world model on ONE GPU pod (current fastest path)
 
 Measured: the model in isolation does 9,667 frames/s at batch 2048 on 6 Mac CPU threads, and real end-to-end
