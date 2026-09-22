@@ -35,38 +35,55 @@ DYING = 8                    # index of "dying" in dataset.json["baba_states"]
 CONT = ("link_pos", "link_yaw", "row_pos", "link_dpos")
 
 
-def load_many(dirs):
+def load_many(dirs, want_obs=True, max_frames=None, seed=0):
     """Concatenate several collection runs, keeping episode ids unique. Only the first needs dataset.json.
 
     Also returns the 483-d observation the demonstrator saw, where it was stored. Camera yaw and Link's
     velocity exist only there -- the 335-d state came from CombatState, which has neither. The room-exit
     runs were saved without `obs`, so a validity mask says which frames carry it.
+
+    `want_obs=False` skips that allocation entirely and returns a zero-length obs array. It is 483 floats a
+    frame against 363 for the state, so a consumer that ignores obs (the token world model does) otherwise
+    pays 57%% of its memory for nothing -- on a 16 GB machine that is the difference between 2M and 5M frames.
+
+    `max_frames` caps the load, sampling episodes UNIFORMLY AT RANDOM ACROSS ALL `dirs` rather than filling
+    from the first ones. With 109 per-pod shards, taking them in order would give a subset from a handful of
+    pods, i.e. a handful of policy mixes and slots, and call it a sample of the dataset.
     """
     meta = json.loads((Path(dirs[0]) / "dataset.json").read_text())
     OD = meta["obs_dim"]
     S, A, SL, EP, OB, HAS = [], [], [], [], [], []
-    off = 0
+    index = []
     for d in dirs:
         d = Path(d)
         rows = [json.loads(l) for l in (d / "manifest.jsonl").read_text().splitlines() if l.strip()]
-        for i, r in enumerate(rows):
-            arr = np.load(d / r["file"])
-            a_, st = arr["action"], arr["state"]
-            n = min(len(a_) + 1, len(st))
-            S.append(st[:n])
-            A.append(np.r_[a_[:n - 1], a_[n - 2]] if n > 1 else a_[:1])
-            SL.append(np.full(n, r["slot"], np.int64)); EP.append(np.full(n, off + i, np.int64))
-            if "obs" in arr:
-                o = arr["obs"]
-                pad = np.zeros((n, OD), np.float32)
-                k = min(n, len(o))
-                pad[:k] = o[:k]
-                OB.append(pad); HAS.append(np.r_[np.ones(k, bool), np.zeros(n - k, bool)])
-            else:
-                OB.append(np.zeros((n, OD), np.float32)); HAS.append(np.zeros(n, bool))
-        off += len(rows)
+        index += [(d, i, r) for i, r in enumerate(rows)]
+    if max_frames is not None:
+        np.random.default_rng(seed).shuffle(index)
+    seen, ep = 0, 0
+    for d, i, r in index:
+        arr = np.load(d / r["file"])
+        a_, st = arr["action"], arr["state"]
+        n = min(len(a_) + 1, len(st))
+        S.append(st[:n])
+        A.append(np.r_[a_[:n - 1], a_[n - 2]] if n > 1 else a_[:1])
+        SL.append(np.full(n, r["slot"], np.int64)); EP.append(np.full(n, ep, np.int64))
+        if not want_obs:
+            HAS.append(np.zeros(n, bool))
+        elif "obs" in arr:
+            o = arr["obs"]
+            pad = np.zeros((n, OD), np.float32)
+            k = min(n, len(o))
+            pad[:k] = o[:k]
+            OB.append(pad); HAS.append(np.r_[np.ones(k, bool), np.zeros(n - k, bool)])
+        else:
+            OB.append(np.zeros((n, OD), np.float32)); HAS.append(np.zeros(n, bool))
+        ep, seen = ep + 1, seen + n
+        if max_frames is not None and seen >= max_frames:
+            break
+    obs = np.zeros((0, OD), np.float32) if not want_obs else np.concatenate(OB)
     return (meta, np.concatenate(S), np.concatenate(A), np.concatenate(SL), np.concatenate(EP),
-            np.concatenate(OB), np.concatenate(HAS))
+            obs, np.concatenate(HAS))
 
 
 def episode_targets(data_dir: Path, kind: str):

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -150,6 +151,16 @@ def main():
                          "ones, so the loss PUNISHES predicting no-movement -- correct 94%% of the time. "
                          "Measured: dcell accuracy 0.966 at epoch 1 collapsing to 0.52 by epoch 12. Rare-event "
                          "weighting is right for HP detection and wrong for position accuracy.")
+    ap.add_argument("--max-frames", type=int, default=None,
+                    help="cap the load, sampling episodes uniformly at random across ALL --data/--extra-data "
+                         "shards. This machine has 16 GB and a frame costs ~3 KB of state+tokens, so the full "
+                         "66M-transition v5 dataset does not fit locally -- it needs the fleet (FedAvg over "
+                         "the per-pod shards) or a streaming loader. Measure before raising it.")
+    ap.add_argument("--shards", default=None,
+                    help="glob of shard dirs to use as --data/--extra-data, e.g. 'datasets/transitions/v5/rank*'")
+    ap.add_argument("--sched", choices=["none", "cosine"], default="none",
+                    help="cosine decays lr to 0 over --epochs after --warmup epochs of linear ramp")
+    ap.add_argument("--warmup", type=float, default=2.0, help="warmup epochs (used by --sched cosine)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--torch-threads", type=int, default=6)
     ap.add_argument("--ckpt-dir", default=None, help="save ck_XXXX.pt every --ckpt-every epochs, plus best/last")
@@ -195,7 +206,19 @@ def main():
     _prep0 = json.load(open(a.prep)) if a.prep else None
     split = (_prep0["split"] if _prep0 and "split" in _prep0
              else torch.load(a.ref, weights_only=False, map_location="cpu")["split"])
-    meta, state, act, slot, epid, obs, has = load_many([a.data, *a.extra_data])
+    dirs = [a.data, *a.extra_data]
+    if a.shards:
+        # sorted() so the shard list -- and therefore the episode sampling under a fixed --seed -- is
+        # reproducible; a bare glob is filesystem-order.
+        dirs = sorted(str(p) for p in Path().glob(a.shards) if (p / "manifest.jsonl").exists())
+        if not dirs:
+            sys.exit(f"--shards {a.shards!r} matched no directory containing a manifest.jsonl")
+        if not (Path(dirs[0]) / "dataset.json").exists():
+            sys.exit(f"{dirs[0]} has no dataset.json; load_many needs it on the FIRST dir for obs_dim")
+        print(f"shards: {len(dirs)} dirs matching {a.shards}")
+    # want_obs=False: this model never touches the 483-d obs, and it is 57% of the memory.
+    meta, state, act, slot, epid, obs, has = load_many(dirs, want_obs=False,
+                                                      max_frames=a.max_frames, seed=a.seed)
     NA = meta["n_actions"]
     test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
     tr_m = ~np.isin(slot, list(test | tune))
@@ -300,6 +323,15 @@ def main():
 
     net = TokenWM(NA, a.dim, a.heads)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
+    sched = None
+    if a.sched == "cosine":
+        # Per-EPOCH, so its state is one integer and it survives a resume with the optimizer.
+        def lr_at(e):
+            if e < a.warmup:
+                return (e + 1) / max(a.warmup, 1e-9)
+            t = (e - a.warmup) / max(a.epochs - a.warmup, 1e-9)
+            return 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_at)
     print(f"{len(state):,} frames | train {len(tr):,} tune {len(tu):,} test {len(te):,} | link tok {LINK_DIM} "
           f"actor tok {ACTOR_DIM} | d {a.dim} heads {a.heads} | params {sum(p.numel() for p in net.parameters())/1e6:.2f}M")
 
@@ -416,6 +448,12 @@ def main():
         # error, not a warning: a warning in a fleet launch scrolls past 32 ranks of output unread.
         if "opt" in rk:
             opt.load_state_dict(rk["opt"])
+            if sched is not None and rk.get("sched") is not None:
+                sched.load_state_dict(rk["sched"])
+            elif sched is not None:
+                sys.exit(f"--sched {a.sched} but {a.resume} carries no scheduler state: resuming would restart "
+                         f"the schedule from warmup on a trained model. Same class of bug as the missing "
+                         f"optimizer state.")
             hist = list(rk.get("hist", []))
             best = rk.get("best", best)
             print(f"resumed from {a.resume} at epoch {start_ep} (optimizer state restored, "
@@ -455,7 +493,8 @@ def main():
             dcell_acc = float((dp[0].argmax(-1) == Y["dcell"][iu]).float().mean())
             hp_acc = float((hp.argmax(-1) == Y["hp_ev"][iu]).float().mean())
             hp_rec = float((hp.argmax(-1)[Y["hp_ev"][iu] == 1] == 1).float().mean()) if (Y["hp_ev"][iu] == 1).any() else float("nan")
-        row = {"epoch": ep + 1, "train": tot / nb, "grad_mean": gn / nb, "grad_max": gmax,
+        row = {"epoch": ep + 1, "lr": opt.param_groups[0]["lr"],
+               "train": tot / nb, "grad_mean": gn / nb, "grad_max": gmax,
                "dpos_world": werr, "persistence_world": pers, "skill": 1 - werr / max(pers, 1e-9),
                "hp_acc": hp_acc, "hp_loss_recall": hp_rec, "dcell_acc": dcell_acc,
                **{k: float(v) for k, v in parts.items()}}
@@ -487,7 +526,8 @@ def main():
             if (ep + 1) % a.ckpt_every == 0:
                 # `opt` is NOT optional. Adam's per-parameter second moments ARE the training state; a
                 # checkpoint without them cannot be continued, only restarted. See --resume below.
-                torch.save({"model": net.state_dict(), "opt": opt.state_dict(), "epoch": ep + 1,
+                torch.save({"model": net.state_dict(), "opt": opt.state_dict(),
+                            "sched": sched.state_dict() if sched is not None else None, "epoch": ep + 1,
                             "metrics": row, "hist": hist, "best": best,
                             "scales": sc, "grid": grid.state_dict(), "n_actions": NA, "config": vars(a)},
                            cdir / f"ck_{ep+1:04d}.pt")
@@ -501,7 +541,10 @@ def main():
         print(f"  ep {ep+1:>3}/{a.epochs} loss {tot/nb:.4f} | grad mean {gn/nb:.3f} max {gmax:.3f} | "
               f"dpos {werr:.3f} vs persistence {pers:.3f} world units (skill {1-werr/max(pers,1e-9):+.3f}) | "
               f"dcell {dcell_acc:.4f} | hp rec {hp_rec:.3f}  ({time.time()-t0:.0f}s)")
-        print(f"    train_loss {row['train']:.4f}  val_loss {row['val_loss']:.4f}")
+        print(f"    train_loss {row['train']:.4f}  val_loss {row['val_loss']:.4f}"
+              + (f"  lr {opt.param_groups[0]['lr']:.2e}" if sched is not None else ""))
+        if sched is not None:
+            sched.step()
     print(f"\nBEST epoch {best['epoch']}: dpos {best['werr']:.3f} vs persistence {best['persistence_world']:.3f} "
           f"(skill {best['skill']:+.3f}) dcell {best['dcell_acc']:.4f} | LAST epoch {hist[-1]['epoch']}: "
           f"dpos {hist[-1]['dpos_world']:.3f} (skill {hist[-1]['skill']:+.3f}) dcell {hist[-1]['dcell_acc']:.4f}")
