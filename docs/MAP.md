@@ -139,12 +139,22 @@ python -m fleet verify-s3 --experiment E --s3-prefix s3://zelda-rl/zelda/transit
 python -m fleet kill      --experiment E --check-s3 s3://zelda-rl/zelda/transitions/E --confirm
 ```
 
-Bring a dataset local (per-rank prefixes, so pull whichever shards you need):
+Bring a dataset local — **use the script, not a bare `aws s3 sync`**:
 
 ```sh
-aws s3 sync s3://zelda-rl/zelda/transitions/v5/ datasets/transitions/v5/ --profile race-wm
-aws s3 sync s3://zelda-rl/zelda/transitions/v5/rank000/ datasets/transitions/v5/rank000/ --profile race-wm
+scripts/pull_dataset.sh s3://zelda-rl/zelda/transitions/v5 datasets/transitions/v5    # ~9 min for 17 GB
+aws s3 sync s3://zelda-rl/zelda/transitions/v5/rank000/ datasets/transitions/v5/rank000/ --profile race-wm  # one shard
 ```
+
+The obvious one-line sync of the whole prefix is **12x slower** and it is not a bandwidth limit. 80k objects
+of ~200 KB is request-latency bound, and `aws s3 sync` defaults to 10 concurrent requests in ONE process, so
+the link sits idle. Measured on v5 (79,694 episodes, 17 GB): **588 files/min (126 min) flat, 7,164 files/min
+(9 min)** fanned out 16-way over the per-rank prefixes. The script does the fan-out and then compares the
+remote and local `.npz` counts, exiting non-zero on a gap (`sync` resumes, so the fix is to rerun it).
+
+This is the same lesson as `AGENTS.md` §15 in the other direction: per-rank prefixes exist for correctness
+(§2 above) but they are also what makes a parallel pull possible. A flat prefix would have no shards to
+fan out over.
 
 `load_many()` takes a list of directories and only the first needs `dataset.json`, so per-rank directories
 concatenate with no merge step.
