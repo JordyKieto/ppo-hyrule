@@ -216,10 +216,27 @@ def cmd_bootstrap(a) -> None:
             run(pod, f"cd {R_DOLPHIN} && tar czf /workspace/{DOLPHIN_TARBALL.name} install")
             DOLPHIN_TARBALL.parent.mkdir(parents=True, exist_ok=True)
             rsync(pod, [f"/workspace/{DOLPHIN_TARBALL.name}"], str(DOLPHIN_TARBALL.parent) + "/", pull=True)
-        log(f"rank{r}: python venv")
-        run(pod, f"[ -x {R_VENV}/bin/python ] || python3 -m venv {R_VENV}; "
-                 f"{R_VENV}/bin/python -c 'import torch' 2>/dev/null || {R_VENV}/bin/pip install -q --index-url {TORCH_INDEX} torch; "
-                 f"{R_VENV}/bin/pip install -q {PY_DEPS}")
+        # PREBUILT VENV from S3 when available. Creating the venv and pip-installing torch is ~4-5 min per pod
+        # and, once Dolphin comes from S3 pre-built, it is the ENTIRE remaining bootstrap cost -- the wall that
+        # kept a 116-pod fleet from collecting. Baked once (scripts/bake_venv.py style: a pod tars its own venv
+        # and uploads it), pulled as a download by everyone else. Falls back to pip if the tarball is absent.
+        if run(pod, f"{R_VENV}/bin/python -c 'import torch,boto3' 2>/dev/null && echo yes || echo no",
+               capture=True, check=False).strip() == "yes":
+            log(f"rank{r}: venv already present")
+        elif venv_in_s3():
+            log(f"rank{r}: pull prebuilt venv from S3 ({VENV_MB:.0f} MB)")
+            import boto3 as _b3
+            _s3 = _b3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+            url = _s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": VENV_KEY},
+                                             ExpiresIn=6 * 3600)
+            run(pod, f"cd /workspace && curl -sfL --retry 5 -o venv.tgz {shlex.quote(url)} && "
+                     f"rm -rf {R_VENV} && tar xzf venv.tgz && rm venv.tgz && "
+                     f"{R_VENV}/bin/python -c 'import torch,boto3'")
+        else:
+            log(f"rank{r}: python venv (pip; no prebuilt tarball in S3)")
+            run(pod, f"[ -x {R_VENV}/bin/python ] || python3 -m venv {R_VENV}; "
+                     f"{R_VENV}/bin/python -c 'import torch' 2>/dev/null || {R_VENV}/bin/pip install -q --index-url {TORCH_INDEX} torch; "
+                     f"{R_VENV}/bin/pip install -q {PY_DEPS}")
         push_secrets(pod)
         ping = run(pod, f"set -a; . {R_REPO}/.fleet_secrets; set +a; {R_VENV}/bin/python -c \"import os,time,requests; "
                         f"t=time.time(); r=requests.post(os.environ['UPSTASH_REDIS_REST_URL'], json=['PING'], "
@@ -377,6 +394,24 @@ def cmd_verify(a) -> None:
         print(f"\n===== rank{rank} verify =====\n{out[-6000:]}")
 
 
+VENV_KEY = "fleet/venv-linux-x86_64.tgz"
+VENV_MB = 0.0
+
+
+def venv_in_s3() -> bool:
+    """Is a prebuilt venv tarball in S3? Cached, so 116 pods cause one HEAD request."""
+    global VENV_MB
+    if not hasattr(venv_in_s3, "_v"):
+        try:
+            import boto3
+            s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+            VENV_MB = s3.head_object(Bucket=S3_BUCKET, Key=VENV_KEY)["ContentLength"] / 1e6
+            venv_in_s3._v = True
+        except Exception:
+            venv_in_s3._v = False
+    return venv_in_s3._v
+
+
 def mix_policy_paths():
     """Repo-relative checkpoints that a collection mix names.
 
@@ -398,6 +433,36 @@ def push_policies(pod) -> None:
     if not rel:
         return
     mb = sum((REPO / r).stat().st_size for r in rel) / 1e6
+    # S3 FIRST. Pushing 47 MB from the Mac to each of 78 pods is 3.7 GB over a ~0.7 MB/s uplink -- about 88
+    # minutes, and it silently stalled a 116-pod bootstrap. This is rule 15 in AGENTS.md, violated by the very
+    # function written to fix rule 16. Presigned GETs make it a parallel datacenter download instead.
+    try:
+        import boto3
+        s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+        keys = {r: f"fleet/policies/{r}" for r in rel}
+        missing = []
+        for r, k in keys.items():
+            try:
+                s3.head_object(Bucket=S3_BUCKET, Key=k)
+            except Exception:
+                missing.append(r)
+        if not missing:
+            lines = ["set -e"] + [f"mkdir -p {R_REPO}/{d}" for d in sorted({str(Path(r).parent) for r in rel})]
+            for r, k in keys.items():
+                url = s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": k},
+                                                ExpiresIn=6 * 3600)
+                lines.append(f"curl -sfL --retry 5 -o {R_REPO}/{r} {shlex.quote(url)} &")
+            lines.append("wait")
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
+                f.write("\n".join(lines) + "\n")
+                tf = f.name
+            rsync(pod, [tf], "/workspace/pol_pull.sh")
+            Path(tf).unlink(missing_ok=True)
+            run(pod, "bash /workspace/pol_pull.sh && rm /workspace/pol_pull.sh")
+            log(f"rank{pod['rank']}: pulled {len(rel)} mix policies from S3")
+            return
+    except Exception as e:  # noqa: BLE001
+        log(f"rank{pod['rank']}: S3 policy pull unavailable ({str(e)[:60]}), pushing from the Mac")
     log(f"rank{pod['rank']}: push {len(rel)} mix policies ({mb:.0f} MB)")
     # Explicit destination per file. `rsync -R` with a /./ marker was supposed to preserve the repo-relative
     # path but rsync kept the ABSOLUTE one, so the files landed at
@@ -591,6 +656,47 @@ def cmd_collected(a) -> None:
         print(f"WARNING: {len(dead)} pods with no dolphin running: {dead}")
 
 
+def cmd_audit(a) -> None:
+    """What is EVERY pod doing right now: collecting / ready-but-idle / bootstrap-incomplete.
+
+    This exists because 78 of 116 pods sat idle and billing for 25 minutes and nothing surfaced it. There was
+    no way to see per-pod state without hand-writing an ssh fan-out, so the assumption that "bootstrap ran" was
+    never checked against reality. Run this after every phase, not when something already looks wrong.
+    """
+    st = load_state(a.experiment)
+
+    def one(pod):
+        try:
+            o = run(pod, f"D=$(test -x {R_DOLPHIN_BIN} && echo 1 || echo 0); "
+                         f"T=$({R_VENV}/bin/python -c 'import torch' 2>/dev/null && echo 1 || echo 0); "
+                         f"C=$(pgrep -c dolphin-emu 2>/dev/null || echo 0); "
+                         f"P=$(pgrep -fc 'scripts/' 2>/dev/null || echo 0); "
+                         f"E=$(ls {R_REPO}/{a.out}/episodes 2>/dev/null | wc -l); echo $D $T $C $P $E",
+                    capture=True, check=False).split()
+            v = [int(x) for x in o[:5]] if len(o) >= 5 else [0] * 5
+            return (pod["rank"], *v)
+        except Exception:
+            return (pod["rank"], -1, -1, -1, -1, -1)
+
+    res = sorted(for_pods(select(st, a.ranks), one, workers=50))
+    busy = [r for r, d, t, c, pr, e in res if c > 0 or pr > 0]
+    idle = [r for r, d, t, c, pr, e in res if c == 0 and pr == 0 and d == 1 and t == 1]
+    broken = [r for r, d, t, c, pr, e in res if c == 0 and pr == 0 and (d != 1 or t != 1)]
+    eps = sum(e for *_, e in res if e > 0)
+    cost = sum(p.get("cost_per_hr") or 0 for p in st["pods"])
+    print(f"{len(res)} pods, ${cost:.2f}/hr total")
+    print(f"  WORKING (dolphin or a script running): {len(busy)}")
+    print(f"  READY BUT IDLE -- paying for nothing:  {len(idle)}  {','.join(map(str, idle))[:100]}")
+    print(f"  BOOTSTRAP INCOMPLETE:                  {len(broken)}  {','.join(map(str, broken))[:100]}")
+    print(f"  episodes on pod disks: {eps:,}")
+    if idle or broken:
+        waste = (len(idle) + len(broken)) / max(len(res), 1) * cost
+        print(f"  ${waste:.2f}/hr is being spent on pods that are doing nothing")
+    if a.write_idle:
+        Path(a.write_idle).write_text(",".join(map(str, idle + broken)))
+        print(f"  -> wrote {len(idle) + len(broken)} ranks to {a.write_idle}")
+
+
 def cmd_metrics(a) -> None:
     """Training curve per rank, straight from each pod's metrics.jsonl. No wandb, no dataset transfer."""
     st = load_state(a.experiment)
@@ -738,6 +844,9 @@ def main() -> None:
     p.add_argument("--states-prefix", default=None,
                    help=f"S3 prefix for the start states; use {S3_STATES_DEKU!r} for a Deku Baba run "
                         f"(the default is the gohma task's states, which have no live Babas)")
+    p = add("audit", cmd_audit)
+    p.add_argument("--out", default="datasets/transitions/v5", help="collector --out path, to count episodes")
+    p.add_argument("--write-idle", default=None, help="write idle+broken ranks to this file, for a re-bootstrap")
     p = add("metrics", cmd_metrics)
     p.add_argument("--dir", default="runs/wm-fleet", help="--ckpt-dir used at launch")
     p.add_argument("--last", type=int, default=12, help="show the last N epochs")

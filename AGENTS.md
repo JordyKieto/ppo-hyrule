@@ -222,3 +222,34 @@ transitions, episodes and the outcome mix from the manifests, and warns about po
 
 Before launching anything long and remote: know the single command that answers "is it working and how far
 along is it", and run it once early.
+
+## 18. Never diff against state you just overwrote
+
+**The incident.** Bringing up 116 pods. `fleet create` only writes its state file at the end, so to start
+bootstrapping early I rebuilt `runs/fleet/v5.json` from the live API — and then computed "which pods still need
+bootstrapping" by diffing against **the file I had just overwritten with all 116**. It reported 7 instead of 78.
+**78 pods sat idle and billing for ~25 minutes**, ~$40/hr of nothing.
+
+Capture the "before" set into a variable BEFORE writing, or derive the answer from the pods themselves rather
+than from bookkeeping. Which leads to:
+
+## 19. After every phase, audit what the machines are actually doing
+
+The 25 minutes went unnoticed because there was no way to see per-pod state without hand-writing an ssh
+fan-out, so "bootstrap ran" was never checked against "every pod is working". `python -m fleet audit
+--experiment E` now reports WORKING / READY-BUT-IDLE / BOOTSTRAP-INCOMPLETE per pod, the episode count, and the
+$/hr being spent on pods doing nothing. Run it after create, after bootstrap, after launch — not when something
+already looks wrong.
+
+Corollary: a launch command reporting "started: N" is not evidence that N pods are working. It means N commands
+were dispatched. Seven pods once reported "collector started" and produced zero episodes.
+
+## 20. Rule 15 applies to EVERY large per-pod transfer, including ones you add yourself
+
+`push_policies` was written to fix rule 16, and it pushed 47 MB from the Mac to each of 78 pods — 3.7 GB over a
+~0.7 MB/s uplink, ~88 minutes, and it silently stalled the bootstrap while looking like it was progressing. The
+function fixing one rule violated another written the same night.
+
+Before adding any per-pod transfer, ask what it costs times the pod count. Over ~10 MB total it belongs in S3
+with presigned GETs (measured: 47 MB of policies to 17 pods in 100 s, versus 1–2 pods per 100 s from the Mac).
+`S3_PROFILE`-signed URLs need no credentials on the pod.
