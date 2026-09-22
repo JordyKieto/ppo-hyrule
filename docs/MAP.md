@@ -76,3 +76,36 @@ python -m fleet kill      --experiment E --confirm              # pods bill by t
 
 Do **not** throttle the fan-out into small sequential batches when it reports transient SSH errors: it retries,
 and serialising it turns 3.5 minutes into an hour.
+
+## Fleet-scale WM training (current)
+
+Data-parallel FedAvg: each pod trains on ITS OWN collected shard and weights average every epoch, so the fleet
+sees the whole dataset with no data movement. `FleetLink.average_weights` is generic over any model with a
+state_dict; it was only ever used by `train_ppo.py`.
+
+```sh
+# 1. collect (writes datasets/transitions/<name> on each pod)
+python -m fleet launch --experiment E --collect --script collect_transitions.py \
+  --train-args "--transitions 700000 --workers 12 --mix-preset badplay --slots-dir assets/states --out datasets/transitions/v4-collect"
+python -m fleet collected --experiment E            # total transitions + outcome mix
+
+# 2. fit the shared preprocessing ONCE, locally (scales, nav grid, split)
+python scripts/train_wm_tokens.py --data <local data> --epochs 1 --save-prep configs/wm_prep_v4.json
+
+# 3. train (normal launch path: train_wm_tokens.py accepts the --fleet-* flags)
+python -m fleet launch --experiment E --script train_wm_tokens.py --run-tag wm --wandb-project zelda-wm \
+  --train-args "--data datasets/transitions/v4-collect --prep configs/wm_prep_v4.json --epochs 100 --lr 1e-5 \
+                --rollout-every 5 --ckpt-dir runs/wm100 --ckpt-every 5 [--resume runs/wm100/ck_0005.pt]"
+python -m fleet metrics --experiment E --dir runs/wm100     # train/val/skill/dcell/rollout per epoch
+```
+
+**`--prep` is mandatory with FedAvg and the code refuses without it.** Every fitted quantity (17 feature
+scales, nav-grid bounds, the y delta scale) comes from data; fitting them per-pod averages weights across ranks
+whose inputs mean different things, which is silently wrong and presents as a training failure.
+
+**`lr=1e-5` is the only stable setting.** The sweep: 1e-5 → skill −0.002 with best == last; 1e-4 → best −0.024,
+last −9.919; 3e-4 → oscillates between −0.07 and −5.3. Reading the last epoch of a higher-LR run is how several
+"degrades with training" conclusions got made. Best-epoch selection is in the script now.
+
+**Pods with no shard cannot train.** 7 of 39 collected zero episodes and had to be terminated; check
+`fleet collected --verbose` before launching training, not after.

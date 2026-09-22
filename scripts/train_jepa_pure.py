@@ -61,6 +61,31 @@ def ln(x):
     return F.layer_norm(x, (x.shape[-1],))
 
 
+class FlatEncoder(nn.Module):
+    """Plain MLP over the FLATTENED observation. No entity pooling, no id embedding, no weight sharing.
+
+    The entity encoder (`BCNet`) shares one row MLP across the 16 actor slots and mean/max-pools them, so slot
+    order carries no information and 16 rows cost one row's parameters. This throws all of that away: the 16
+    rows are concatenated into one long vector and fed to a plain MLP, which is the simplest thing that can
+    possibly work and the honest baseline the entity encoder should have been measured against.
+
+    Bottlenecked: width -> width -> width//2 -> latent, so the representation is forced through a narrowing
+    stack rather than a single projection. Same `.encode(link, rows, ids, mask)` signature as BCNet so every
+    caller is unchanged; `ids` is deliberately ignored (actor identity survives only through the row features).
+    """
+
+    def __init__(self, in_dim: int, latent: int = 128, width: int = 1024):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(in_dim, width), nn.ReLU(),
+                                 nn.Linear(width, width), nn.ReLU(),
+                                 nn.Linear(width, width // 2), nn.ReLU(),
+                                 nn.Linear(width // 2, latent))
+        self.ln = nn.LayerNorm(latent)
+
+    def encode(self, link, rows, ids, mask):
+        return self.ln(self.net(torch.cat([link, rows.flatten(-2)], -1)))
+
+
 def collapse_stats(z: torch.Tensor) -> dict:
     """A constant encoder solves the prediction task perfectly, so measure spread and effective rank."""
     zc = z - z.mean(0, keepdim=True)
@@ -82,6 +107,9 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--latent", type=int, default=128)
     ap.add_argument("--ema", type=float, default=0.996, help="target-encoder momentum (I-JEPA App. A)")
+    ap.add_argument("--flat", action="store_true", help="plain MLP over the flattened obs, no entity encoder")
+    ap.add_argument("--width", type=int, default=1024, help="encoder width (flat mode)")
+    ap.add_argument("--pred-width", type=int, default=1024, help="predictor hidden width")
     ap.add_argument("--unroll", type=int, default=4)
     ap.add_argument("--unroll-decay", type=float, default=0.97)
     ap.add_argument("--unroll-batch", type=int, default=128)
@@ -116,12 +144,18 @@ def main():
     print(f"{len(state):,} frames | train {len(tr):,} tune {len(tu):,} test {len(te):,} | latent {a.latent} "
           f"| EMA {a.ema} | unroll {a.unroll} | NO reconstruction, NO BC in the loss")
 
-    enc = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=NA, latent=a.latent, gru=0)
+    in_dim = T["link"].shape[1] + T["rows"].shape[1] * T["rows"].shape[2]
+    enc = (FlatEncoder(in_dim, a.latent, a.width) if a.flat else
+           BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=NA, latent=a.latent, gru=0))
     tgt = copy.deepcopy(enc)                                  # EMA target encoder, never receives gradient
     for q in tgt.parameters():
         q.requires_grad_(False)
-    pred = build_predictor(a.latent, NA)
+    pred = build_predictor(a.latent, NA, hidden=a.pred_width)
     opt = torch.optim.Adam(list(enc.parameters()) + list(pred.parameters()), lr=a.lr)
+    ne, np_ = sum(q.numel() for q in enc.parameters()), sum(q.numel() for q in pred.parameters())
+    print(f"encoder {'FLAT MLP' if a.flat else 'entity'} in_dim {in_dim if a.flat else '-'} "
+          f"width {a.width} -> {ne/1e6:.2f}M params | predictor MLP width {a.pred_width} -> {np_/1e6:.2f}M "
+          f"| total {(ne+np_)/1e6:.2f}M")
 
     def E(m, i):
         return m.encode(T["link"][i], T["rows"][i], T["ids"][i], T["mask"][i])
@@ -173,7 +207,8 @@ def main():
     with torch.no_grad():
         Z = torch.cat([E(enc, torch.arange(i, min(i + 8192, len(state))))
                        for i in range(0, len(state), 8192)])
-    rnd = BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=NA, latent=a.latent, gru=0)
+    rnd = (FlatEncoder(in_dim, a.latent, a.width) if a.flat else
+           BCNet(link_dim=T["link"].shape[1], row_dim=T["rows"].shape[2], n_actions=NA, latent=a.latent, gru=0))
     with torch.no_grad():                                     # CONTROL: an untrained encoder's latent
         Zr = torch.cat([E(rnd, torch.arange(i, min(i + 8192, len(state))))
                         for i in range(0, len(state), 8192)])

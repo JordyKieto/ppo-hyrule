@@ -65,12 +65,16 @@ class RewardTargets:
         self.wl = torch.from_numpy(1 + 20.0 * transition_frames(Y["link_hp_c"], epid).astype(np.float32))
         self.wr = torch.from_numpy(1 + 20.0 * transition_frames(Y["row_hp_c"], epid).astype(np.float32))
 
-    def loss(self, p: dict, i: torch.Tensor, w_pos: float = 6.0) -> torch.Tensor:
-        """Reconstruction loss for decoder output `p` against the reward fields at frame indices `i`."""
+    def loss(self, p: dict, i: torch.Tensor, w_pos: float = 6.0, skip: tuple = ()) -> torch.Tensor:
+        """Reconstruction loss for decoder output `p` against the reward fields at frame indices `i`.
+
+        `skip` drops named terms, so a caller that represents a field differently (e.g. position as a nav-grid
+        cell + offset rather than a regressed coordinate) can own that field without reimplementing the rest.
+        """
         Y, m, mb = self.Y, self.Y["row_present"][i], self.Y["row_is_baba"][i]
-        L = (w_pos * F.mse_loss(p["link_pos"], Y["link_pos"][i])
-             + F.mse_loss(p["link_yaw"], Y["link_yaw"][i])
+        L = (F.mse_loss(p["link_yaw"], Y["link_yaw"][i])
              + F.mse_loss(p["near_dist"], Y["near_dist"][i])
+             + (0.0 if "link_pos" in skip else w_pos * F.mse_loss(p["link_pos"], Y["link_pos"][i]))
              + F.binary_cross_entropy_with_logits(p["link_bits"], Y["link_bits"][i])
              + F.cross_entropy(p["targeted"], Y["targeted"][i])
              + F.cross_entropy(p["scene"], Y["scene"][i])
@@ -83,7 +87,8 @@ class RewardTargets:
         rh = (F.cross_entropy(p["row_hp"].reshape(-1, len(ROW_HP_VALUES)), Y["row_hp_c"][i].reshape(-1),
                               weight=self.CW["row_hp"], reduction="none").reshape(m.shape) * m * self.wr[i])
         L = L + rh.sum() / m.sum().clamp(min=1)
-        L = L + w_pos * (((p["row_pos"] - Y["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
+        if "row_pos" not in skip:
+            L = L + w_pos * (((p["row_pos"] - Y["row_pos"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
         L = L + (((p["row_dist"] - Y["row_dist"][i]) ** 2).mean(-1) * m).sum() / m.sum().clamp(min=1)
         ce = F.cross_entropy(p["row_state"].reshape(-1, N_BABA_STATES), Y["row_state"][i].reshape(-1),
                              reduction="none").reshape(m.shape)

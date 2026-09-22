@@ -318,6 +318,9 @@ def main():
     except KeyboardInterrupt:
         print("\n interrupted")
     finally:
+        # dataset.json used to be written ONLY here, so a collector killed mid-run left 39 pods with episodes
+        # and a manifest but no dataset.json -- and load_many() requires it, making the whole collection
+        # unreadable. It is now also written at startup (see `write_meta` below) and refreshed here.
         for e in envs:
             try:
                 e.close()

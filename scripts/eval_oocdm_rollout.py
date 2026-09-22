@@ -74,7 +74,8 @@ def roll(model, codecs, state0, actions, horizon, device):
         a = np.repeat(actions[t: t + 1], 2)
         p = pack([(np.repeat(cur, 2, axis=0), a)], SCHEMA_V3).pad_to(model.capacity)
         b = make_batch(p, codecs, model, np.array([0]), device)
-        pred = predict_raw(model, model(b), b)
+        from zelda_rl.oocdm import GraphMask
+        pred = predict_raw(model, model(b, GraphMask(model.graph)), b)
         groups = decompose(cur, actions[t: t + 1], SCHEMA_V3)
         for cname, grp in groups.items():
             for f in grp.cls.state_fields():
@@ -100,6 +101,7 @@ def main():
     a = ap.parse_args()
 
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
+    graph_sd = ck.get("graph")
     eps = load_episodes(a.data, a.episodes, 0, {7, 9})
     print(f"{len(eps)} held-out episodes (test slots), horizon {a.horizon}, ckpt {a.ckpt}")
 
@@ -110,6 +112,11 @@ def main():
     dev = torch.device(a.device)
     model = OOCDM(codecs, ck["capacity"]).to(dev)
     model.load_state_dict(ck["model"])
+    if graph_sd is not None:
+        from zelda_rl.oocdm import OOCGraph
+        model.set_graph(OOCGraph(model.order, model.field_names, model.target_names,
+                                 full=False).load_state_dict(graph_sd))
+    print(f"graph: {model.graph.n_edges()} edges")
     model.eval()
 
     LI = link_index(STATE_DIM_V3)

@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta
@@ -117,6 +118,18 @@ def main():
     ap.add_argument("--cmi-batch-size", type=int, default=2048)
     ap.add_argument("--p-edge", type=float, default=0.9)
     ap.add_argument("--n-stable", type=int, default=2, help="stop after the graph is unchanged this often")
+    ap.add_argument("--graph-mode", choices=("discovered", "full", "empty"), default="discovered",
+                    help="P3 (docs 17.5). `full` = G1 every edge, `empty` = no edges, both FROZEN with no "
+                         "discovery. `discovered` runs the paper's loop.")
+    ap.add_argument("--shuffle-classes", type=int, default=-1,
+                    help="P3 control on the paper's premise: redeal actor objects across classes at random "
+                         "(same sizes, same objects) so each class holds a MIX. -1 = off.")
+    ap.add_argument("--prune-actions", dest="keep_actions", action="store_false", default=True,
+                    help="let CMI prune action edges too. Default keeps them: CMI cannot find them in a "
+                         "second-order environment, and an uncontrollable dream is useless. NOT in Yu et al.")
+    ap.add_argument("--action-targets", default="Link,Camera",
+                    help="classes the controller is allowed to command directly. Everything else is "
+                         "affected THROUGH Link, on edges CMI is free to discover or prune.")
     ap.add_argument("--oversample", type=float, default=0.0,
                     help="event oversampling K (LATENT_WORLD_MODEL.md 23): batch weights 1 + K*rare + "
                          "sqrt(K)*move. NOT in Yu et al., whose environments have no rare events. 0 = off.")
@@ -124,6 +137,7 @@ def main():
     ap.add_argument("--wandb", dest="wandb", action="store_true", default=True)
     ap.add_argument("--no-wandb", dest="wandb", action="store_false")
     ap.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "zelda-rl-oocdm"))
+    ap.add_argument("--wandb-group", default="oocdm-p2")
     a = ap.parse_args()
 
     run_dir = Path(a.resume or a.run_dir)
@@ -132,8 +146,10 @@ def main():
     resuming = bool(a.resume) and state_path.exists()
     name = run_dir.name
     log = RunLogger(run_dir, vars(a), use_wandb=a.wandb, project=a.wandb_project, entity=None,
-                    run_name=name, resume=resuming, tags=["oocdm", "p2", "discover-train-loop"],
-                    group="oocdm-p2")
+                    run_name=name, resume=resuming,
+                    tags=["oocdm", a.wandb_group, a.graph_mode] + (["shuffled"] if a.shuffle_classes >= 0
+                                                                   else []),
+                    group=a.wandb_group)
     if log.run is not None:
         import wandb
         wandb.define_metric("iter")
@@ -142,23 +158,42 @@ def main():
 
     LOGGER.info("run dir %s | %s", run_dir, "RESUMING" if resuming else "fresh")
     data = load_split(a.data, a.episodes, 0)
-    packs = {k: pack(v) for k, v in data.items() if v}
+    sh = None if a.shuffle_classes < 0 else a.shuffle_classes
+    packs = {k: pack(v, shuffle_classes=sh) for k, v in data.items() if v}
+    if sh is not None:
+        LOGGER.info("SHUFFLED-CLASS control: actor objects redealt across classes at seed %d. If this scores "
+                    "the same as the real grouping, class sharing contributed nothing.", sh)
     cap = {c: max(p.capacity[c] for p in packs.values()) for c in packs["train"].capacity}
     packs = {k: p.pad_to(cap) for k, p in packs.items()}
     LOGGER.info("episodes train/tune/test %d/%d/%d | transitions %s", len(data["train"]), len(data["tune"]),
                 len(data["test"]), {k: len(p) for k, p in packs.items()})
 
-    src = torch.load(state_path if resuming else a.init, map_location="cpu", weights_only=False)
-    codecs = src["codecs"]
+    if resuming or a.init:
+        src = torch.load(state_path if resuming else a.init, map_location="cpu", weights_only=False)
+        codecs = src["codecs"]
+    else:
+        # fresh start: fit codecs from this run's own training split
+        from zelda_rl.oocdm import fit_codecs
+        from zelda_rl.oomdp import decompose as _dec
+        src = None
+        codecs = fit_codecs([_dec(st, ac) for st, ac in data["train"][:160]])
+        LOGGER.info("no --init: fresh random weights, codecs fitted from this run's train split")
     dev = torch.device(a.device)
     model = OOCDM(codecs, cap).to(dev)
-    model.load_state_dict(src["model"])
+    if src is not None:
+        model.load_state_dict(src["model"])
     start_iter, hist = 0, []
     if resuming:
         model.set_graph(OOCGraph(model.order, model.field_names, model.target_names,
                                  full=False).load_state_dict(src["graph"]))
         start_iter, hist = src["iter"] + 1, src.get("hist", [])
         LOGGER.info("resumed at iteration %d with %d edges", start_iter, model.graph.n_edges())
+    elif a.graph_mode == "full":
+        model.set_graph(OOCGraph(model.order, model.field_names, model.target_names, full=True))
+        LOGGER.info("graph-mode FULL (G1): %d edges, FROZEN, no discovery", model.graph.n_edges())
+    elif a.graph_mode == "empty":
+        model.set_graph(OOCGraph(model.order, model.field_names, model.target_names, full=False))
+        LOGGER.info("graph-mode EMPTY: 0 edges, FROZEN, no discovery")
     else:
         model.set_graph(OOCGraph(model.order, model.field_names, model.target_names, full=False))
         LOGGER.info("starting from %s with an EMPTY graph (the paper's init)", a.init)
@@ -191,8 +226,13 @@ def main():
 
         # ---- DISCOVER (before training, as the paper does) ------------------------------------------
         t0 = time.time()
-        g, cmis = discover_graph(model, packs["train"], codecs, dev, a.eps,
-                                 n_batches=a.cmi_batches, batch_size=a.cmi_batch_size, seed=it)
+        if a.graph_mode == "discovered":
+            g, cmis = discover_graph(model, packs["train"], codecs, dev, a.eps,
+                                     n_batches=a.cmi_batches, batch_size=a.cmi_batch_size, seed=it,
+                                     keep_actions=a.keep_actions,
+                                     action_targets=tuple(a.action_targets.split(",")))
+        else:
+            g, cmis = model.graph, {}            # frozen control arm: the graph never changes
         t_disc = time.time() - t0
         edges = g.edge_set()
         added, removed = edges - prev_edges, prev_edges - edges
@@ -253,6 +293,12 @@ def main():
         torch.save({"model": model.state_dict(), "optim": opt.state_dict(), "codecs": codecs,
                     "capacity": cap, "graph": model.graph.state_dict(), "iter": it, "hist": hist,
                     "args": vars(a)}, state_path)
+        # Per-iteration snapshot as well as the rolling resume point. The loop REPLACES the graph every
+        # iteration and the graph can get worse, so overwriting the only checkpoint means a bad final
+        # iteration destroys a good earlier one with nothing to fall back to. Each snapshot is a complete,
+        # self-contained checkpoint: eval_oocdm_rollout.py / eval_competencies.py read model+codecs+
+        # capacity+graph and can be pointed at any of them directly.
+        shutil.copyfile(state_path, run_dir / f"iter{it + 1:02d}.pt")
         (run_dir / "graph.json").write_text(json.dumps(sorted(edges), indent=1))
         (run_dir / "history.json").write_text(json.dumps(hist, indent=1))
         prev_edges = edges

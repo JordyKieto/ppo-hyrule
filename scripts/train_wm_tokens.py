@@ -152,10 +152,24 @@ def main():
                          "weighting is right for HP detection and wrong for position accuracy.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--torch-threads", type=int, default=6)
-    ap.add_argument("--ckpt-dir", default=None)
+    ap.add_argument("--ckpt-dir", default=None, help="save ck_XXXX.pt every --ckpt-every epochs, plus best/last")
+    ap.add_argument("--ckpt-every", type=int, default=1)
+    ap.add_argument("--resume", default=None, help="checkpoint to continue from (keeps going to --epochs)")
+    ap.add_argument("--wandb-project", default=None)
+    ap.add_argument("--wandb-group", default=None)
+    ap.add_argument("--run-name", default=None)
+    ap.add_argument("--rollout-every", type=int, default=2,
+                    help="epochs between the AUTOREGRESSIVE validation (expensive, so low frequency)")
+    ap.add_argument("--rollout-h", type=int, nargs="+", default=[1, 2, 5, 10],
+                    help="horizons for the autoregressive rollout, scored against the persistence control")
     # --- fleet: data-parallel FedAvg over per-pod shards ------------------------------------------------
     # Each pod trains on ITS OWN collected shard and weights are averaged, so the fleet sees the whole dataset
     # with no data movement. FleetLink.average_weights is generic over any model with a state_dict.
+    # accepted and ignored: fleet's launch path passes these to every script it starts. Without them argparse
+    # aborts before the first batch, on all 39 pods at once.
+    ap.add_argument("--num-envs", type=int, default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--slots-dir", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--video-backend", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--fleet-experiment", default=None)
     ap.add_argument("--fleet-rank", type=int, default=0)
     ap.add_argument("--fleet-world-size", type=int, default=1)
@@ -173,14 +187,18 @@ def main():
     torch.manual_seed(a.seed)
     rng = np.random.default_rng(a.seed)
 
-    split = torch.load(a.ref, weights_only=False, map_location="cpu")["split"]
+    # The prep bundle carries the split, so a fleet pod needs no reference checkpoint (checkpoints/ is
+    # excluded from the code push, and loading --ref there fails with FileNotFoundError on every rank).
+    _prep0 = json.load(open(a.prep)) if a.prep else None
+    split = (_prep0["split"] if _prep0 and "split" in _prep0
+             else torch.load(a.ref, weights_only=False, map_location="cpu")["split"])
     meta, state, act, slot, epid, obs, has = load_many([a.data, *a.extra_data])
     NA = meta["n_actions"]
     test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
     tr_m = ~np.isin(slot, list(test | tune))
     lk, rows, _ = _split(state)
     _pres = rows[:, :, RI["present"]] > 0.5
-    prep = json.load(open(a.prep)) if a.prep else None
+    prep = _prep0
     grid = (NavGrid.load(prep["grid"]) if prep else
             NavGrid.fit(np.concatenate([lk[:, [LI["pos_x"], LI["pos_z"]]],
                                         rows[:, :, [RI["pos_x"], RI["pos_z"]]][_pres]]), n=a.grid))
@@ -337,8 +355,59 @@ def main():
                                          reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1)}
         return sum(L.values()), L, (dp, hp)
 
-    hist, best = [], {"werr": float("inf")}
-    for ep in range(a.epochs):
+    def autoregressive(idx_np, horizons):
+        """Roll the model forward on its OWN predictions and score position against ground truth.
+
+        This is the metric that matters: one-step teacher-forced error can look fine while a rollout diverges.
+        Only Link's position is integrated (cell + offset, through the same deterministic codec the inputs use);
+        every other token field is held at its step-0 value, so this is a LOWER bound -- the real dream would
+        also advance velocity, action state and the actors. Scored against PERSISTENCE (Link never moves),
+        which is the control every horizon has to beat.
+        """
+        out = {}
+        with torch.no_grad():
+            cell = T["link_cell"][idx_np].copy()
+            off = T["link_off"][idx_np].copy()
+            tok = {k: (v[idx_np].clone() if torch.is_tensor(v) else torch.from_numpy(v[idx_np]))
+                   for k, v in tt.items()}
+            start_xz = grid.from_cell(cell, off)
+            for h in range(1, max(horizons) + 1):
+                o_l, _ = net(tok, A[torch.from_numpy(idx_np + h - 1)])
+                (dcl, dof), *_ = split_link(o_l, torch.from_numpy(idx_np + h - 1))
+                k = dcl.argmax(-1).numpy()
+                cell = np.clip(cell + np.stack([k // DW, k % DW], 1) - DW // 2, 0, grid.n - 1)
+                off = np.clip(off + dof.numpy(), -0.5, 0.5)
+                tok["link_cell"] = torch.from_numpy(cell)
+                tok["link_off"] = torch.from_numpy(off)
+                if h in horizons:
+                    true_xz = lpos[np.minimum(idx_np + h, len(state) - 1)]
+                    pred_xz = grid.from_cell(cell, off)
+                    err = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
+                    per = float(np.linalg.norm(start_xz - true_xz, axis=1).mean())
+                    out[f"roll/h{h}_err"] = err
+                    out[f"roll/h{h}_persistence"] = per
+                    out[f"roll/h{h}_skill"] = 1 - err / max(per, 1e-9)
+        return out
+
+    wb = None
+    if a.wandb_project:
+        try:
+            import wandb
+            wb = wandb.init(project=a.wandb_project, group=a.wandb_group, name=a.run_name, config=vars(a),
+                            reinit=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"wandb disabled: {e}")
+
+    cdir = Path(a.ckpt_dir) if a.ckpt_dir else None
+    if cdir:
+        cdir.mkdir(parents=True, exist_ok=True)
+    hist, best, start_ep = [], {"werr": float("inf")}, 0
+    if a.resume and Path(a.resume).exists():
+        rk = torch.load(a.resume, weights_only=False, map_location="cpu")
+        net.load_state_dict(rk["model"])
+        start_ep = int(rk.get("epoch", 0))
+        print(f"resumed from {a.resume} at epoch {start_ep}")
+    for ep in range(start_ep, a.epochs):
         net.train()
         perm = rng.permutation(tr)
         t0, tot, gn, gmax, nb = time.time(), 0.0, 0.0, 0.0, 0
@@ -369,6 +438,28 @@ def main():
                "dpos_world": werr, "persistence_world": pers, "skill": 1 - werr / max(pers, 1e-9),
                "hp_acc": hp_acc, "hp_loss_recall": hp_rec, "dcell_acc": dcell_acc,
                **{k: float(v) for k, v in parts.items()}}
+        with torch.no_grad():                       # held-out VALIDATION loss on the test slots
+            iv = torch.from_numpy(te[:8192])
+            vloss, vparts, _ = loss_fn(iv)
+        row["val_loss"] = float(vloss)
+        row.update({f"val/{k}": float(v) for k, v in vparts.items()})
+        if (ep + 1) % a.rollout_every == 0 or ep == a.epochs - 1:
+            row.update(autoregressive(tu[:2048], a.rollout_h))
+            print("    rollout: " + "  ".join(
+                f"H{h} {row[f'roll/h{h}_err']:.2f} vs persistence {row[f'roll/h{h}_persistence']:.2f} "
+                f"(skill {row[f'roll/h{h}_skill']:+.3f})" for h in a.rollout_h if f"roll/h{h}_err" in row))
+        if wb is not None:
+            wb.log({"epoch": ep + 1, "train_loss": row["train"], "val_loss": row["val_loss"],
+                    "dpos_world": werr, "persistence_world": pers, "skill": row["skill"],
+                    "dcell_acc": dcell_acc, "hp_loss_recall": hp_rec, "grad_mean": row["grad_mean"],
+                    **{k: v for k, v in row.items() if k.startswith(("roll/", "val/"))}})
+        if cdir:
+            with open(cdir / "metrics.jsonl", "a") as fh:
+                fh.write(json.dumps({k: v for k, v in row.items()}) + "\n")
+            if (ep + 1) % a.ckpt_every == 0:
+                torch.save({"model": net.state_dict(), "epoch": ep + 1, "metrics": row,
+                            "scales": sc, "grid": grid.state_dict(), "n_actions": NA, "config": vars(a)},
+                           cdir / f"ck_{ep+1:04d}.pt")
         hist.append(row)
         if link is not None:
             # FedAvg once per epoch: each rank has trained on its own shard, so this is data parallelism over
@@ -386,6 +477,7 @@ def main():
         print(f"  ep {ep+1:>3}/{a.epochs} loss {tot/nb:.4f} | grad mean {gn/nb:.3f} max {gmax:.3f} | "
               f"dpos {werr:.3f} vs persistence {pers:.3f} world units (skill {1-werr/max(pers,1e-9):+.3f}) | "
               f"dcell {dcell_acc:.4f} | hp rec {hp_rec:.3f}  ({time.time()-t0:.0f}s)")
+        print(f"    train_loss {row['train']:.4f}  val_loss {row['val_loss']:.4f}")
     print(f"\nBEST epoch {best['epoch']}: dpos {best['werr']:.3f} vs persistence {best['persistence_world']:.3f} "
           f"(skill {best['skill']:+.3f}) dcell {best['dcell_acc']:.4f} | LAST epoch {hist[-1]['epoch']}: "
           f"dpos {hist[-1]['dpos_world']:.3f} (skill {hist[-1]['skill']:+.3f}) dcell {hist[-1]['dcell_acc']:.4f}")

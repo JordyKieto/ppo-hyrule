@@ -42,6 +42,8 @@ def main():
     ap.add_argument("--data", nargs="+", default=["datasets/transitions/v3-main/20260919-084052"])
     ap.add_argument("--episodes", type=int, default=40)
     ap.add_argument("--horizons", type=int, nargs="+", default=[10, 40, 100])
+    ap.add_argument("--recalib", action="store_true",
+                    help="refit the moved Platt pair on the rollout population (disjoint episodes)")
     ap.add_argument("--freeze-vel", action="store_true",
                     help="leave velocity/speed frozen at their step-0 values (the original arm)")
     a = ap.parse_args()
@@ -66,6 +68,7 @@ def main():
     ev_rng = np.random.default_rng(0)
 
     meta, state, act, slot, epid, obs, has = load_many(a.data)
+
     H = max(a.horizons)
     # one start per episode, far enough from the end to score the longest horizon
     eps = np.unique(epid)[: a.episodes]
@@ -76,12 +79,49 @@ def main():
             starts.append(idx[0])
     starts = np.asarray(starts)
     print(f"{len(starts)} episodes, horizons {a.horizons}, checkpoint {Path(a.ck).name}")
+    fit_starts, starts = starts[::2], starts[1::2]      # disjoint episodes: refit on one half, score the other
+    print(f"  refit on {len(fit_starts)} episodes, scored on the other {len(starts)}")
 
     def Z(st):
-        T = norm.apply(featurise(st, link_v2=v2, control_echo=False))
+        # control_echo MUST match training. train_joint defaults ECHO=True, and train_dream_ppo /
+        # eval_dream_rollout both call featurise with the default -- passing False here zeroed 11 features the
+        # encoder relies on and drove P(moved) to 0.021, which I then misread as a calibration bug in the gate.
+        T = norm.apply(featurise(st, link_v2=v2))
         with torch.no_grad():
             return enc.encode(torch.from_numpy(T["link"]), torch.from_numpy(T["rows"]),
                               torch.from_numpy(T["ids"]), torch.from_numpy(T["mask"]))
+
+    # POPULATION-MATCHED RECALIBRATION. The shipped Platt pair is fitted on the tuning slots, where Link's
+    # true move rate is 0.119; we roll from episode starts, where it is 0.411. Correctly calibrated to the wrong
+    # population. Refit a,b by BCE on held-out-from-scoring episodes and see whether firing at the right rate
+    # makes the rollout walk. Refit on DISJOINT episodes so this is not fitted to what it is scored on.
+    if a.recalib:
+        lgs, ys = [], []
+        with torch.no_grad():
+            for t in range(H):
+                zr = Z(state[fit_starts + t])
+                ohr = F.one_hot(torch.from_numpy(act[fit_starts + t].astype(np.int64)).clamp(0, NA - 1),
+                                NA).float()
+                lgs.append(thead(zr, ohr)["tr_moved"].squeeze(-1).numpy())
+                ys.append((np.linalg.norm(state[fit_starts + t + 1][:, [LI["pos_x"], LI["pos_z"]]]
+                                          - state[fit_starts + t][:, [LI["pos_x"], LI["pos_z"]]], axis=1)
+                           > MOVED_THRESH).astype(np.float32))
+        lg_t = torch.from_numpy(np.concatenate(lgs)).float()
+        y_t = torch.from_numpy(np.concatenate(ys)).float()
+        pa, pb = torch.zeros(1, requires_grad=True), torch.zeros(1, requires_grad=True)
+        o = torch.optim.LBFGS([pa, pb], max_iter=120)
+        def _cl():
+            o.zero_grad()
+            l = F.binary_cross_entropy_with_logits(pa * lg_t + pb, y_t)
+            l.backward()
+            return l
+        o.step(_cl)
+        with torch.no_grad():
+            pc = torch.sigmoid(pa * lg_t + pb).numpy()
+        print(f"  recalibrated on {len(y_t):,} frames: P = sigmoid({float(pa):.3f}*logit {float(pb):+.3f}) | "
+              f"mean P {pc.mean():.3f} vs true rate {float(y_t.mean()):.3f} "
+              f"(shipped pair gave mean P {(1/(1+np.exp(-(ca*lg_t.numpy()+cb)))).mean():.3f})")
+        ca, cb = float(pa), float(pb)
 
     pos_i = [LI["pos_x"], LI["pos_y"], LI["pos_z"]]
     true0 = state[starts][:, pos_i].copy()
@@ -100,7 +140,7 @@ def main():
             if (t + 1) in truth:
                 d = dec(zl)
                 p = (d["link_pos"].numpy() if isinstance(d, dict) else d[0].numpy()) * ps + pm
-                lat_err[t + 1] = np.abs(p[:, [0, 2]] - truth[t + 1][:, [0, 2]]).sum(1)
+                lat_err[t + 1] = np.linalg.norm(p[:, [0, 2]] - truth[t + 1][:, [0, 2]], axis=1)
                 lat_norm[t + 1] = float(zl.norm(dim=-1).mean())
 
     # ---- STATE arm: position integrated from the head's events; z re-encoded from the state each step
@@ -129,7 +169,7 @@ def main():
                 s[:, LI["vel_z"]] = step[:, 1]
                 s[:, LI["speed"]] = np.linalg.norm(step, axis=1)
             if (t + 1) in truth:
-                st_err[t + 1] = np.abs(s[:, [LI["pos_x"], LI["pos_z"]]] - truth[t + 1][:, [0, 2]]).sum(1)
+                st_err[t + 1] = np.linalg.norm(s[:, [LI["pos_x"], LI["pos_z"]]] - truth[t + 1][:, [0, 2]], axis=1)
                 st_norm[t + 1] = float(Z(s).norm(dim=-1).mean())
 
     print(f"\n{'H':>5} {'do-nothing':>11} {'LATENT':>9} {'STATE':>9} {'winner':>8} "
@@ -144,15 +184,16 @@ def main():
             lgr = thead(zr, ohr)["tr_moved"].squeeze(-1).numpy()
             pr.append(float((1.0 / (1.0 + np.exp(-(ca * lgr + cb)))).mean()))
     # ground truth: did Link actually move between t and t+1, on these same frames
-    true_rate = float(np.mean([np.abs(state[starts + t + 1][:, [LI["pos_x"], LI["pos_z"]]]
-                                      - state[starts + t][:, [LI["pos_x"], LI["pos_z"]]]).sum(1) > MOVED_THRESH
+    true_rate = float(np.mean([np.linalg.norm(state[starts + t + 1][:, [LI["pos_x"], LI["pos_z"]]]
+                                             - state[starts + t][:, [LI["pos_x"], LI["pos_z"]]], axis=1)
+                               > MOVED_THRESH
                                for t in range(H)]))
     print(f"      P(moved): {np.mean(pmoved_log):.3f} on the ROLLED state | {np.mean(pr):.3f} on the REAL "
           f"state | {true_rate:.3f} actually moved (MOVED_THRESH={MOVED_THRESH})")
     for h in a.horizons:
-        stay = np.abs(true0[:, [0, 2]] - truth[h][:, [0, 2]]).sum(1).mean()
+        stay = np.linalg.norm(true0[:, [0, 2]] - truth[h][:, [0, 2]], axis=1).mean()
         le, se = lat_err[h].mean(), st_err[h].mean()
-        moved_true = np.abs(truth[h][:, [0, 2]] - true0[:, [0, 2]]).sum(1).mean()
+        moved_true = np.linalg.norm(truth[h][:, [0, 2]] - true0[:, [0, 2]], axis=1).mean()
         print(f"{h:>5} {stay:>11.1f} {le:>9.1f} {se:>9.1f} {('STATE' if se < le else 'latent'):>8} "
               f"{moved_true:>11.1f} {lat_norm[h]:>11.1f} {st_norm[h]:>10.1f}")
     print("\nnumbers are mean |XZ| error in world units against Link's real position at that horizon.")

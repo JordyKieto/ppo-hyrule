@@ -591,6 +591,40 @@ def cmd_collected(a) -> None:
         print(f"WARNING: {len(dead)} pods with no dolphin running: {dead}")
 
 
+def cmd_metrics(a) -> None:
+    """Training curve per rank, straight from each pod's metrics.jsonl. No wandb, no dataset transfer."""
+    st = load_state(a.experiment)
+    PROBE = ("import json,sys;"
+             "rs=[json.loads(l) for l in open(sys.argv[1]) if l.strip()];"
+             "rs=rs[-int(sys.argv[2]):];"
+             "print('|'.join(f\"{r['epoch']},{r['train']:.4f},{r.get('val_loss',0):.4f},"
+             "{r['skill']:+.4f},{r['dcell_acc']:.4f},{r.get('roll/h10_skill',0):+.4f}\" for r in rs))")
+
+    def one(pod):
+        try:
+            out = run(pod, f"python3 -c {shlex.quote(PROBE)} {R_REPO}/{a.dir}/metrics.jsonl {a.last} "
+                           f"2>/dev/null || echo ''", capture=True).strip()
+            return (pod["rank"], out)
+        except Exception:
+            return (pod["rank"], "")
+
+    res = sorted(for_pods(select(st, a.ranks), one, workers=24))
+    rows = {}
+    for rank, out in res:
+        for rec in (out.split("|") if out else []):
+            f = rec.split(",")
+            if len(f) == 6:
+                rows.setdefault(int(f[0]), []).append([float(x) for x in f[1:]])
+    if not rows:
+        print("no metrics yet")
+        return
+    print(f"{'epoch':>6} {'train':>9} {'val':>9} {'skill':>9} {'dcell':>8} {'rollH10':>9} {'ranks':>6}")
+    for ep in sorted(rows):
+        v = np.mean(rows[ep], axis=0) if (np := __import__("numpy")) else None
+        print(f"{ep:>6} {v[0]:>9.4f} {v[1]:>9.4f} {v[2]:>+9.4f} {v[3]:>8.4f} {v[4]:>+9.4f} {len(rows[ep]):>6}")
+    print("(mean across ranks; each pod trains its own shard and weights are averaged every epoch)")
+
+
 def cmd_ssh(a) -> None:
     st = load_state(a.experiment)
     pod = select(st, str(a.rank))[0]
@@ -704,6 +738,9 @@ def main() -> None:
     p.add_argument("--states-prefix", default=None,
                    help=f"S3 prefix for the start states; use {S3_STATES_DEKU!r} for a Deku Baba run "
                         f"(the default is the gohma task's states, which have no live Babas)")
+    p = add("metrics", cmd_metrics)
+    p.add_argument("--dir", default="runs/wm-fleet", help="--ckpt-dir used at launch")
+    p.add_argument("--last", type=int, default=12, help="show the last N epochs")
     p = add("collected", cmd_collected)
     p.add_argument("--out", default="datasets/transitions/v4-collect", help="the collector's --out path")
     p.add_argument("--verbose", action="store_true", help="per-pod breakdown")
