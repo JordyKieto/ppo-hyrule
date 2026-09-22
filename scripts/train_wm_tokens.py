@@ -140,6 +140,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--grid", type=int, default=32, help="nav-grid resolution (cell ~29x45 world units at 32)")
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--clip", type=float, default=1.0)
@@ -152,6 +153,20 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--torch-threads", type=int, default=6)
     ap.add_argument("--ckpt-dir", default=None)
+    # --- fleet: data-parallel FedAvg over per-pod shards ------------------------------------------------
+    # Each pod trains on ITS OWN collected shard and weights are averaged, so the fleet sees the whole dataset
+    # with no data movement. FleetLink.average_weights is generic over any model with a state_dict.
+    ap.add_argument("--fleet-experiment", default=None)
+    ap.add_argument("--fleet-rank", type=int, default=0)
+    ap.add_argument("--fleet-world-size", type=int, default=1)
+    ap.add_argument("--fleet-launch-id", default="")
+    ap.add_argument("--fleet-aggregator", type=int, default=0)
+    ap.add_argument("--fleet-sync", default="avg", choices=["avg", "none"])
+    # CRITICAL for FedAvg: every rank must use IDENTICAL preprocessing. Feature scales, nav-grid bounds and
+    # delta scales are all fitted from data, so fitting them per-pod would average weights across pods whose
+    # inputs mean different things. Fit once (--save-prep) and ship the JSON to every rank (--prep).
+    ap.add_argument("--prep", default=None, help="load fixed scales + nav grid from JSON (required on a fleet)")
+    ap.add_argument("--save-prep", default=None, help="fit scales + grid on this data and write the JSON")
     ap.add_argument("--out", default="checkpoints/wm_tokens/wm.pt")
     a = ap.parse_args()
     torch.set_num_threads(a.torch_threads)
@@ -165,10 +180,13 @@ def main():
     tr_m = ~np.isin(slot, list(test | tune))
     lk, rows, _ = _split(state)
     _pres = rows[:, :, RI["present"]] > 0.5
-    grid = NavGrid.fit(np.concatenate([lk[:, [LI["pos_x"], LI["pos_z"]]],
-                                       rows[:, :, [RI["pos_x"], RI["pos_z"]]][_pres]]), n=32)
+    prep = json.load(open(a.prep)) if a.prep else None
+    grid = (NavGrid.load(prep["grid"]) if prep else
+            NavGrid.fit(np.concatenate([lk[:, [LI["pos_x"], LI["pos_z"]]],
+                                        rows[:, :, [RI["pos_x"], RI["pos_z"]]][_pres]]), n=a.grid))
     print(f"nav grid {grid.n}x{grid.n} | cell {np.round(grid.cell,1)} world units")
-    T, sc = build(state, epid, train_mask=tr_m, grid=grid)
+    T, sc = build(state, epid, train_mask=tr_m, grid=grid,
+                  scales=(prep["scales"] if prep else None))
 
     # ---- targets, all DELTAS or EVENTS, never absolutes
     nxt = np.minimum(np.arange(len(state)) + 1, len(state) - 1)
@@ -189,7 +207,8 @@ def main():
     print(f"dcell: SAME CELL on {float((dcell_i[tr_m & ok] == CENTRE).mean()):.1%} of steps | "
           f"doff range [{doff.min():.2f}, {doff.max():.2f}]")
     rdy = (lk[nxt, LI["pos_y"]] - lk[:, LI["pos_y"]])
-    sdy = float(max(np.percentile(np.abs(rdy[tr_m & ok]), 99.5), 1e-3)); sc["d_link_y"] = sdy
+    sdy = prep["d_link_y"] if prep else float(max(np.percentile(np.abs(rdy[tr_m & ok]), 99.5), 1e-3))
+    sc["d_link_y"] = sdy
     dy = np.clip(rdy / sdy, -1, 1).astype(np.float32)[:, None]
     ys, yc = np.sin(lk[:, LI["yaw"]] * 2 * np.pi / 65536.0), np.cos(lk[:, LI["yaw"]] * 2 * np.pi / 65536.0)
     dyaw = np.stack([np.sin(lk[nxt, LI["yaw"]] * 2 * np.pi / 65536.0) - ys,
@@ -240,6 +259,23 @@ def main():
     # dcell is ~94% "same cell"; without a weight the head predicts only the centre class and never a move.
     CW_DC = cw(dcell_i[tr], DC) if a.dcell_weight else None
     print(f"hp event rates train: {np.bincount(hp_ev[tr], minlength=3) / len(tr)} -> weights {CW_HP.numpy().round(2)}")
+
+    if a.save_prep:
+        Path(a.save_prep).parent.mkdir(parents=True, exist_ok=True)
+        # position needs no delta scale: it is grid cell + offset now. Only y is still a scaled continuous delta.
+        json.dump({"scales": sc, "grid": grid.state_dict(), "d_link_y": sdy, "split": split},
+                  open(a.save_prep, "w"), indent=1)
+        print(f"-> wrote prep bundle {a.save_prep} (ship this to every rank as --prep)")
+
+    link = None
+    if a.fleet_experiment and a.fleet_world_size > 1 and a.fleet_sync == "avg":
+        from zelda_rl.fleet_link import FleetLink
+        link = FleetLink(a.fleet_experiment, a.fleet_rank, a.fleet_world_size, a.fleet_launch_id)
+        if not a.prep:
+            raise SystemExit("--prep is REQUIRED with --fleet-sync avg: averaging weights across ranks whose "
+                             "feature scales / nav grid were fitted on different shards is silently wrong")
+        print(f"fleet: {a.fleet_experiment} rank {a.fleet_rank}/{a.fleet_world_size} "
+              f"aggregator {a.fleet_aggregator}")
 
     net = TokenWM(NA, a.dim, a.heads)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
@@ -334,6 +370,13 @@ def main():
                "hp_acc": hp_acc, "hp_loss_recall": hp_rec, "dcell_acc": dcell_acc,
                **{k: float(v) for k, v in parts.items()}}
         hist.append(row)
+        if link is not None:
+            # FedAvg once per epoch: each rank has trained on its own shard, so this is data parallelism over
+            # the whole fleet's dataset. Straggler tolerant -- a slow rank never holds the others back.
+            info = link.average_weights(net, ep + 1, aggregator=a.fleet_aggregator)
+            link.heartbeat({"epoch": ep + 1, "dpos_world": werr, "skill": row["skill"],
+                            "dcell_acc": dcell_acc})
+            print(f"    fleet: averaged over {info.get('n', '?')} ranks (from update {info.get('src', '?')})")
         # BEST-EPOCH SELECTION on held-out position error. The loss falls smoothly while dpos/dcell oscillate
         # between a good state (dcell 0.97, skill ~-0.1) and a bad one (0.76, -10), so the LAST epoch is a coin
         # flip -- and reading the last epoch is how several "degrades with training" conclusions got made this
