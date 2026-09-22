@@ -1537,3 +1537,48 @@ distance MAE 76.6 -> 44.0 and decode 737 -> 607 -- it simply cannot fix an objec
 This is NOT a refutation of DreamerV3's discrete latents. Dreamer pairs them with a KL to a *learned prior*,
 stochastic sampling, and training against reward on *imagined* rollouts. A bare next-step cross-entropy on a
 latent that moves 0.04 per step has copying as its global optimum, whatever the latent is made of.
+
+## 31. 20M transitions, 100 epochs: the loss improved 1.8x and the task metric collapsed
+
+First fleet-scale run of the token world model. 20,545,657 transitions collected on 39 RunPod pods with the
+`badplay` mix (61% success, 5% death, 5% room-exit, 28% timeout), then data-parallel FedAvg training on the 32
+pods that had a shard, `lr=1e-5`, batch 512, weights averaged every epoch.
+
+wandb: project `zelda-wm` (https://wandb.ai/drift-ai-models/zelda-wm), groups `v4-collect-wm` (5 epochs) and
+`v4-collect-wm100` (100 epochs, resumed from the epoch-5 checkpoint). Local copies:
+`runs/wm5_synced/` (epochs 1-5) and `runs/wm100_synced/` (every 5th epoch to 100, plus all 32 ranks' metrics).
+
+| epoch | train | val | 1-step skill | dcell | rollout H10 skill |
+|---|---|---|---|---|---|
+| 1 | 2.1344 | 1.0644 | −0.0012 | 0.8816 | −0.0003 |
+| **5** | 1.6313 | 0.9750 | −0.0141 | 0.8813 | **+0.0026** |
+| 10 | — | 1.0592 | −1.9876 | — | −0.3134 |
+| 15 | — | 0.8778 | −1.9807 | — | −0.8469 |
+| 100 | **0.8723** | **0.5998** | **−0.9973** | 0.8271 | **−0.4098** |
+
+**Train loss halved (2.13 → 0.87) and held-out validation loss fell 1.8x (1.06 → 0.60), while every metric the
+dream depends on got worse.** The 10-step autoregressive rollout went +0.0026 → −0.4098, one-step skill −0.001 →
+−1.0, `dcell` accuracy 0.8816 → 0.8271. Loss and task are ANTI-CORRELATED over epochs 5-100, and the collapse is
+already complete by epoch 10.
+
+The mechanism is the loss composition: the total is the sum of 12 typed heads, dominated by the `dcell` (25-way)
+and `hp` (class-weighted) cross-entropies. Minimising the sum buys those and pays for it in position. A shared
+trunk plus an unweighted sum of heterogeneous heads is exactly the failure §24 recorded at small scale
+(`w_pos` 200 fixed trajectory and annihilated damage); 100x the data did not change it, it only gave the
+optimiser more room to exploit it.
+
+**The best model is epoch 5** (`runs/wm5_synced/ck_0005.pt`), which is also barely distinguishable from
+persistence: rollout skill +0.0074 on rank 0, +0.0026 as the fleet mean. Treat that as a sign of life, not a
+result -- it is under 1% and one seed.
+
+Two conclusions worth carrying forward:
+
+1. **Scale was not the constraint.** The hypothesis behind collecting 20M was that 203k was too little. At 100x
+   the data the task metric is worse than at 5 epochs, so more data did not help and the binding problem is the
+   objective, not the sample count.
+2. **Never select or stop on the training loss here** (`AGENTS.md` §8, now demonstrated at scale). Best-epoch
+   selection on held-out POSITION error is in `train_wm_tokens.py`; selecting on val loss would have picked
+   epoch 99 and shipped a model 150x worse on the rollout.
+
+The obvious next lever is per-head loss weighting (or per-head gradient normalisation) so position is not traded
+away, measured against the H=1/2/5/10 rollout rather than the loss.
