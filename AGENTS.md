@@ -253,3 +253,45 @@ function fixing one rule violated another written the same night.
 Before adding any per-pod transfer, ask what it costs times the pod count. Over ~10 MB total it belongs in S3
 with presigned GETs (measured: 47 MB of policies to 17 pods in 100 s, versus 1–2 pods per 100 s from the Mac).
 `S3_PROFILE`-signed URLs need no credentials on the pod.
+
+## 21. WHY THE SAME FAILURES REPEAT — and the only fix that works
+
+Every failure on the 116-pod fleet was **already written down as a rule in this file**, and every one was
+repeated anyway. That is the important finding, more than any individual bug:
+
+| what happened | the rule that already existed |
+|---|---|
+| pushed 47 MB × 78 pods from the Mac, stalling bootstrap ~88 min | §15, written the same night |
+| trusted "started: 48" as evidence 48 pods were working | §19, written the same night |
+| threw a batching wrapper around a tool that already parallelises | §14 |
+| diffed against a state file just overwritten | §18 (written *after*, but §1's "verify before building on it" covered it) |
+
+**The mechanism: a rule in a document has to be REMEMBERED at the moment it matters.** These rules were read
+once at session start and then competed with time pressure, a frustrated user, and 39 pods billing. Memory lost
+every time. Prose does not run.
+
+So the rule about rules:
+
+**Encode every operational rule as a check that runs automatically and fails loudly. If it cannot be a check,
+it will be broken.**
+
+Applied:
+
+- `fleet preflight --experiment E` tests every pod for dolphin / torch / **boto3** / xvfb / secrets / ≥9 mix
+  policies / ≥10 savestates and prints *what each failure means*.
+- **`fleet launch` runs preflight and SKIPS pods that would fail**, so "started: N" can no longer mean "N
+  commands dispatched into the void". `--skip-preflight` to override deliberately.
+- `fleet audit` uses **tmux session presence** for liveness, not `pgrep dolphin`.
+
+## 22. Never build a control loop on a signal you have not measured
+
+A "self-healing" daemon polled `pgrep -c dolphin-emu` every 40 s and relaunched anything reading zero. Booting
+12 Dolphin instances takes longer than 40 s, so **it killed and relaunched freshly-started collectors in a
+loop**, destroying work on every cycle until it was noticed by hand.
+
+Before automating on a signal: run it once, by hand, on a machine in the state you are trying to detect, and on
+a machine in the opposite state. Ten seconds of checking. `tmux has-session` is true the instant the collector
+starts; `pgrep dolphin` is not.
+
+And a control loop that can destroy work needs a bias toward inaction: require N consecutive observations,
+interval longer than the startup it is watching, and never let it act on a single sample.

@@ -536,7 +536,20 @@ def cmd_launch(a) -> None:
         pod["run_name"], pod["_envs"] = run_name, envs
         return pod
 
-    pods = for_pods(select(st, a.ranks), prepare, workers=24)           # code/secrets/scripts first, in parallel
+    want = select(st, a.ranks)
+    if not a.skip_preflight:
+        ok, bad = preflight(want)
+        if bad:
+            log(f"PREFLIGHT: {len(bad)} of {len(want)} pods are not ready and will be SKIPPED")
+            for r in sorted(bad)[:12]:
+                log(f"  rank{r}: {', '.join(bad[r])}")
+            log("  fix them with `fleet bootstrap --assets-s3 --ranks <those>` then relaunch "
+                "(or pass --skip-preflight)")
+        want = [p for p in want if p["rank"] in set(ok)]
+        if not want:
+            raise SystemExit("no ready pods; nothing launched")
+        log(f"launching on {len(want)} ready pods")
+    pods = for_pods(want, prepare, workers=24)           # code/secrets/scripts first, in parallel
     if a.collect:
         # the collect branch already started its own tmux session and returned None; the trainer start below
         # would index that None
@@ -656,6 +669,59 @@ def cmd_collected(a) -> None:
         print(f"WARNING: {len(dead)} pods with no dolphin running: {dead}")
 
 
+PREFLIGHT = {
+    # name -> (shell test printing 1/0, what a 0 means)
+    "dolphin":   (f"test -x {R_DOLPHIN_BIN} && echo 1 || echo 0", "Dolphin binary missing (bootstrap incomplete)"),
+    "torch":     (f"{R_VENV}/bin/python -c 'import torch' 2>/dev/null && echo 1 || echo 0", "venv has no torch"),
+    "boto3":     (f"{R_VENV}/bin/python -c 'import boto3' 2>/dev/null && echo 1 || echo 0",
+                  "no boto3: the collector CANNOT upload to S3 and pod-local storage becomes the only copy"),
+    "xvfb":      ("command -v xvfb-run >/dev/null && echo 1 || echo 0", "xvfb-run missing: Dolphin will not boot"),
+    "secrets":   (f"test -s {R_REPO}/.fleet_secrets && echo 1 || echo 0", "no .fleet_secrets (no AWS/W&B creds)"),
+    "policies":  (f"test $(ls {R_REPO}/checkpoints/*/*.pt 2>/dev/null | wc -l) -ge 9 && echo 1 || echo 0",
+                  "fewer than 9 mix policies: resolve_checkpoint will fail on episode 1"),
+    "states":    (f"test $(ls {R_REPO}/assets/states 2>/dev/null | wc -l) -ge 10 && echo 1 || echo 0",
+                  "fewer than 10 savestates"),
+}
+
+
+def preflight(pods: list[dict], workers: int = 60) -> tuple[list[int], dict]:
+    """Per-pod readiness. Returns (ok_ranks, {rank: [failed checks]}).
+
+    WHY THIS IS CODE AND NOT A PARAGRAPH: every failure on this fleet tonight was already written down as a
+    rule, and every one was repeated anyway, because a rule in a document has to be REMEMBERED at the moment it
+    matters. A check that runs automatically and fails loudly does not. `launch` calls this and refuses to start
+    on pods that would fail, so "started: 48" can no longer mean "48 commands dispatched into the void".
+    """
+    keys = list(PREFLIGHT)
+    script = "; ".join(PREFLIGHT[k][0] for k in keys)
+
+    def one(pod):
+        try:
+            out = run(pod, script, capture=True, check=False).split()
+            vals = [x == "1" for x in out[:len(keys)]] if len(out) >= len(keys) else [False] * len(keys)
+        except Exception:
+            vals = [False] * len(keys)
+        return pod["rank"], [k for k, v in zip(keys, vals) if not v]
+
+    res = dict(for_pods(pods, one, workers=workers))
+    return sorted(r for r, bad in res.items() if not bad), {r: b for r, b in res.items() if b}
+
+
+def cmd_preflight(a) -> None:
+    st = load_state(a.experiment)
+    ok, bad = preflight(select(st, a.ranks))
+    print(f"READY: {len(ok)}/{len(ok) + len(bad)} pods")
+    if bad:
+        from collections import Counter
+        why = Counter(c for b in bad.values() for c in b)
+        for c, n in why.most_common():
+            print(f"  {n:>4} pods fail {c:<10} -- {PREFLIGHT[c][1]}")
+        print(f"  not ready: {','.join(map(str, sorted(bad)))[:160]}")
+        if a.write_bad:
+            Path(a.write_bad).write_text(",".join(map(str, sorted(bad))))
+            print(f"  -> {a.write_bad}")
+
+
 def cmd_audit(a) -> None:
     """What is EVERY pod doing right now: collecting / ready-but-idle / bootstrap-incomplete.
 
@@ -668,9 +734,9 @@ def cmd_audit(a) -> None:
     def one(pod):
         try:
             o = run(pod, f"D=$(test -x {R_DOLPHIN_BIN} && echo 1 || echo 0); "
-                         f"T=$({R_VENV}/bin/python -c 'import torch' 2>/dev/null && echo 1 || echo 0); "
+                         f"T=$({R_VENV}/bin/python -c 'import torch,boto3' 2>/dev/null && echo 1 || echo 0); "
                          f"C=$(pgrep -c dolphin-emu 2>/dev/null || echo 0); "
-                         f"P=$(pgrep -fc 'scripts/' 2>/dev/null || echo 0); "
+                         f"P=$(tmux has-session -t zrl 2>/dev/null && echo 1 || echo 0); "   # tmux is true the INSTANT a collector starts; pgrep on dolphin is not (12 instances take >40s to boot, which made a relaunch daemon kill working pods in a loop)
                          f"E=$(ls {R_REPO}/{a.out}/episodes 2>/dev/null | wc -l); echo $D $T $C $P $E",
                     capture=True, check=False).split()
             v = [int(x) for x in o[:5]] if len(o) >= 5 else [0] * 5
@@ -844,6 +910,8 @@ def main() -> None:
     p.add_argument("--states-prefix", default=None,
                    help=f"S3 prefix for the start states; use {S3_STATES_DEKU!r} for a Deku Baba run "
                         f"(the default is the gohma task's states, which have no live Babas)")
+    p = add("preflight", cmd_preflight)
+    p.add_argument("--write-bad", default=None, help="write not-ready ranks here, for a re-bootstrap")
     p = add("audit", cmd_audit)
     p.add_argument("--out", default="datasets/transitions/v5", help="collector --out path, to count episodes")
     p.add_argument("--write-idle", default=None, help="write idle+broken ranks to this file, for a re-bootstrap")
@@ -860,6 +928,7 @@ def main() -> None:
     p.add_argument("--train-args", default="")
     p.add_argument("--run-tag", default="", help="suffix for run names + wandb group (e.g. rupees7)")
     p.add_argument("--script", default="train_ppo.py", help="trainer under scripts/ (train_ppo.py | train_combat.py | collect_transitions.py)")
+    p.add_argument("--skip-preflight", action="store_true", help="launch even on pods that fail readiness")
     p.add_argument("--collect", action="store_true",
                    help="the script is a COLLECTOR, not a trainer: omit --run-name/--num-envs/--fleet-* "
                         "(collect_transitions.py rejects them) and pass only --train-args")
