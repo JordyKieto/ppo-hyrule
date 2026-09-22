@@ -38,7 +38,7 @@ POD_ENV = (f"export DOLPHIN_BIN={R_DOLPHIN_BIN} DOLPHIN_HOST_USER_DIR={R_REPO}/a
 # VERIFIED on a pod: DolphinQt under QT_QPA_PLATFORM=offscreen starts but never boots the game (no RAM arena).
 # Under Xvfb it boots, and linuxmem finds /dev/shm/dolphin-emu.<pid> + MEM1. All instances share one Xvfb display.
 XVFB = "xvfb-run -a -s '-screen 0 640x480x24'"
-PY_DEPS = "numpy lz4 wandb matplotlib requests"
+PY_DEPS = "numpy lz4 wandb matplotlib requests boto3"   # boto3: pods stream datasets to S3 as they collect
 TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 START_SLOTS = tuple(range(1, 11))  # all verified slots (scripts/verify_slots.py); 5 is the goal
 FLEET_KEY = Path.home() / ".cache/zelda-rl/fleet_ed25519"      # pod->pod key: seeds rsync assets to new pods

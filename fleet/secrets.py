@@ -45,4 +45,18 @@ def pod_secrets_file_content() -> str:
     """Contents for the mode-600 env file shipped to pods (sourced by the launch command, never on a command line)."""
     s = load_secrets()
     keys = ("WANDB_API_KEY", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN")
-    return "".join(f"export {k}='{s[k]}'\n" for k in keys if s.get(k))
+    out = "".join(f"export {k}='{s[k]}'\n" for k in keys if s.get(k))
+    # AWS creds so a pod can stream its dataset to S3 AS IT COLLECTS. Without them pod-local storage is the only
+    # copy, and terminating the fleet destroys it -- which is exactly how a 20M-transition collection was lost.
+    try:
+        import boto3
+        c = boto3.Session(profile_name="race-wm").get_credentials().get_frozen_credentials()
+        if c.access_key and c.secret_key:
+            out += (f"export AWS_ACCESS_KEY_ID='{c.access_key}'\n"
+                    f"export AWS_SECRET_ACCESS_KEY='{c.secret_key}'\n"
+                    f"export AWS_DEFAULT_REGION='us-west-1'\n")
+            if getattr(c, "token", None):
+                out += f"export AWS_SESSION_TOKEN='{c.token}'\n"
+    except Exception:
+        pass
+    return out

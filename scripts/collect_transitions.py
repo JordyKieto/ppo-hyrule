@@ -68,6 +68,62 @@ BAD_PLAY_MIX = [
 ]
 MIX_PRESETS = {"default": None, "badplay": BAD_PLAY_MIX}
 
+
+class S3Streamer:
+    """Upload each episode to S3 the moment it is written, in a background thread pool.
+
+    WHY: pod-local storage must never be the only copy. A 20M-transition collection was lost because it lived
+    only in 32 ephemeral pod volumes and terminating the fleet deleted all of them at once. Uploading as we go
+    makes the dataset durable from the first episode instead of at the end, and survives any pod dying.
+    Credentials arrive in the pod's .fleet_secrets (AWS_* env vars); with none present this is a silent no-op
+    so local runs are unaffected.
+    """
+
+    def __init__(self, bucket_prefix: str | None, workers: int = 4):
+        self.ex = self.s3 = self.bucket = self.prefix = None
+        self.n = self.failed = 0
+        if not bucket_prefix:
+            return
+        try:
+            import boto3
+            from concurrent.futures import ThreadPoolExecutor
+            b = bucket_prefix.replace("s3://", "").split("/", 1)
+            self.bucket, self.prefix = b[0], (b[1].rstrip("/") if len(b) > 1 else "")
+            # pods get AWS_* from .fleet_secrets; locally fall back to the named profile
+            import os as _os
+            self.s3 = (boto3.client("s3") if _os.environ.get("AWS_ACCESS_KEY_ID")
+                       else boto3.Session(profile_name="race-wm", region_name="us-west-1").client("s3"))
+            self.ex = ThreadPoolExecutor(workers)
+            print(f"  S3 streaming -> s3://{self.bucket}/{self.prefix}/ ({workers} uploaders)")
+        except Exception as e:  # noqa: BLE001
+            print(f"  S3 streaming disabled: {e}")
+            self.ex = None
+
+    def put(self, path: "Path", key_rel: str) -> None:
+        if self.ex is None:
+            return
+        self.ex.submit(self._one, str(path), f"{self.prefix}/{key_rel}")
+
+    def _one(self, path: str, key: str) -> None:
+        err = None
+        for attempt in range(3):
+            try:
+                self.s3.upload_file(path, self.bucket, key)
+                self.n += 1
+                return
+            except Exception as e:  # noqa: BLE001
+                err = e
+                time.sleep(2 * (attempt + 1))
+        self.failed += 1
+        # SAY WHY. A silently-swallowed upload error is how pod-local storage ends up being the only copy.
+        if self.failed <= 3:
+            print(f"  S3 upload FAILED {key}: {type(err).__name__}: {str(err)[:160]}", flush=True)
+
+    def close(self) -> None:
+        if self.ex is not None:
+            self.ex.shutdown(wait=True)
+            print(f"  S3: {self.n} objects uploaded, {self.failed} failed")
+
 MAX_ENEMIES = MAX_ENEMIES_  # 16: slots start with 9 cat-5 actors (3 Baba + 3 0x0095 + 3 0x0037); headroom for spawns
 DEKU_STATES_DIR = "datasets/zelda/combat/deku-baba/states"   # NOT the live Dolphin slots: those hold Gohma states now
 # Layout lives in zelda_rl/state_layout.py so the collector and the world model cannot drift apart.
@@ -149,6 +205,10 @@ def main():
     ap.add_argument("--realtime", action="store_true", help="cap emulation at 1x (debugging only)")
     ap.add_argument("--no-obs", action="store_true", help="skip the 483-d policy obs (game state + action only)")
     ap.add_argument("--mix", default=None, help="JSON [[path, global_update, episodes], ...] instead of the default mix")
+    ap.add_argument("--s3-prefix", default=None,
+                    help="stream every episode to S3 as it is written, e.g. s3://zelda-rl/zelda/transitions/v5. "
+                         "Pod-local storage as the ONLY copy is how a 20M collection was lost.")
+    ap.add_argument("--s3-workers", type=int, default=4)
     ap.add_argument("--mix-preset", default="default", choices=sorted(MIX_PRESETS),
                     help="named mix; 'badplay' is equal-parts low-skill incl. random-init, for deaths/damage. "
                          "A preset rather than a JSON path so a 39-pod fleet needs no shared file.")
@@ -156,6 +216,7 @@ def main():
 
     torch.set_num_threads(args.torch_threads)
     mix = (json.loads(args.mix) if args.mix else (MIX_PRESETS[args.mix_preset] or DEFAULT_MIX))
+    s3 = S3Streamer(args.s3_prefix, args.s3_workers)
     scale = args.episodes / sum(n for _, _, n in mix)
     quota = [(p, g, max(1, round(n * scale))) for p, g, n in mix]
     slots = [int(s) for s in args.slots.split(",")]
@@ -255,6 +316,7 @@ def main():
             trans_per_ck[qi] += len(acts)
             name = f"ep{idx:05d}_G{quota[qi][1]:03d}_s{slot:02d}_{ep['end']}.npz"
             np.savez_compressed(out / "episodes" / name, **arrs)
+            s3.put(out / "episodes" / name, f"episodes/{name}")     # durable immediately, not at the end
             manifest.write(json.dumps({
                 "file": f"episodes/{name}", "index": idx, "checkpoint": str(quota[qi][0]),
                 "global_update": quota[qi][1], "update": ck["update"], "slot": slot, "steps": len(acts),
@@ -326,8 +388,11 @@ def main():
                 e.close()
             except Exception:  # noqa: BLE001
                 pass
+        manifest.flush()
         manifest.close()
         el = time.perf_counter() - t_start
+        s3.put(out / "manifest.jsonl", "manifest.jsonl")
+        _S3_FINALISE = True
         (out / "dataset.json").write_text(json.dumps({
             "task": "deku_baba_combat", "episodes": ep_index, "transitions": n_trans,
             "outcomes": dict(tally), "wall_seconds": round(el, 1),
@@ -348,6 +413,8 @@ def main():
         if ep_index:
             print(f"  success {tally['success'] / ep_index:.0%} | death {tally['death'] / ep_index:.0%} | "
                   f"left {tally['left_room'] / ep_index:.0%} | timeout {tally['timeout'] / ep_index:.0%}")
+        s3.put(out / "dataset.json", "dataset.json")
+        s3.close()                       # wait for in-flight uploads so nothing is dropped on exit
 
 
 if __name__ == "__main__":
