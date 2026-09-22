@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 import threading
 import time
@@ -271,12 +272,26 @@ def main():
     jobs = [(qi, slots[j % len(slots)]) for qi, (_, _, n) in enumerate(quota) for j in range(n)]
     random.Random(0).shuffle(jobs)
     job_iter = iter(jobs)
-    manifest = (out / "manifest.jsonl").open("w")
+    # APPEND, and resume the episode numbering from what is already on disk. Mode "w" here truncated the
+    # manifest every time a pod was relaunched to fill its backlog: the earlier run's episodes stayed on disk
+    # and in S3 but vanished from the index, and load_many() enumerates the index, so 28.8% of the v5
+    # collection was silently invisible until scripts/rebuild_manifests.py recovered it. Restarting the
+    # numbering at 0 additionally let a relaunch overwrite the first run's episodes whenever the generated
+    # name collided.
+    prior = sorted((out / "episodes").glob("*.npz"))
+    resume_at = 0
+    for q in prior:
+        m = re.match(r"^ep(\d+)_", q.name)
+        if m:
+            resume_at = max(resume_at, int(m.group(1)))
+    if resume_at:
+        print(f"  {len(prior)} episodes already here; numbering resumes at ep{resume_at + 1:05d}")
+    manifest = (out / "manifest.jsonl").open("a")
     tally: Counter = Counter()
     lock = threading.Lock()
     done_per_ck: Counter = Counter()
     trans_per_ck: Counter = Counter()
-    ep_index = n_trans = in_flight = 0
+    ep_index, n_trans, in_flight = resume_at, 0, 0
     t_start = time.perf_counter()
 
     def run_episode(env, qi: int, slot: int) -> tuple[dict, dict]:
@@ -338,6 +353,10 @@ def main():
                 "actors_dropped": len(rows.dropped),
             }) + "\n")
             manifest.flush()
+            if idx % 25 == 0:
+                # The manifest used to be uploaded ONLY in the finally block, so a pod killed mid-run left
+                # its episodes durable in S3 and its index stale. It is a few hundred KB; upload it as we go.
+                s3.put(out / "manifest.jsonl", "manifest.jsonl")
             el = time.perf_counter() - t_start
             drop = f" !{len(rows.dropped)} DROPPED" if rows.dropped else ""
             rate = n_trans / max(el, 1e-9)

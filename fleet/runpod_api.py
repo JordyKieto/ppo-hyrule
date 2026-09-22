@@ -9,6 +9,8 @@ from fleet.secrets import require
 
 API = "https://rest.runpod.io/v1"
 DEFAULT_IMAGE = "runpod/base:1.2.0-ubuntu2404"
+# CUDA + torch preinstalled; building torch-cuda into the venv on the pod is a 10-minute tax.
+GPU_IMAGE = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 
 
 class RunPod:
@@ -27,6 +29,21 @@ class RunPod:
                        cloud: str = "SECURE", data_centers: list[str] | None = None) -> dict:
         body = {
             "name": name, "computeType": "CPU", "cpuFlavorIds": list(flavors), "vcpuCount": vcpu,
+            "imageName": image, "containerDiskInGb": container_disk_gb, "volumeInGb": volume_gb,
+            "volumeMountPath": "/workspace", "ports": ["22/tcp"], "env": {"PUBLIC_KEY": public_key},
+            "cloudType": cloud,
+        }
+        if data_centers:
+            body["dataCenterIds"] = data_centers
+        return self._req("POST", "/pods", json=body)
+
+    def create_gpu_pod(self, name: str, public_key: str, *, gpu_type_ids: list[str], gpu_count: int = 1,
+                       image: str = GPU_IMAGE, container_disk_gb: int = 60, volume_gb: int = 200,
+                       cloud: str = "SECURE", data_centers: list[str] | None = None) -> dict:
+        """A GPU pod. gpu_type_ids is a PRIORITY LIST -- RunPod takes the first with capacity, so pass
+        several equivalent A100 spellings rather than failing on the one that happens to be sold out."""
+        body = {
+            "name": name, "computeType": "GPU", "gpuTypeIds": gpu_type_ids, "gpuCount": gpu_count,
             "imageName": image, "containerDiskInGb": container_disk_gb, "volumeInGb": volume_gb,
             "volumeMountPath": "/workspace", "ports": ["22/tcp"], "env": {"PUBLIC_KEY": public_key},
             "cloudType": cloud,

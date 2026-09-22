@@ -133,6 +133,7 @@ def cmd_create(a) -> None:
             pod = None
             try:
                 pod = rp.create_cpu_pod(name, pub, vcpu=a.vcpu, flavors=a.flavors.split(","), image=a.image,
+                                        container_disk_gb=a.container_disk, volume_gb=a.volume_gb,
                                         cloud=a.cloud)
                 log(f"  created {name}: id={pod.get('id')} costPerHr={pod.get('costPerHr')} vcpu={pod.get('vcpuCount')} "
                     f"mem={pod.get('memoryInGb')}GB")
@@ -948,6 +949,10 @@ def main() -> None:
     p.add_argument("--flavors", default="cpu5c,cpu3c")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--image", default="runpod/base:1.2.0-ubuntu2404")
+    p.add_argument("--container-disk", type=int, default=40, help="GB of container disk")
+    p.add_argument("--volume-gb", type=int, default=20,
+                   help="GB on /workspace. A collector needs ~1; a TRAINER holding the whole dataset needs "
+                        "the dataset size plus room to unpack -- v5 is ~25 GB, so 20 silently fills up")
     p.add_argument("--ssh-timeout", type=float, default=420, help="give up on (and terminate) a pod without SSH after this")
     p.add_argument("--confirm", action="store_true")
     p = add("bootstrap", cmd_bootstrap)

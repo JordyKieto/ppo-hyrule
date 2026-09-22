@@ -37,6 +37,7 @@ meant to keep finite.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import sys
@@ -142,6 +143,13 @@ def main():
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--grid", type=int, default=32, help="nav-grid resolution (cell ~29x45 world units at 32)")
+    ap.add_argument("--device", default="cpu", help="cpu | cuda")
+    ap.add_argument("--rows", type=int, default=16,
+                    help="actor token slots to KEEP. The state layout has 16, but measured over the v5 "
+                         "dataset slots 9-15 are occupied in 0.000%% of frames (max 9 actors present, and "
+                         "slots are stable across time so they cannot be compacted). 9 costs nothing and cuts "
+                         "every per-actor array by 44%%, which is what lets the whole dataset sit in VRAM.")
+    ap.add_argument("--amp", action="store_true", help="bf16 autocast (cuda only)")
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--clip", type=float, default=1.0)
@@ -210,12 +218,35 @@ def main():
     if a.shards:
         # sorted() so the shard list -- and therefore the episode sampling under a fixed --seed -- is
         # reproducible; a bare glob is filesystem-order.
-        dirs = sorted(str(p) for p in Path().glob(a.shards) if (p / "manifest.jsonl").exists())
+        # glob, not Path().glob: the latter cannot take an ABSOLUTE pattern, which is what a pod path is.
+        dirs = sorted(d for d in glob.glob(a.shards) if (Path(d) / "manifest.jsonl").exists())
         if not dirs:
             sys.exit(f"--shards {a.shards!r} matched no directory containing a manifest.jsonl")
         if not (Path(dirs[0]) / "dataset.json").exists():
             sys.exit(f"{dirs[0]} has no dataset.json; load_many needs it on the FIRST dir for obs_dim")
-        print(f"shards: {len(dirs)} dirs matching {a.shards}")
+        # A shard pulled from S3 gets its manifest before all of its episodes, so a glob can pick up a
+        # HALF-SYNCED shard. load_many would then raise on a missing .npz -- but only after minutes of
+        # loading, and only if the shuffle happened to reach it. Check it up front instead.
+        # A manifest row pointing at a file that is NOT on disk is a half-synced shard: load_many would
+        # raise, but only minutes into the load and only if the shuffle reached it, so fail up front.
+        # Files on disk that are NOT in the manifest are the opposite problem -- unused data, not a crash --
+        # so that is a warning. After scripts/rebuild_manifests.py the only ones left are corrupt .npz.
+        missing, extra = [], 0
+        for d in dirs:
+            man = {json.loads(l)["file"].split("/")[-1]
+                   for l in (Path(d) / "manifest.jsonl").read_text().splitlines() if l.strip()}
+            disk = {q.name for q in (Path(d) / "episodes").glob("*.npz")}
+            if man - disk:
+                missing.append(f"{d}: {len(man - disk)} manifest rows have no file on disk")
+            extra += len(disk - man)
+        if missing:
+            sys.exit("incomplete shard(s) -- finish the pull (scripts/pull_dataset.sh resumes) or narrow "
+                     "--shards:\n  " + "\n  ".join(missing[:10])
+                     + (f"\n  ... and {len(missing)-10} more" if len(missing) > 10 else ""))
+        if extra:
+            print(f"note: {extra} episode file(s) on disk are not in any manifest and will NOT be used "
+                  f"(run scripts/rebuild_manifests.py; whatever it cannot add is a corrupt .npz)")
+        print(f"shards: {len(dirs)} dirs matching {a.shards} (all complete)")
     # want_obs=False: this model never touches the 483-d obs, and it is 57% of the memory.
     meta, state, act, slot, epid, obs, has = load_many(dirs, want_obs=False,
                                                       max_frames=a.max_frames, seed=a.seed)
@@ -223,6 +254,13 @@ def main():
     test, tune = set(split["val_slots"]), set(split.get("tune_slots", []))
     tr_m = ~np.isin(slot, list(test | tune))
     lk, rows, _ = _split(state)
+    if a.rows < rows.shape[1]:
+        occupied = int((rows[:, :, RI["present"]] > 0.5).any(0).nonzero()[0].max()) + 1
+        if occupied > a.rows:
+            sys.exit(f"--rows {a.rows} would DROP actors: slot {occupied - 1} is occupied somewhere in this "
+                     f"data. Actor slots are stable across time, so they cannot be compacted -- raise --rows.")
+        print(f"actor slots: {occupied} ever occupied of {rows.shape[1]} -> keeping {a.rows}")
+        rows = rows[:, :a.rows].copy()
     _pres = rows[:, :, RI["present"]] > 0.5
     prep = _prep0
     grid = (NavGrid.load(prep["grid"]) if prep else
@@ -231,6 +269,9 @@ def main():
     print(f"nav grid {grid.n}x{grid.n} | cell {np.round(grid.cell,1)} world units")
     T, sc = build(state, epid, train_mask=tr_m, grid=grid,
                   scales=(prep["scales"] if prep else None))
+    if a.rows < T["actors"].shape[1]:                       # keep T consistent with the sliced `rows`
+        for _k in ("actors", "ids", "cats", "states", "mask", "actor_rcell", "actor_off", "cell_xy"):
+            T[_k] = T[_k][:, :a.rows].copy()
 
     # ---- targets, all DELTAS or EVENTS, never absolutes
     nxt = np.minimum(np.arange(len(state)) + 1, len(state) - 1)
@@ -278,13 +319,50 @@ def main():
     st_now = T["states"]
     st_nxt = rows[nxt, :, RI["state_idx"]].astype(np.int64).clip(0, N_STATES - 1)
 
-    tt = {k: torch.from_numpy(v) for k, v in T.items() if k != "start_idx"}
-    tt["rel_xz"] = torch.from_numpy(np.stack([T["actors"][:, :, 0], T["actors"][:, :, 1]], -1))
-    Y = {k: torch.from_numpy(v) for k, v in
-         dict(dcell=dcell_i, doff=doff, dy=dy, dyaw=dyaw, hp_ev=hp_ev, bits_now=bits_now, bits_nxt=bits_nxt,
-              scene_now=scene_now, scene_nxt=scene_nxt, r_dcell=r_dcell_i, r_doff=r_doff, r_hp_ev=r_hp_ev,
-              pres_now=pres_now, pres_nxt=pres_nxt, st_now=st_now, st_nxt=st_nxt).items()}
-    A = F.one_hot(torch.from_numpy(act.astype(np.int64)).clamp(0, NA - 1), NA).float()
+    dev = torch.device(a.device)
+    # ---- RESIDENT DATASET. Stored in the NARROWEST dtype each field admits and cast per batch, so the whole
+    # thing fits in VRAM and training does no host-device transfer at all. f32 tokens + f32 targets + a f32
+    # one-hot action is 3.3 KB/frame = 298 GB over 91.5M frames; this is ~590 B/frame = ~54 GB.
+    #   f16  continuous fields, all already scaled to [-1,1] by tokens.py, so f16's 3 decimal digits are ample
+    #   uint8 every index and mask (cells 0-63, rel-cells 0-30, ids 0-255, states 0-9, masks 0/1)
+    #   the action stays an INDEX; the 63-wide one-hot is built on the device per batch (it was 252 B/frame)
+    # `rel_xz` is dropped: it was a verbatim copy of actors[:, :, :2] and is now sliced out of it per batch.
+    F16 = ("link", "actors", "link_off", "actor_off", "cell_xy")
+    U8 = ("ids", "cats", "states", "mask", "link_cell", "actor_rcell")
+    tt = {}
+    for k, v in T.items():
+        if k == "start_idx":
+            continue
+        t = torch.from_numpy(v)
+        tt[k] = (t.half() if k in F16 else t.to(torch.uint8) if k in U8 else t).to(dev)
+    YF16 = ("doff", "dy", "dyaw", "r_doff")
+    YU8 = ("dcell", "hp_ev", "scene_now", "scene_nxt", "r_dcell", "r_hp_ev",
+           "bits_now", "bits_nxt", "pres_now", "pres_nxt", "st_now", "st_nxt")
+    Y = {}
+    for k, v in dict(dcell=dcell_i, doff=doff, dy=dy, dyaw=dyaw, hp_ev=hp_ev, bits_now=bits_now,
+                     bits_nxt=bits_nxt, scene_now=scene_now, scene_nxt=scene_nxt, r_dcell=r_dcell_i,
+                     r_doff=r_doff, r_hp_ev=r_hp_ev, pres_now=pres_now, pres_nxt=pres_nxt,
+                     st_now=st_now, st_nxt=st_nxt).items():
+        t = torch.from_numpy(v)
+        Y[k] = (t.half() if k in YF16 else t.to(torch.uint8) if k in YU8 else t).to(dev)
+    A = torch.from_numpy(act.astype(np.int64)).clamp(0, NA - 1).to(torch.uint8).to(dev)
+    _nbytes = sum(v.element_size() * v.nelement() for v in list(tt.values()) + list(Y.values())) + A.nelement()
+    print(f"resident dataset: {_nbytes / 2**30:.1f} GiB on {dev} ({_nbytes / max(len(state), 1):.0f} B/frame)")
+
+    _LONG = ("ids", "cats", "states", "link_cell", "actor_rcell")     # embedding lookups need an index dtype
+    _YLONG = ("dcell", "hp_ev", "scene_now", "scene_nxt", "r_dcell", "r_hp_ev", "st_now", "st_nxt")
+
+    def gt(i):
+        """One batch of tokens, cast back to float32/int64. rel_xz is regenerated from the actor fields."""
+        o = {k: (v[i].long() if k in _LONG else v[i].float()) for k, v in tt.items()}
+        o["rel_xz"] = o["actors"][:, :, :2]
+        return o
+
+    def yg(k, i):
+        return Y[k][i].long() if k in _YLONG else Y[k][i].float()
+
+    def ag(i):
+        return F.one_hot(A[i].long(), NA).float()
     idx = lambda m: np.flatnonzero(m & ok)                                  # noqa: E731
     tr, tu, te = idx(tr_m), idx(np.isin(slot, list(tune))), idx(np.isin(slot, list(test)))
 
@@ -296,13 +374,13 @@ def main():
         v = lab.reshape(-1)[(m.reshape(-1) > 0.5) if m is not None else slice(None)]
         c = np.bincount(np.asarray(v).astype(np.int64), minlength=k).astype(np.float64)
         w = np.sqrt(c.sum() / np.maximum(c, 1.0))
-        return torch.from_numpy((w / w.mean()).astype(np.float32))
+        return torch.from_numpy((w / w.mean()).astype(np.float32)).to(dev)
 
     CW_HP = cw(hp_ev[tr], 3)
     CW_RHP = cw(r_hp_ev[tr], 3, pres_now[tr])
     # dcell is ~94% "same cell"; without a weight the head predicts only the centre class and never a move.
     CW_DC = cw(dcell_i[tr], DC) if a.dcell_weight else None
-    print(f"hp event rates train: {np.bincount(hp_ev[tr], minlength=3) / len(tr)} -> weights {CW_HP.numpy().round(2)}")
+    print(f"hp event rates train: {np.bincount(hp_ev[tr], minlength=3) / len(tr)} -> weights {CW_HP.cpu().numpy().round(2)}")
 
     if a.save_prep:
         Path(a.save_prep).parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +399,7 @@ def main():
         print(f"fleet: {a.fleet_experiment} rank {a.fleet_rank}/{a.fleet_world_size} "
               f"aggregator {a.fleet_aggregator}")
 
-    net = TokenWM(NA, a.dim, a.heads)
+    net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     sched = None
     if a.sched == "cosine":
@@ -335,6 +413,9 @@ def main():
     print(f"{len(state):,} frames | train {len(tr):,} tune {len(tu):,} test {len(te):,} | link tok {LINK_DIM} "
           f"actor tok {ACTOR_DIM} | d {a.dim} heads {a.heads} | params {sum(p.numel() for p in net.parameters())/1e6:.2f}M")
 
+    amp = bool(a.amp and dev.type == "cuda")
+    if a.amp and dev.type != "cuda":
+        print("--amp ignored: not on cuda")
     nb_ = len(SF1_KEEP)
 
     def split_link(o, i):
@@ -348,11 +429,11 @@ def main():
         bits, j = o[:, j:j + nb_], j + nb_
         sc_, j = o[:, j:j + 2], j + 2
         # LOGIT RESIDUAL so argmax/sign at init equals the CURRENT value -> exact persistence
-        dcl = dcl + LOGIT_K * F.one_hot(torch.full((len(i),), CENTRE), DC).float()   # persistence = same cell
+        dcl = dcl + LOGIT_K * F.one_hot(torch.full((len(i),), CENTRE, device=dev), DC).float()   # persistence = same cell
         dp = (dcl, dof)
-        bits = bits + LOGIT_K * (2 * Y["bits_now"][i] - 1)
-        sc_ = sc_ + LOGIT_K * F.one_hot(Y["scene_now"][i], 2).float()
-        hp = hp + LOGIT_K * F.one_hot(torch.zeros(len(i), dtype=torch.long), 3).float()
+        bits = bits + LOGIT_K * (2 * yg("bits_now", i) - 1)
+        sc_ = sc_ + LOGIT_K * F.one_hot(yg("scene_now", i), 2).float()
+        hp = hp + LOGIT_K * F.one_hot(torch.zeros(len(i), dtype=torch.long, device=dev), 3).float()
         return dp, dyv, dyw, hp, bits, sc_
 
     def split_actor(o, i):
@@ -362,31 +443,31 @@ def main():
         hp, j = o[..., j:j + 3], j + 3
         pr, j = o[..., j:j + 1], j + 1
         st = o[..., j:j + N_STATES]
-        hp = hp + LOGIT_K * F.one_hot(torch.zeros(o.shape[:2], dtype=torch.long), 3).float()
-        pr = pr + LOGIT_K * (2 * Y["pres_now"][i][..., None] - 1)
-        st = st + LOGIT_K * F.one_hot(Y["st_now"][i], N_STATES).float()
-        rdcl = rdcl + LOGIT_K * F.one_hot(torch.full(o.shape[:2], CENTRE), DC).float()
+        hp = hp + LOGIT_K * F.one_hot(torch.zeros(o.shape[:2], dtype=torch.long, device=dev), 3).float()
+        pr = pr + LOGIT_K * (2 * yg("pres_now", i)[..., None] - 1)
+        st = st + LOGIT_K * F.one_hot(yg("st_now", i), N_STATES).float()
+        rdcl = rdcl + LOGIT_K * F.one_hot(torch.full(o.shape[:2], CENTRE, device=dev), DC).float()
         return (rdcl, rdof), hp, pr, st
 
     def loss_fn(i):
-        ol, oa = net({k: v[i] for k, v in tt.items()}, A[i])
+        ol, oa = net(gt(i), ag(i))
         dp, dyv, dyw, hp, bits, scn = split_link(ol, i)
-        m = Y["pres_now"][i]
+        m = yg("pres_now", i)
         rdp, rhp, rpr, rst = split_actor(oa, i)
-        L = {"l_dcell": F.cross_entropy(dp[0], Y["dcell"][i], weight=CW_DC),   # WHICH cell: classification
-             "l_doff": F.l1_loss(dp[1], Y["doff"][i]),                          # sub-cell: bounded L1
-             "l_y": F.l1_loss(dyv, Y["dy"][i]),
-             "l_yaw": F.l1_loss(dyw, Y["dyaw"][i]),
-             "l_hp": F.cross_entropy(hp, Y["hp_ev"][i], weight=CW_HP),     # CE, class-weighted
-             "l_bits": F.binary_cross_entropy_with_logits(bits, Y["bits_nxt"][i]),
-             "l_scene": F.cross_entropy(scn, Y["scene_nxt"][i]),
-             "a_dcell": (F.cross_entropy(rdp[0].reshape(-1, DC), Y["r_dcell"][i].reshape(-1),
+        L = {"l_dcell": F.cross_entropy(dp[0], yg("dcell", i), weight=CW_DC),   # WHICH cell: classification
+             "l_doff": F.l1_loss(dp[1], yg("doff", i)),                          # sub-cell: bounded L1
+             "l_y": F.l1_loss(dyv, yg("dy", i)),
+             "l_yaw": F.l1_loss(dyw, yg("dyaw", i)),
+             "l_hp": F.cross_entropy(hp, yg("hp_ev", i), weight=CW_HP),     # CE, class-weighted
+             "l_bits": F.binary_cross_entropy_with_logits(bits, yg("bits_nxt", i)),
+             "l_scene": F.cross_entropy(scn, yg("scene_nxt", i)),
+             "a_dcell": (F.cross_entropy(rdp[0].reshape(-1, DC), yg("r_dcell", i).reshape(-1),
                                          reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1),
-             "a_doff": ((rdp[1] - Y["r_doff"][i]).abs().mean(-1) * m).sum() / m.sum().clamp(min=1),
-             "a_hp": (F.cross_entropy(rhp.reshape(-1, 3), Y["r_hp_ev"][i].reshape(-1), weight=CW_RHP,
+             "a_doff": ((rdp[1] - yg("r_doff", i)).abs().mean(-1) * m).sum() / m.sum().clamp(min=1),
+             "a_hp": (F.cross_entropy(rhp.reshape(-1, 3), yg("r_hp_ev", i).reshape(-1), weight=CW_RHP,
                                       reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1),
-             "a_pres": F.binary_cross_entropy_with_logits(rpr.squeeze(-1), Y["pres_nxt"][i]),
-             "a_state": (F.cross_entropy(rst.reshape(-1, N_STATES), Y["st_nxt"][i].reshape(-1),
+             "a_pres": F.binary_cross_entropy_with_logits(rpr.squeeze(-1), yg("pres_nxt", i)),
+             "a_state": (F.cross_entropy(rst.reshape(-1, N_STATES), yg("st_nxt", i).reshape(-1),
                                          reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1)}
         return sum(L.values()), L, (dp, hp)
 
@@ -403,17 +484,18 @@ def main():
         with torch.no_grad():
             cell = T["link_cell"][idx_np].copy()
             off = T["link_off"][idx_np].copy()
-            tok = {k: (v[idx_np].clone() if torch.is_tensor(v) else torch.from_numpy(v[idx_np]))
-                   for k, v in tt.items()}
+            _ii = torch.from_numpy(idx_np).to(dev)
+            tok = gt(_ii)
             start_xz = grid.from_cell(cell, off)
             for h in range(1, max(horizons) + 1):
-                o_l, _ = net(tok, A[torch.from_numpy(idx_np + h - 1)])
-                (dcl, dof), *_ = split_link(o_l, torch.from_numpy(idx_np + h - 1))
-                k = dcl.argmax(-1).numpy()
+                _ih = torch.from_numpy(idx_np + h - 1).to(dev)
+                o_l, _ = net(tok, ag(_ih))
+                (dcl, dof), *_ = split_link(o_l, _ih)
+                k = dcl.argmax(-1).cpu().numpy()
                 cell = np.clip(cell + np.stack([k // DW, k % DW], 1) - DW // 2, 0, grid.n - 1)
-                off = np.clip(off + dof.numpy(), -0.5, 0.5)
-                tok["link_cell"] = torch.from_numpy(cell)
-                tok["link_off"] = torch.from_numpy(off)
+                off = np.clip(off + dof.float().cpu().numpy(), -0.5, 0.5)
+                tok["link_cell"] = torch.from_numpy(cell).to(dev).long()
+                tok["link_off"] = torch.from_numpy(off).to(dev).float()
                 if h in horizons:
                     true_xz = lpos[np.minimum(idx_np + h, len(state) - 1)]
                     pred_xz = grid.from_cell(cell, off)
@@ -471,8 +553,9 @@ def main():
         perm = rng.permutation(tr)
         t0, tot, gn, gmax, nb = time.time(), 0.0, 0.0, 0.0, 0
         for s in range(0, len(perm) - a.batch, a.batch):
-            i = torch.from_numpy(perm[s:s + a.batch])
-            loss, parts, _ = loss_fn(i)
+            i = torch.from_numpy(perm[s:s + a.batch]).to(dev)
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+                loss, parts, _ = loss_fn(i)
             opt.zero_grad(); loss.backward()
             g = float(nn.utils.clip_grad_norm_(net.parameters(), a.clip))
             opt.step()
@@ -481,25 +564,26 @@ def main():
                 print(f"  !! non-finite gradient at step {nb}"); break
         net.eval()
         with torch.no_grad():
-            iu = torch.from_numpy(tu[:8192])
+            iu = torch.from_numpy(tu[:8192]).to(dev)
             _, parts, (dp, hp) = loss_fn(iu)
-            k = iu.numpy()
-            pc = dp[0].argmax(-1).numpy()
+            k = tu[:8192]
+            pc = dp[0].argmax(-1).cpu().numpy()
             pcell = np.stack([pc // DW, pc % DW], 1) - DW // 2 + T["link_cell"][k]
-            pred_xz = grid.from_cell(pcell, (T["link_off"][k] + dp[1].numpy()).clip(-0.5, 0.5))
+            pred_xz = grid.from_cell(pcell, (T["link_off"][k] + dp[1].float().cpu().numpy()).clip(-0.5, 0.5))
             true_xz = lpos[nxt][k]
             werr = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
             pers = float(np.linalg.norm(lpos[k] - true_xz, axis=1).mean())
-            dcell_acc = float((dp[0].argmax(-1) == Y["dcell"][iu]).float().mean())
-            hp_acc = float((hp.argmax(-1) == Y["hp_ev"][iu]).float().mean())
-            hp_rec = float((hp.argmax(-1)[Y["hp_ev"][iu] == 1] == 1).float().mean()) if (Y["hp_ev"][iu] == 1).any() else float("nan")
+            dcell_acc = float((dp[0].argmax(-1) == yg("dcell", iu)).float().mean())
+            hp_acc = float((hp.argmax(-1) == yg("hp_ev", iu)).float().mean())
+            _hpv = yg("hp_ev", iu)
+            hp_rec = float((hp.argmax(-1)[_hpv == 1] == 1).float().mean()) if (_hpv == 1).any() else float("nan")
         row = {"epoch": ep + 1, "lr": opt.param_groups[0]["lr"],
                "train": tot / nb, "grad_mean": gn / nb, "grad_max": gmax,
                "dpos_world": werr, "persistence_world": pers, "skill": 1 - werr / max(pers, 1e-9),
                "hp_acc": hp_acc, "hp_loss_recall": hp_rec, "dcell_acc": dcell_acc,
                **{k: float(v) for k, v in parts.items()}}
         with torch.no_grad():                       # held-out VALIDATION loss on the test slots
-            iv = torch.from_numpy(te[:8192])
+            iv = torch.from_numpy(te[:8192]).to(dev)
             vloss, vparts, _ = loss_fn(iv)
         row["val_loss"] = float(vloss)
         row.update({f"val/{k}": float(v) for k, v in vparts.items()})
