@@ -220,7 +220,10 @@ def main():
     # The prep bundle carries the split, so a fleet pod needs no reference checkpoint (checkpoints/ is
     # excluded from the code push, and loading --ref there fails with FileNotFoundError on every rank).
     _prep0 = json.load(open(a.prep)) if a.prep else None
+    # A packed dataset carries its own split in meta.json, so it must not need --ref either: requiring a
+    # checkpoint that checkpoints/ is excluded from the code push would fail for no reason.
     split = (_prep0["split"] if _prep0 and "split" in _prep0
+             else json.load(open(Path(a.packed) / "meta.json"))["split"] if a.packed
              else torch.load(a.ref, weights_only=False, map_location="cpu")["split"])
     dirs = [a.data, *a.extra_data]
     if a.shards:
