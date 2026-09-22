@@ -172,16 +172,19 @@ def cmd_bootstrap(a) -> None:
         if a.assets_s3:
             log(f"rank{r}: push code")
             rsync(pod, [f"{REPO}/"], f"{R_REPO}/", extra=CODE_EXCLUDES)
+            push_policies(pod)
             s3_pull_assets(pod)
         elif usable_seeds:
             sd = usable_seeds[r % len(usable_seeds)]
             t0 = time.time()
             log(f"rank{r}: seed rank{sd['rank']} -> code + NAND + savestates + Dolphin (datacenter link)")
             seed_push(sd, pod)
+            push_policies(pod)
             log(f"rank{r}: seeded in {time.time() - t0:.0f}s")
         else:
             log(f"rank{r}: push code")
             rsync(pod, [f"{REPO}/"], f"{R_REPO}/", extra=CODE_EXCLUDES)
+            push_policies(pod)
             log(f"rank{r}: push NAND + savestates")
             rsync(pod, [str(LOCAL_DOLPHIN_USER / "Wii")], f"{R_REPO}/assets/dolphin_user/")
             rsync(pod, [str(LOCAL_DOLPHIN_USER / "StateSaves" / f"NACE01.s{k:02d}") for k in START_SLOTS
@@ -363,9 +366,38 @@ def cmd_verify(a) -> None:
         print(f"\n===== rank{rank} verify =====\n{out[-6000:]}")
 
 
+def mix_policy_paths():
+    """Repo-relative checkpoints that a collection mix names.
+
+    CODE_EXCLUDES deliberately drops checkpoints/ and *.pt -- they are large and a trainer does not need them.
+    A COLLECTION run does: `resolve_checkpoint` fails on the pod without the exact policies its mix references.
+    Read from the mix definitions rather than hardcoded, so adding a checkpoint to a mix cannot silently break
+    a fleet run.
+    """
+    try:
+        from scripts.collect_transitions import BAD_PLAY_MIX, DEFAULT_MIX
+    except Exception:
+        return []
+    return sorted({p for p, _, _ in list(BAD_PLAY_MIX) + list(DEFAULT_MIX) if (REPO / p).exists()})
+
+
+def push_policies(pod) -> None:
+    """rsync just the mix checkpoints, preserving their repo-relative paths (rsync -R)."""
+    rel = mix_policy_paths()
+    if not rel:
+        return
+    mb = sum((REPO / r).stat().st_size for r in rel) / 1e6
+    log(f"rank{pod['rank']}: push {len(rel)} mix policies ({mb:.0f} MB)")
+    rsync(pod, [f"{REPO}/./{r}" for r in rel], f"{R_REPO}/", extra=["-R"])
+
+
 CODE_EXCLUDES = ["--exclude", ".venv/", "--exclude", "runs/", "--exclude", "assets/", "--exclude", "__pycache__/",
                  "--exclude", "recordings/", "--exclude", "*.mp4", "--exclude", "*.mov",
-                 "--exclude", "checkpoints/", "--exclude", ".git/", "--exclude", "*.pt", "--exclude", ".DS_Store"]
+                 "--exclude", "checkpoints/", "--exclude", ".git/", "--exclude", "*.pt", "--exclude", ".DS_Store",
+                 # datasets/ was NOT excluded, so 52 GB of collected episodes was pushed to every pod. Pods
+                 # GENERATE data; they never read the local dataset tree. `instances/` are the per-env Dolphin
+                 # working dirs those collections leave behind, and they contain FIFO pipes that rsync warns on.
+                 "--exclude", "datasets/", "--exclude", "instances/", "--exclude", "wandb/"]
 
 
 def cmd_launch(a) -> None:
