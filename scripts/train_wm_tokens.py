@@ -143,6 +143,12 @@ def main():
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--clip", type=float, default=1.0)
+    ap.add_argument("--dcell-weight", action="store_true",
+                    help="class-weight the dcell head. OFF by default: sqrt-inverse weights over 25 classes "
+                         "where 94%% are 'same cell' give the centre class ~0.01 against ~2.9 for the rare "
+                         "ones, so the loss PUNISHES predicting no-movement -- correct 94%% of the time. "
+                         "Measured: dcell accuracy 0.966 at epoch 1 collapsing to 0.52 by epoch 12. Rare-event "
+                         "weighting is right for HP detection and wrong for position accuracy.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--torch-threads", type=int, default=6)
     ap.add_argument("--ckpt-dir", default=None)
@@ -232,7 +238,7 @@ def main():
     CW_HP = cw(hp_ev[tr], 3)
     CW_RHP = cw(r_hp_ev[tr], 3, pres_now[tr])
     # dcell is ~94% "same cell"; without a weight the head predicts only the centre class and never a move.
-    CW_DC = cw(dcell_i[tr], DC)
+    CW_DC = cw(dcell_i[tr], DC) if a.dcell_weight else None
     print(f"hp event rates train: {np.bincount(hp_ev[tr], minlength=3) / len(tr)} -> weights {CW_HP.numpy().round(2)}")
 
     net = TokenWM(NA, a.dim, a.heads)
