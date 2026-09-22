@@ -109,3 +109,42 @@ last −9.919; 3e-4 → oscillates between −0.07 and −5.3. Reading the last 
 
 **Pods with no shard cannot train.** 7 of 39 collected zero episodes and had to be terminated; check
 `fleet collected --verbose` before launching training, not after.
+
+## Collecting at fleet scale — the three things that silently destroy a dataset
+
+All three were hit in one session. Each reported SUCCESS while the data was not where it needed to be.
+
+1. **Pod-local storage as the only copy.** 20M transitions were lost by terminating a fleet after syncing only
+   checkpoints. Always `--s3-prefix s3://zelda-rl/zelda/transitions/<run>`; the collector then uploads each
+   episode as it is written. Verify with `fleet verify-s3` and kill with
+   `fleet kill --check-s3 s3://.../<run>`, which REFUSES while any pod has unmirrored episodes.
+2. **A flat S3 prefix across pods.** Every collector numbers episodes from `ep00001`, so 109 pods overwrote each
+   other: 79,694 episodes on disk became ~20,000 objects in S3, a 75% loss that looked like a complete dataset.
+   `S3Streamer` now namespaces by `--s3-shard` (default: hostname). Never share a shard.
+3. **A missing dependency disabling the upload silently.** `boto3` was absent from `PY_DEPS`, so ~66 pods
+   collected happily and uploaded nothing. `fleet preflight` now treats missing boto3 as a hard failure, and
+   `fleet launch` skips pods that fail preflight.
+
+Order of operations for a collection run:
+
+```sh
+python -m fleet create    --experiment E --count N --vcpu 16 --confirm
+python -m fleet bootstrap --experiment E --assets-s3 --workers 50     # Dolphin, NAND, venv all from S3
+python -m fleet assets    --experiment E --states-only --states-prefix zelda/combat/deku-baba/states
+python -m fleet preflight --experiment E                              # MUST be 100% before launching
+python -m fleet launch    --experiment E --collect --script collect_transitions.py \
+    --train-args "... --out datasets/transitions/E --s3-prefix s3://zelda-rl/zelda/transitions/E"
+python -m fleet audit     --experiment E                              # nothing idle, nothing billing for free
+python -m fleet verify-s3 --experiment E --s3-prefix s3://zelda-rl/zelda/transitions/E
+python -m fleet kill      --experiment E --check-s3 s3://zelda-rl/zelda/transitions/E --confirm
+```
+
+Bring a dataset local (per-rank prefixes, so pull whichever shards you need):
+
+```sh
+aws s3 sync s3://zelda-rl/zelda/transitions/v5/ datasets/transitions/v5/ --profile race-wm
+aws s3 sync s3://zelda-rl/zelda/transitions/v5/rank000/ datasets/transitions/v5/rank000/ --profile race-wm
+```
+
+`load_many()` takes a list of directories and only the first needs `dataset.json`, so per-rank directories
+concatenate with no merge step.

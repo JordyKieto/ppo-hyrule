@@ -79,7 +79,7 @@ class S3Streamer:
     so local runs are unaffected.
     """
 
-    def __init__(self, bucket_prefix: str | None, workers: int = 4):
+    def __init__(self, bucket_prefix: str | None, workers: int = 4, shard: str | None = None):
         self.ex = self.s3 = self.bucket = self.prefix = None
         self.n = self.failed = 0
         if not bucket_prefix:
@@ -89,6 +89,12 @@ class S3Streamer:
             from concurrent.futures import ThreadPoolExecutor
             b = bucket_prefix.replace("s3://", "").split("/", 1)
             self.bucket, self.prefix = b[0], (b[1].rstrip("/") if len(b) > 1 else "")
+            # PER-SHARD NAMESPACE, or 109 pods silently overwrite each other. Every collector numbers episodes
+            # from ep00001, so a flat prefix means rank 7's ep00001 clobbers rank 3's. Measured: 79,694 episodes
+            # on disk across the fleet collapsed to ~20,000 objects in S3 -- a 75% loss that looked like a
+            # complete dataset. The shard defaults to the hostname so it is always distinct.
+            import socket
+            self.prefix = f"{self.prefix}/{shard or socket.gethostname()}".strip("/")
             # pods get AWS_* from .fleet_secrets; locally fall back to the named profile
             import os as _os
             self.s3 = (boto3.client("s3") if _os.environ.get("AWS_ACCESS_KEY_ID")
@@ -209,6 +215,9 @@ def main():
                     help="stream every episode to S3 as it is written, e.g. s3://zelda-rl/zelda/transitions/v5. "
                          "Pod-local storage as the ONLY copy is how a 20M collection was lost.")
     ap.add_argument("--s3-workers", type=int, default=4)
+    ap.add_argument("--s3-shard", default=None,
+                    help="S3 sub-prefix for THIS collector (default: hostname). Never share one across pods: "
+                         "all collectors number episodes from ep00001 and would overwrite each other.")
     ap.add_argument("--mix-preset", default="default", choices=sorted(MIX_PRESETS),
                     help="named mix; 'badplay' is equal-parts low-skill incl. random-init, for deaths/damage. "
                          "A preset rather than a JSON path so a 39-pod fleet needs no shared file.")
@@ -216,7 +225,7 @@ def main():
 
     torch.set_num_threads(args.torch_threads)
     mix = (json.loads(args.mix) if args.mix else (MIX_PRESETS[args.mix_preset] or DEFAULT_MIX))
-    s3 = S3Streamer(args.s3_prefix, args.s3_workers)
+    s3 = S3Streamer(args.s3_prefix, args.s3_workers, shard=args.s3_shard)
     scale = args.episodes / sum(n for _, _, n in mix)
     quota = [(p, g, max(1, round(n * scale))) for p, g, n in mix]
     slots = [int(s) for s in args.slots.split(",")]

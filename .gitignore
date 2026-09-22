@@ -40,3 +40,9 @@ recordings/
 
 # Dolphin per-env scratch dirs from dataset collection (savestate copies; regenerated every run)
 datasets/transitions/**/instances/
+
+# Datasets and run artefacts are large (52+ GB) and live in S3, never in git.
+# `git add -A` during an `aws s3 sync` tried to stage 613 MB of episodes and aborted on a
+# half-written temp file.
+datasets/
+runs/

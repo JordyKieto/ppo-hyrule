@@ -707,6 +707,48 @@ def preflight(pods: list[dict], workers: int = 60) -> tuple[list[int], dict]:
     return sorted(r for r, bad in res.items() if not bad), {r: b for r, b in res.items() if b}
 
 
+def s3_mirror_gaps(st: dict, out: str, s3_prefix: str) -> tuple[int, int, list]:
+    """(on_disk, in_s3, [(rank, disk, s3)]) per pod. The keys MUST be per-rank namespaced."""
+    import boto3
+    s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+    bkt, pre = s3_prefix.replace("s3://", "").split("/", 1)
+    counts = {}
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bkt, Prefix=pre.rstrip("/") + "/"):
+        for o in page.get("Contents", []):
+            if o["Key"].endswith(".npz"):
+                parts = o["Key"][len(pre.rstrip("/")) + 1:].split("/")
+                counts[parts[0]] = counts.get(parts[0], 0) + 1
+
+    def disk(pod):
+        try:
+            return (pod["rank"], int(run(pod, f"ls {R_REPO}/{out}/episodes 2>/dev/null | wc -l",
+                                         capture=True, check=False).strip() or 0))
+        except Exception:
+            return (pod["rank"], -1)
+
+    res = dict(for_pods(st["pods"], disk, workers=60))
+    gaps, d_tot, s_tot = [], 0, 0
+    for r, nd in sorted(res.items()):
+        ns = counts.get(f"rank{r:03d}", 0)
+        d_tot += max(nd, 0)
+        s_tot += ns
+        if nd > ns:
+            gaps.append((r, nd, ns))
+    return d_tot, s_tot, gaps
+
+
+def cmd_verify_s3(a) -> None:
+    """Per-rank disk-vs-S3 comparison. Run BEFORE kill: pod-local storage is never the only copy."""
+    st = load_state(a.experiment)
+    d, s, gaps = s3_mirror_gaps(st, a.out, a.s3_prefix)
+    print(f"on disk {d:,} episodes | in S3 {s:,} | ~{s * 830 / 1e6:.1f}M transitions durable")
+    print(f"pods with a gap: {len(gaps)}")
+    for r, nd, ns in gaps[:12]:
+        print(f"  rank{r}: disk {nd} s3 {ns}  (missing {nd - ns})")
+    if gaps:
+        raise SystemExit(1)
+
+
 def cmd_preflight(a) -> None:
     st = load_state(a.experiment)
     ok, bad = preflight(select(st, a.ranks))
@@ -862,6 +904,15 @@ def cmd_reconcile(a) -> None:
 
 
 def cmd_kill(a) -> None:
+    if getattr(a, "check_s3", None):
+        st0 = load_state(a.experiment)
+        d, srv, gaps = s3_mirror_gaps(st0, a.check_s3_out, a.check_s3)
+        if gaps:
+            raise SystemExit(f"REFUSING TO KILL: {len(gaps)} pods have episodes not in S3 "
+                             f"(disk {d:,} vs S3 {srv:,}). Back them up first, or drop --check-s3.\n"
+                             f"  worst: " + ", ".join(f"rank{r} missing {nd-ns}" for r, nd, ns in gaps[:5]))
+        log(f"S3 mirror verified: {srv:,} episodes, no gaps -- safe to terminate")
+
     from fleet.runpod_api import RunPod
     st = load_state(a.experiment)
     pods = select(st, a.ranks)
@@ -910,6 +961,9 @@ def main() -> None:
     p.add_argument("--states-prefix", default=None,
                    help=f"S3 prefix for the start states; use {S3_STATES_DEKU!r} for a Deku Baba run "
                         f"(the default is the gohma task's states, which have no live Babas)")
+    p = add("verify-s3", cmd_verify_s3)
+    p.add_argument("--out", default="datasets/transitions/v5", help="collector --out path on the pod")
+    p.add_argument("--s3-prefix", default="s3://zelda-rl/zelda/transitions/v5")
     p = add("preflight", cmd_preflight)
     p.add_argument("--write-bad", default=None, help="write not-ready ranks here, for a re-bootstrap")
     p = add("audit", cmd_audit)
@@ -949,6 +1003,12 @@ def main() -> None:
     p.add_argument("--confirm", action="store_true")
     p = add("kill", cmd_kill)
     p.add_argument("--confirm", action="store_true")
+    # A collection fleet should not be terminatable while episodes exist only on pod disks: that is how a
+    # 20M-transition dataset was lost. Pass --check-s3 and kill refuses until the mirror is complete.
+    p.add_argument("--check-s3", default=None,
+                   help="S3 prefix to verify against before terminating, e.g. "
+                        "s3://zelda-rl/zelda/transitions/v5 -- refuses to kill while any pod has unmirrored data")
+    p.add_argument("--check-s3-out", default="datasets/transitions/v5", help="collector --out path on the pod")
     a = ap.parse_args()
     a.fn(a)
 
