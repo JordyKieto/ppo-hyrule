@@ -1,7 +1,19 @@
 # Rules for working in this repo
 
-Written after a multi-day failure. Every rule below is here because breaking it cost real time, and the
-specific incident is named so the rule cannot be argued away as generic advice.
+**Start with `docs/MAP.md`** — it is the index to 15 documents and the code layout, plus the environment facts
+that have each cost a session (the signed interpreter, the Deku savestate provenance, the fleet's task-specific
+S3 prefix). Do not grep blindly; look at the map, then read the whole document it points you to.
+
+Every rule below is here because breaking it cost real time, and the specific incident is named so the rule
+cannot be argued away as generic advice.
+
+## 0. Orientation, in order, before touching anything
+
+1. `docs/MAP.md` — what exists and where.
+2. The rule list below.
+3. The specific doc the map points to for your task, **in full**. Long docs bury their operational facts in
+   tables below the examples: `RUNPOD.md` line 80 is the one that mattered most and it is 80 lines down.
+4. The docstring of the module or script you are about to change.
 
 ## 1. A number is not a result until its controls are run
 
@@ -163,3 +175,50 @@ the model), and a codebase that had to be stripped back.
    (shuffled-class, seed variance) when Stage 2 was skipped entirely.
 5. **One authorisation, one experiment.** "Start with a change gate" authorises a change gate — not the six
    follow-ups its results suggest. A fast iteration loop is a reason to check in more often, not less.
+
+## 14. Read the whole runbook, and do not "fix" a documented fast path
+
+**The incident.** Bringing up a 39-pod collection fleet. `docs/RUNPOD.md` line 80 states plainly:
+*"Seed bootstrap (`bootstrap --via-seeds 0,2`): 4–48 s per pod; all 19 pods fully bootstrapped in ~3.5 min."*
+
+I read the first 70 lines, used the `--via-seeds` example from the top-of-file summary, hit some transient SSH
+errors at 8-way concurrency, and "fixed" it by throttling to **sequential batches of 4**. That turned a
+3.5-minute job into an hour of billing with zero transitions collected. The retries were already handling the
+transient errors; serialising was the bug.
+
+Rules: read the whole runbook before operating a system you have not operated. When a documented path reports a
+transient error, **re-run it**, do not redesign it. And if you find yourself building a batching wrapper around
+a tool that already parallelises, stop.
+
+## 15. On a fleet, the Mac's uplink is the enemy; never push per-pod what one pod can fan out
+
+Home upload is ~0.7 MB/s (`RUNPOD.md` records this and line 118 names it as dominating bootstrap). Three
+separate mistakes in one session, all the same shape:
+
+- pushed **52 GB of `datasets/`** to every pod because `CODE_EXCLUDES` did not list it (pods *generate* data);
+- pushed **47 MB of policies × 38 pods** from the Mac (~43 min) instead of one push plus pod→pod rsync;
+- pulled savestates via S3 presigned URLs — **8–20 s per pod** — which is what the other two should have done.
+
+Order of preference: S3 presigned pull (seconds) → one push + pod→pod fan-out → per-pod push from the Mac
+(never, for anything large).
+
+Also: when fanning out pod→pod, open **one** SSH to the seed and loop inside it (`xargs -P6`). One SSH per
+target trips the seed's `MaxStartups` and every connection is reset.
+
+## 16. Verify the artefact landed, not that the command ran
+
+`push_policies` logged "push 9 mix policies (47 MB)" on every pod and the files were **not** where the pods
+looked: `rsync -R` with a `/./` marker preserved the *absolute* path, so they arrived at
+`/workspace/zelda-RL/Users/jordy/Documents/dev/zelda-RL/checkpoints/...`. Every launch then died on
+`FileNotFoundError: checkpoint not found`.
+
+After any push, `ls` the destination the consumer will actually read. A success log line is not evidence.
+
+## 17. Make progress observable before starting a long remote job
+
+There was no way to see fleet collection progress without hand-written ssh loops, so the first sign that
+anything was wrong was a per-pod log tail. `python -m fleet collected --experiment E` now reports total
+transitions, episodes and the outcome mix from the manifests, and warns about pods with no Dolphin running.
+
+Before launching anything long and remote: know the single command that answers "is it working and how far
+along is it", and run it once early.

@@ -250,8 +250,16 @@ def cmd_bootstrap(a) -> None:
 
 
 S3_BUCKET, S3_REGION, S3_PROFILE = "zelda-rl", "us-west-1", "race-wm"
+# Start states in S3, per TASK. Defaulted to gohma, which silently gave a Deku Baba collection run 10 slots
+# with ZERO live Babas ("no live Deku Baba -> wrong savestates"), so it is overridable: --states-prefix.
 S3_STATES_PREFIX = "zelda/boss/gohma/states"          # current training start states (slots 1-10)
+S3_STATES_DEKU = "zelda/combat/deku-baba/states"      # what a Deku Baba collection needs
 S3_FLEET_PREFIX = "fleet"                             # Dolphin build + NAND
+
+
+def set_states_prefix(prefix: str) -> None:
+    global S3_STATES_PREFIX
+    S3_STATES_PREFIX = prefix
 
 
 def s3_asset_keys() -> dict[str, str]:
@@ -311,6 +319,9 @@ def s3_pull_assets(pod: dict, only_states: bool = False) -> None:
 
 def cmd_assets(a) -> None:
     st = load_state(a.experiment)
+    if getattr(a, "states_prefix", None):
+        set_states_prefix(a.states_prefix)
+        log(f"states prefix: s3://{S3_BUCKET}/{S3_STATES_PREFIX}")
     if a.upload:
         s3_upload_assets()
     for_pods(select(st, a.ranks), lambda pod: s3_pull_assets(pod, only_states=a.states_only), workers=24)
@@ -388,7 +399,13 @@ def push_policies(pod) -> None:
         return
     mb = sum((REPO / r).stat().st_size for r in rel) / 1e6
     log(f"rank{pod['rank']}: push {len(rel)} mix policies ({mb:.0f} MB)")
-    rsync(pod, [f"{REPO}/./{r}" for r in rel], f"{R_REPO}/", extra=["-R"])
+    # Explicit destination per file. `rsync -R` with a /./ marker was supposed to preserve the repo-relative
+    # path but rsync kept the ABSOLUTE one, so the files landed at
+    # /workspace/zelda-RL/Users/jordy/Documents/dev/zelda-RL/checkpoints/... and resolve_checkpoint failed.
+    dirs = sorted({str(Path(r).parent) for r in rel})
+    run(pod, "mkdir -p " + " ".join(f"{R_REPO}/{d}" for d in dirs))
+    for d in dirs:
+        rsync(pod, [str(REPO / r) for r in rel if str(Path(r).parent) == d], f"{R_REPO}/{d}/")
 
 
 CODE_EXCLUDES = ["--exclude", ".venv/", "--exclude", "runs/", "--exclude", "assets/", "--exclude", "__pycache__/",
@@ -419,6 +436,25 @@ def cmd_launch(a) -> None:
         tag = f"-{a.run_tag}" if a.run_tag else ""
         run_name = f"{a.experiment}{tag}-r{pod['rank']}"
         envs = a.num_envs or max(1, (pod.get("vcpu") or 2) // 2)
+        if a.collect:
+            # A COLLECTOR is not a trainer: scripts/collect_transitions.py has no --run-name, --num-envs or
+            # --fleet-* flags, so passing them aborts on argparse before a single episode. Emit the bare
+            # command and let --train-args carry everything.
+            script = (f"#!/bin/bash\nset -a; . {R_REPO}/.fleet_secrets; set +a\n{POD_ENV}\ncd {R_REPO}\n"
+                      f"exec {XVFB} {R_VENV}/bin/python -u scripts/{a.script} {a.train_args} "
+                      f"> logs/{run_name}.log 2>&1\n")
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
+                f.write(script)
+                tmpf = f.name
+            run(pod, f"mkdir -p {R_REPO}/logs")
+            rsync(pod, [tmpf], f"{R_REPO}/logs/launch_{run_name}.sh")
+            Path(tmpf).unlink(missing_ok=True)
+            run(pod, f"chmod +x {R_REPO}/logs/launch_{run_name}.sh; tmux kill-session -t zrl 2>/dev/null; "
+                     f"pkill -x dolphin-emu; sleep 1; "
+                     f"tmux new-session -d -s zrl '{R_REPO}/logs/launch_{run_name}.sh'")
+            pod["run_name"] = run_name
+            log(f"rank{pod['rank']}: collector started (tmux zrl), log logs/{run_name}.log")
+            return
         script = (f"#!/bin/bash\nset -a; . {R_REPO}/.fleet_secrets; set +a\n{POD_ENV}\ncd {R_REPO}\n"
                   f"exec {XVFB} {R_VENV}/bin/python -u scripts/{a.script} --run-name {run_name} --num-envs {envs} "
                   f"--slots-dir assets/states --video-backend Null --seed {pod['rank']} "
@@ -436,6 +472,11 @@ def cmd_launch(a) -> None:
         return pod
 
     pods = for_pods(select(st, a.ranks), prepare, workers=24)           # code/secrets/scripts first, in parallel
+    if a.collect:
+        # the collect branch already started its own tmux session and returned None; the trainer start below
+        # would index that None
+        save_state(st)
+        return
     for_pods(pods, lambda pod: run(pod, f"tmux new-session -d -s train 'bash {R_REPO}/logs/launch_{pod['run_name']}.sh'"),
              workers=24)                                                # then start every rank within seconds
     for pod in pods:
@@ -507,6 +548,47 @@ def cmd_sync(a) -> None:
                 f"{ck.get('best', {}).get('min_pos_dist', float('nan')):.0f}) -> {out.relative_to(REPO)}")
         else:
             log(f"rank{pod['rank']}: synced {rn} (no checkpoint yet)")
+
+
+def cmd_collected(a) -> None:
+    """Total transitions collected across the fleet. Reads each pod's manifest, no dataset transfer."""
+    st = load_state(a.experiment)
+    out = a.out.rstrip("/")
+
+    # `steps` is the per-episode transition count and `end` the outcome; both are in the manifest, so this
+    # needs no dataset transfer. Counting npz files would give episodes but not transitions or the outcome mix,
+    # and the mix is the point of the badplay collection (deaths and damage, not clears).
+    PROBE = ("import json,collections as c;"
+             "r=[json.loads(l) for l in open('manifest.jsonl') if l.strip()];"
+             "k=c.Counter(x.get('end') for x in r);"
+             "print(len(r),sum(x.get('steps',0) for x in r),"
+             "k['success'],k['death'],k['left_room'],k['timeout'])")
+
+    def one(pod):
+        try:
+            cmd = f"cd {R_REPO}/{out} 2>/dev/null && python3 -c {shlex.quote(PROBE)} || echo 0 0 0 0 0 0"
+            r = run(pod, cmd, capture=True, check=False).split()
+            v = [int(x) for x in r[:6]] if len(r) >= 6 and all(x.lstrip('-').isdigit() for x in r[:6]) else [0] * 6
+            alive = run(pod, "pgrep -c dolphin-emu || echo 0", capture=True, check=False).strip()
+            return (pod["rank"], v[0], v[1], alive, v[2], v[3], v[4], v[5])
+        except Exception:
+            return (pod["rank"], 0, 0, "?", 0, 0, 0, 0)
+
+    res = sorted(for_pods(select(st, a.ranks), one, workers=24))
+    tot_e = sum(x[1] for x in res if x[1] > 0)
+    tot_t = sum(x[2] for x in res if x[2] > 0)
+    su, de, lf, to = (sum(x[i] for x in res) for i in (4, 5, 6, 7))
+    dead = [x[0] for x in res if x[3] in ("0", "?")]
+    if a.verbose:
+        print(f"{'rank':>5} {'episodes':>9} {'transitions':>12} {'dolphins':>9}")
+        for x in res:
+            print(f"{x[0]:>5} {x[1]:>9} {x[2]:>12,} {x[3]:>9}")
+    n = max(su + de + lf + to, 1)
+    print(f"\nTOTAL: {tot_t:,} transitions over {tot_e:,} episodes on {len(res)} pods")
+    print(f"outcomes: success {su:,} ({su/n:.0%})  death {de:,} ({de/n:.0%})  "
+          f"left_room {lf:,} ({lf/n:.0%})  timeout {to:,} ({to/n:.0%})")
+    if dead:
+        print(f"WARNING: {len(dead)} pods with no dolphin running: {dead}")
 
 
 def cmd_ssh(a) -> None:
@@ -619,6 +701,12 @@ def main() -> None:
     p = add("assets", cmd_assets)
     p.add_argument("--upload", action="store_true", help="first upload the Mac's savestates + NAND + Dolphin build to S3")
     p.add_argument("--states-only", action="store_true", help="pods re-download only the savestates")
+    p.add_argument("--states-prefix", default=None,
+                   help=f"S3 prefix for the start states; use {S3_STATES_DEKU!r} for a Deku Baba run "
+                        f"(the default is the gohma task's states, which have no live Babas)")
+    p = add("collected", cmd_collected)
+    p.add_argument("--out", default="datasets/transitions/v4-collect", help="the collector's --out path")
+    p.add_argument("--verbose", action="store_true", help="per-pod breakdown")
     p = add("verify", cmd_verify)
     p.add_argument("--instances", type=int, default=0)
     p = add("launch", cmd_launch)
@@ -626,6 +714,9 @@ def main() -> None:
     p.add_argument("--train-args", default="")
     p.add_argument("--run-tag", default="", help="suffix for run names + wandb group (e.g. rupees7)")
     p.add_argument("--script", default="train_ppo.py", help="trainer under scripts/ (train_ppo.py | train_combat.py | collect_transitions.py)")
+    p.add_argument("--collect", action="store_true",
+                   help="the script is a COLLECTOR, not a trainer: omit --run-name/--num-envs/--fleet-* "
+                        "(collect_transitions.py rejects them) and pass only --train-args")
     p.add_argument("--wandb-project", default="zelda-rl-goal-ppo")
     p = add("status", cmd_status)
     p.add_argument("--lines", type=int, default=2)

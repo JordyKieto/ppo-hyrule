@@ -1,5 +1,19 @@
 # RunPod workflow (zelda-RL PPO on headless Dolphin)
 
+> **READ BEFORE OPERATING.** The facts that decide whether a fleet comes up in minutes or hours are in the
+> measured tables below, not in this summary. The three that cost the most:
+>
+> 1. **`bootstrap --via-seeds 0,2` on ALL remaining ranks at once does 19 pods in ~3.5 min.** Seeds must be
+>    bootstrapped normally FIRST. Transient SSH errors are retried — re-run it, never throttle it into
+>    sequential batches (that turned 3.5 min into an hour).
+> 2. **The Mac's uplink (~0.7 MB/s) dominates everything.** Prefer S3 presigned pulls (`fleet assets`,
+>    8–20 s/pod), then one push + pod→pod fan-out. Never push anything large per-pod from the Mac.
+> 3. **`S3_STATES_PREFIX` defaults to the gohma task.** A Deku Baba run needs
+>    `--states-prefix zelda/combat/deku-baba/states`, or every slot has zero live Babas and the collector aborts.
+>
+> A collector is not a trainer: use `fleet launch --collect`. Progress: `fleet collected --experiment E`.
+> And `fleet kill --experiment E --confirm` when done — pods bill by the hour.
+
 ## ⭐ Fleet CLI (current path): `python -m fleet`
 
 Ported from sunnypilot's `runpod_fleet`:
