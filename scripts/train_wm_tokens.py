@@ -301,7 +301,7 @@ def main():
                                          reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1)}
         return sum(L.values()), L, (dp, hp)
 
-    hist = []
+    hist, best = [], {"werr": float("inf")}
     for ep in range(a.epochs):
         net.train()
         perm = rng.permutation(tr)
@@ -334,11 +334,21 @@ def main():
                "hp_acc": hp_acc, "hp_loss_recall": hp_rec, "dcell_acc": dcell_acc,
                **{k: float(v) for k, v in parts.items()}}
         hist.append(row)
+        # BEST-EPOCH SELECTION on held-out position error. The loss falls smoothly while dpos/dcell oscillate
+        # between a good state (dcell 0.97, skill ~-0.1) and a bad one (0.76, -10), so the LAST epoch is a coin
+        # flip -- and reading the last epoch is how several "degrades with training" conclusions got made this
+        # session. Keep the best weights, and report best alongside last.
+        if werr < best["werr"]:
+            best = {**row, "werr": werr, "state": {k: v.detach().clone() for k, v in net.state_dict().items()}}
         print(f"  ep {ep+1:>3}/{a.epochs} loss {tot/nb:.4f} | grad mean {gn/nb:.3f} max {gmax:.3f} | "
               f"dpos {werr:.3f} vs persistence {pers:.3f} world units (skill {1-werr/max(pers,1e-9):+.3f}) | "
               f"dcell {dcell_acc:.4f} | hp rec {hp_rec:.3f}  ({time.time()-t0:.0f}s)")
+    print(f"\nBEST epoch {best['epoch']}: dpos {best['werr']:.3f} vs persistence {best['persistence_world']:.3f} "
+          f"(skill {best['skill']:+.3f}) dcell {best['dcell_acc']:.4f} | LAST epoch {hist[-1]['epoch']}: "
+          f"dpos {hist[-1]['dpos_world']:.3f} (skill {hist[-1]['skill']:+.3f}) dcell {hist[-1]['dcell_acc']:.4f}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": net.state_dict(), "scales": sc, "split": split, "n_actions": NA,
+    torch.save({"model": best.pop("state", net.state_dict()), "last_model": net.state_dict(),
+                "best": {k: v for k, v in best.items() if k != "state"}, "scales": sc, "split": split, "n_actions": NA,
                 "config": vars(a), "history": hist}, a.out)
     print(f"\nper-head final losses: " + json.dumps({k: round(hist[-1][k], 5) for k in
           ("l_dcell", "l_doff", "l_y", "l_yaw", "l_hp", "l_bits", "l_scene", "a_dcell", "a_doff", "a_hp",
