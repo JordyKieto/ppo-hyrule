@@ -295,3 +295,44 @@ starts; `pgrep dolphin` is not.
 
 And a control loop that can destroy work needs a bias toward inaction: require N consecutive observations,
 interval longer than the startup it is watching, and never let it act on a single sample.
+
+## 23. Inside a container, the tools that report the machine are lying to you
+
+`free -g` said **1511 GB**. The cgroup limit was **175 GiB**. A 100-epoch run was launched on the strength of
+the first number and SIGKILLed twenty minutes into its load — and the real figure had been printed by the
+pod-create call itself (`mem=188GB`) and then ignored in favour of the more convenient one.
+
+`free`, `nproc` and `/proc/meminfo` describe the HOST. The limits that apply are in `/sys/fs/cgroup/memory.max`
+(v2) or `/sys/fs/cgroup/memory/memory.limit_in_bytes` (v1). This is now a check that runs before any load
+(`wm_data.check_load_fits`), because a rule is not a check (§21).
+
+Two more instruments that lied today, both cheap to get right:
+
+- **`pgrep -f <pattern>` matches your own command line.** Running it over ssh, the remote shell's argv contains
+  the pattern, so it reports a live process on an idle machine. Use `ps -eo cmd | grep "[p]attern"` — the
+  bracket stops the grep matching itself — and corroborate with the thing you actually care about
+  (`nvidia-smi` showing 0 MiB).
+- **`timeout` kills the shell, not the grandchild.** After `EXIT=124` a trainer was still holding the GPU and
+  would have competed with the next launch. Kill the real process in the launcher's own trap.
+
+## 24. A silent long-running job is indistinguishable from a hung one
+
+`python … | grep …` redirected to a file **buffers**, so a healthy training run wrote an empty log for nine and
+a half minutes while it was at 97% GPU. The conclusion drawn from the silence — that it was stuck — was wrong,
+and acting on it threw away the work.
+
+`python -u` and `grep --line-buffered`, always, for anything whose output you will read later. And any loop that
+will run for more than a minute or two prints progress with an ETA: `load_many` read 103,716 files for ~25
+minutes in total silence, which left RSS growth as the only evidence it was alive.
+
+## 25. Pack the expensive preparation ONCE, and put it where a pod dying cannot take it
+
+Loading v5 from `.npz` costs ~25 minutes of file opens and decompression, every run, and needs more host RAM
+than the pod has. Packed to per-field `.npy` in the narrowest dtype each field admits it is 49 GiB, loads in
+~2.5 minutes, and is the ONLY artefact a training run needs.
+
+The rule is not "pack it" — it is **pack it once and put the result in S3 immediately**. `/workspace` is a pod
+volume and is destroyed with the pod, which is precisely how a 20M-transition dataset was lost (§15-16). And
+the packer and the trainer must share one implementation of the transformation (`zelda_rl/wm_data.py`), or the
+packed path silently drifts from the in-memory one and numbers stop being comparable with nothing looking
+wrong. Prove they agree instead of assuming: same data through both paths, bit-identical metrics.
