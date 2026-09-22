@@ -227,7 +227,23 @@ def main():
                          "rollout start makes an epoch ~17 min. Consecutive starts overlap almost entirely "
                          "(they share H-1 of their H steps), so subsampling them is nearly free statistically "
                          "and an 'epoch' becomes a fixed step budget that is comparable across runs.")
-    ap.add_argument("--horizon", type=int, default=5, help="latent rollout steps trained on, per sample")
+    ap.add_argument("--horizon", type=int, default=5, help="fixed rollout depth when --h-max is unset")
+    # SPARSE, RANDOM DECODING + DEEP ROLLOUTS. The transition is 1.5M params over 10 tokens and is cheap; the
+    # decoder is 3.08M params with ~3000 outputs and is what makes depth expensive, so decoding every step
+    # chains cost to horizon. Decoding at a few RANDOM depths lets the latent roll orders of magnitude deeper
+    # for the same price, and random depths stop the decoder specialising to the fixed h it always sees -- which
+    # is what the horizon-10 run was doing: H1 climbed to +0.136 while H10 fell to -0.664 with latent drift
+    # FALLING throughout, i.e. a capacity trade inside a decoder that never saw h > 10.
+    ap.add_argument("--h-max", type=int, default=None,
+                    help="sample rollout depth per batch, log-uniform in [--h-min, --h-max]. A Deku Baba match "
+                         "is at most 1800 steps (180s at 10 steps/s), so 1800 is the entire task.")
+    ap.add_argument("--h-min", type=int, default=8)
+    ap.add_argument("--n-decode", type=int, default=4,
+                    help="how many RANDOM steps in [1, H] to decode, besides step 0")
+    ap.add_argument("--bptt", type=int, default=32,
+                    help="detach the latent every N transition steps. Backprop through 1800 chained "
+                         "applications is a memory impossibility (~180 GB of activations at batch 4096); "
+                         "truncating bounds it while the model still SEES the full-depth trajectory.")
     ap.add_argument("--ema", type=float, default=0.996, help="target-encoder decay")
     ap.add_argument("--w-recon", type=float, default=1.0, help="decode loss at step 0 (grounding)")
     ap.add_argument("--w-roll", type=float, default=1.0, help="decode loss at steps 1..H -- the PRIMARY term")
@@ -287,7 +303,24 @@ def main():
     runlen = ends[np.searchsorted(ends, np.arange(N))] - np.arange(N)
     test_slots, tune_slots = set(pm["split"]["val_slots"]), set(pm["split"].get("tune_slots", []))
     slot = np.asarray(np.load(Path(a.packed) / "slot.npy", mmap_mode="r")[:N])
-    tr = np.flatnonzero((runlen >= a.horizon) & ~np.isin(slot, list(test_slots | tune_slots)))
+    _hmin = a.h_min if a.h_max else a.horizon
+    tr = np.flatnonzero((runlen >= _hmin) & ~np.isin(slot, list(test_slots | tune_slots)))
+    # Starts sorted by DESCENDING room-to-episode-end, so "every start with runlen >= H" is a prefix and can be
+    # sampled in O(1) for any H. Rejection sampling would be hopeless at H=1800, where only the opening frames
+    # of a full-length timeout episode qualify.
+    _ord = np.argsort(-runlen[tr], kind="stable")
+    tr = tr[_ord]
+    tr_rl = runlen[tr]
+    def starts_for(H, n):
+        n_ok = int(np.searchsorted(-tr_rl, -H, side="right"))
+        if n_ok < n:
+            return None
+        return tr[rng.choice(n_ok, n, replace=False)]
+    def sample_H():
+        if not a.h_max:
+            return a.horizon
+        lo, hi = np.log(a.h_min), np.log(a.h_max)      # log-uniform: every DECADE of depth equally likely
+        return int(round(float(np.exp(rng.uniform(lo, hi)))))
     # ONE EVAL SUBSET PER HORIZON, not the intersection. Taking starts with runlen >= max(eval_h) makes the
     # H=1 number depend on which OTHER horizons were requested: adding H=20 restricted every horizon to frames
     # 20+ steps from an episode end, a slower-moving subset where persistence at H10 is 14.30 instead of 25.92,
@@ -418,28 +451,44 @@ def main():
     def onehot(j):
         return F.one_hot(D["act"][j].long(), NA).float()
 
-    def step_losses(i_np):
-        """One training sample: encode at t, then roll the LATENT forward --horizon steps, decoding the reward
-        fields at every step. No decoded value is ever re-encoded."""
+    def step_losses(i_np, H):
+        """Encode ONCE at t, roll the latent forward H steps, decode at step 0 plus a few RANDOM steps.
+
+        The transition runs EVERY step; the decoder does not. The transition is 1.5M params over 10 tokens and
+        is cheap; the decoder is 3.08M params with ~3000 outputs and is what makes depth expensive, so decoding
+        every step chains cost to horizon. Decoding at random depths also stops the decoder specialising to the
+        fixed set of h it always sees -- which is what the horizon-10 run was doing, H1 climbing to +0.136 while
+        H10 fell to -0.664 with latent drift FALLING the whole time, i.e. a capacity trade inside a decoder that
+        never saw h > 10.
+
+        Nothing decoded is ever re-encoded; z0 is a latent, passed so the decoder has the displacement
+        reference.
+        """
         i = torch.from_numpy(i_np).to(dev)
         z = z0 = enc(tokens(i))
         S0 = start_state(i)
-        L = {f"0/{k}": v for k, v in decode_loss(dec(z, z0, S0), targets(i, i)).items()}
-        for k in list(L):
-            L[k] = L[k] * a.w_recon
+        L = {f"d0/{k}": v * a.w_recon for k, v in decode_loss(dec(z, z0, S0), targets(i, i)).items()}
         # BC pressure on the encoder: predict the action FROM THE STATE. The encoder's inputs are verified
         # disjoint from CONTROL_ECHO_FEATS, so this cannot be read off a_{t-1}.
         L["bc"] = F.cross_entropy(bc_head(z.mean(1)), D["act"][i].long()) * a.w_bc
-        for h in range(1, a.horizon + 1):
+        k_dec = set(rng.choice(np.arange(1, H + 1), size=min(a.n_decode, H), replace=False).tolist())
+        nd = len(k_dec)
+        for h in range(1, H + 1):
             z = trans(z, onehot(i + h - 1))
-            j = i + h
-            for k, v in decode_loss(dec(z, z0, S0), targets(i, j)).items():
-                L[f"{h}/{k}"] = v * a.w_roll / a.horizon
-            if a.w_lat > 0:
-                with torch.no_grad():
-                    zt = tgt_enc(tokens(j))
-                L[f"{h}/lat"] = F.mse_loss(z, zt) * a.w_lat / a.horizon
-        return sum(L.values()), L
+            if h in k_dec:
+                j = i + h
+                for k, v in decode_loss(dec(z, z0, S0), targets(i, j)).items():
+                    L[f"d{h}/{k}"] = v * a.w_roll / nd
+                if a.w_lat > 0:
+                    with torch.no_grad():
+                        zt = tgt_enc(tokens(j))
+                    L[f"d{h}/lat"] = F.mse_loss(z, zt) * a.w_lat / nd
+            # TRUNCATED BPTT. Backprop through 1800 chained transition applications is a memory impossibility
+            # (~180 GB of activations at batch 4096); detaching every --bptt steps bounds it while the model
+            # still sees the full-depth trajectory as input.
+            if a.bptt and h % a.bptt == 0:
+                z = z.detach()
+        return sum(L.values()), L, H
 
     @torch.no_grad()
     def evaluate(tu_by_h, horizons, n):
@@ -518,13 +567,17 @@ def main():
 
     hist, best = [], {"skill": -9e9}
     for ep in range(a.epochs):
-        want = a.steps_per_epoch * a.batch
-        perm = (rng.choice(tr, want, replace=False) if 0 < want < len(tr) else rng.permutation(tr))
         t0, tot, nb_, gn = time.time(), 0.0, 0, 0.0
         agg = {}
-        for s0 in range(0, len(perm) - a.batch, a.batch):
+        Hs = []
+        for _ in range(a.steps_per_epoch):
+            H = sample_H()
+            sel = starts_for(H, a.batch)
+            if sel is None:                            # not enough starts that deep; draw another depth
+                continue
+            Hs.append(H)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
-                loss, parts = step_losses(perm[s0:s0 + a.batch])
+                loss, parts, _ = step_losses(sel, H)
             opt.zero_grad(); loss.backward()
             g = float(nn.utils.clip_grad_norm_(params, a.clip))
             opt.step()
@@ -541,9 +594,11 @@ def main():
         ev = evaluate(tu, a.eval_h, a.eval_n)
         hh = a.eval_h
         row = {"epoch": ep + 1, "loss": tot / max(nb_, 1), "grad": gn / max(nb_, 1),
+               "H_mean": float(np.mean(Hs)) if Hs else 0.0, "H_max": int(max(Hs)) if Hs else 0,
                **{k: v / max(nb_, 1) for k, v in agg.items()}, **ev}
         hist.append(row)
-        print(f"  ep {ep+1:>3}/{a.epochs} loss {row['loss']:.4f} grad {row['grad']:.1f}  "
+        print(f"  ep {ep+1:>3}/{a.epochs} loss {row['loss']:.4f} grad {row['grad']:.1f} "
+              f"H~{row['H_mean']:.0f}/max{row['H_max']}  "
               + "  ".join(f"H{h} skill {ev[f'h{h}/pos_skill']:+.4f}" for h in hh) + f"  ({time.time()-t0:.0f}s)")
         print("      pos err/pers: " + "  ".join(
             f"H{h} {ev[f'h{h}/pos_err']:.2f}/{ev[f'h{h}/pos_pers']:.2f}" for h in hh))
