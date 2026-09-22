@@ -155,6 +155,9 @@ def main():
     ap.add_argument("--ckpt-dir", default=None, help="save ck_XXXX.pt every --ckpt-every epochs, plus best/last")
     ap.add_argument("--ckpt-every", type=int, default=1)
     ap.add_argument("--resume", default=None, help="checkpoint to continue from (keeps going to --epochs)")
+    ap.add_argument("--resume-fresh-opt", action="store_true",
+                    help="allow --resume from a checkpoint with no optimizer state; the run is then "
+                         "discontinuous and the epochs after it are not comparable to the ones before")
     ap.add_argument("--wandb-project", default=None)
     ap.add_argument("--wandb-group", default=None)
     ap.add_argument("--run-name", default=None)
@@ -406,7 +409,25 @@ def main():
         rk = torch.load(a.resume, weights_only=False, map_location="cpu")
         net.load_state_dict(rk["model"])
         start_ep = int(rk.get("epoch", 0))
-        print(f"resumed from {a.resume} at epoch {start_ep}")
+        # A fresh Adam on a converged model destroys it: the first steps run with zero second moments, so the
+        # effective step is ~lr on every parameter regardless of curvature. This is exactly what happened to
+        # the 100-epoch run -- dpos went 1.048 -> 10.572 across a resume at epoch 5 and the "degrades with
+        # training" conclusion drawn from it was an artefact of the resume, not of the model. So it is a hard
+        # error, not a warning: a warning in a fleet launch scrolls past 32 ranks of output unread.
+        if "opt" in rk:
+            opt.load_state_dict(rk["opt"])
+            hist = list(rk.get("hist", []))
+            best = rk.get("best", best)
+            print(f"resumed from {a.resume} at epoch {start_ep} (optimizer state restored, "
+                  f"{len(hist)} epochs of history, best werr {best.get('werr', float('inf')):.3f})")
+        elif a.resume_fresh_opt:
+            print(f"resumed from {a.resume} at epoch {start_ep} WITHOUT optimizer state (--resume-fresh-opt): "
+                  f"expect the first epochs to move backwards; do not compare them to the pre-resume curve")
+        else:
+            sys.exit(f"{a.resume} has no optimizer state, so continuing from it would start a fresh Adam on a "
+                     f"trained model and wreck it (this produced the bogus 1.048 -> 10.572 jump in the "
+                     f"100-epoch run). Either train from scratch, or pass --resume-fresh-opt if you accept "
+                     f"that the run is discontinuous at epoch {start_ep}.")
     for ep in range(start_ep, a.epochs):
         net.train()
         perm = rng.permutation(tr)
@@ -453,14 +474,23 @@ def main():
                     "dpos_world": werr, "persistence_world": pers, "skill": row["skill"],
                     "dcell_acc": dcell_acc, "hp_loss_recall": hp_rec, "grad_mean": row["grad_mean"],
                     **{k: v for k, v in row.items() if k.startswith(("roll/", "val/"))}})
+        # BEST-EPOCH SELECTION on held-out position error. The loss falls smoothly while dpos/dcell oscillate
+        # between a good state (dcell 0.97, skill ~-0.1) and a bad one (0.76, -10), so the LAST epoch is a coin
+        # flip -- and reading the last epoch is how several "degrades with training" conclusions got made this
+        # session. Keep the best weights, and report best alongside last.
+        if werr < best["werr"]:
+            best = {**row, "werr": werr, "state": {k: v.detach().clone() for k, v in net.state_dict().items()}}
+        hist.append(row)
         if cdir:
             with open(cdir / "metrics.jsonl", "a") as fh:
                 fh.write(json.dumps({k: v for k, v in row.items()}) + "\n")
             if (ep + 1) % a.ckpt_every == 0:
-                torch.save({"model": net.state_dict(), "epoch": ep + 1, "metrics": row,
+                # `opt` is NOT optional. Adam's per-parameter second moments ARE the training state; a
+                # checkpoint without them cannot be continued, only restarted. See --resume below.
+                torch.save({"model": net.state_dict(), "opt": opt.state_dict(), "epoch": ep + 1,
+                            "metrics": row, "hist": hist, "best": best,
                             "scales": sc, "grid": grid.state_dict(), "n_actions": NA, "config": vars(a)},
                            cdir / f"ck_{ep+1:04d}.pt")
-        hist.append(row)
         if link is not None:
             # FedAvg once per epoch: each rank has trained on its own shard, so this is data parallelism over
             # the whole fleet's dataset. Straggler tolerant -- a slow rank never holds the others back.
@@ -468,12 +498,6 @@ def main():
             link.heartbeat({"epoch": ep + 1, "dpos_world": werr, "skill": row["skill"],
                             "dcell_acc": dcell_acc})
             print(f"    fleet: averaged over {info.get('n', '?')} ranks (from update {info.get('src', '?')})")
-        # BEST-EPOCH SELECTION on held-out position error. The loss falls smoothly while dpos/dcell oscillate
-        # between a good state (dcell 0.97, skill ~-0.1) and a bad one (0.76, -10), so the LAST epoch is a coin
-        # flip -- and reading the last epoch is how several "degrades with training" conclusions got made this
-        # session. Keep the best weights, and report best alongside last.
-        if werr < best["werr"]:
-            best = {**row, "werr": werr, "state": {k: v.detach().clone() for k, v in net.state_dict().items()}}
         print(f"  ep {ep+1:>3}/{a.epochs} loss {tot/nb:.4f} | grad mean {gn/nb:.3f} max {gmax:.3f} | "
               f"dpos {werr:.3f} vs persistence {pers:.3f} world units (skill {1-werr/max(pers,1e-9):+.3f}) | "
               f"dcell {dcell_acc:.4f} | hp rec {hp_rec:.3f}  ({time.time()-t0:.0f}s)")
