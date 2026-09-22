@@ -152,8 +152,14 @@ class Decoder(nn.Module):
         # residual toward their step-0 value. The reference is the OBSERVED state at t, never a decoded one, so
         # this is integration outside the latent -- the same thing as adding a displacement to a start cell --
         # and not a feedback path into z.
-        self.link = nn.Linear(d, 2 * DKN + 2 + 1 + DHPN + 2 + NB + 2)
-        self.actor = nn.Linear(d, 2 * DKN + 2 + DHPN + 1 + N_STATES)
+        # The decoder reads BOTH ENDPOINTS, (z_h, z_0). A displacement is a function of two states, and z_h
+        # alone does not identify the start -- at init z_h == z_0 exactly, so nothing distinguishes h=1 from
+        # h=10 and one shared decoder can only learn an AVERAGE displacement. Measured with z_h alone: position
+        # error 17.46 at H=1 against a persistence baseline of 3.81, and 65.84 at H=10 against 25.92, i.e. the
+        # same absolute over-prediction at every horizon. z_0 is a LATENT, not a decoded value, so passing it
+        # is not a feedback path into z.
+        self.link = nn.Linear(2 * d, 2 * DKN + 2 + 1 + DHPN + 2 + NB + 2)
+        self.actor = nn.Linear(2 * d, 2 * DKN + 2 + DHPN + 1 + N_STATES)
         for head in (self.link, self.actor):        # zero-init: with the centre logit below, step 0 = no motion
             nn.init.zeros_(head.weight); nn.init.zeros_(head.bias)
         # TYPED NAV-GRID OCCUPANCY, decoded from the pooled latent: one channel per entity type over the
@@ -161,14 +167,17 @@ class Decoder(nn.Module):
         # predicted. This is spatial grounding -- it forces the latent to carry WHERE things are in a form that
         # is read as a map rather than as 2 numbers -- and like every other head it is READ-ONLY: its output is
         # never fed back into z. The rollout is z -> T -> z, and decoders hang off the side.
-        self.grid = nn.Sequential(nn.Linear(d, 2 * d), nn.ReLU(), nn.Linear(2 * d, N_GRID_CH * grid_n * grid_n))
+        self.grid = nn.Sequential(nn.Linear(2 * d, 2 * d), nn.ReLU(),
+                                  nn.Linear(2 * d, N_GRID_CH * grid_n * grid_n))
 
-    def forward(self, z, S):
-        """S = the OBSERVED start state's discrete values, used only as logit residuals (see __init__)."""
+    def forward(self, z, z0, S):
+        """z = latent at step h, z0 = latent at the rollout start, S = the OBSERVED start state's discrete
+        values (logit residuals only). Nothing decoded ever enters here."""
         g, o = self.grid_n, {}
+        zc = torch.cat([z, z0], -1)
         ctr = torch.zeros(DKN, device=z.device); ctr[DK] = LOGIT_K      # argmax at init = zero displacement
         hctr = torch.zeros(DHPN, device=z.device); hctr[DHP] = LOGIT_K  # argmax at init = no HP change
-        l = self.link(z[:, 0]); j = 0
+        l = self.link(zc[:, 0]); j = 0
         o["l_cx"], j = l[:, j:j + DKN] + ctr, j + DKN
         o["l_cy"], j = l[:, j:j + DKN] + ctr, j + DKN
         o["l_off"], j = l[:, j:j + 2], j + 2                            # cumulative, so NOT bounded to +-0.5
@@ -177,7 +186,7 @@ class Decoder(nn.Module):
         o["l_yaw"], j = l[:, j:j + 2], j + 2
         o["l_bits"], j = l[:, j:j + NB] + LOGIT_K * (2 * S["bits0"] - 1), j + NB
         o["l_scene"] = l[:, j:j + 2] + LOGIT_K * F.one_hot(S["scene0"], 2).float()
-        a = self.actor(z[:, 1:]); j = 0
+        a = self.actor(zc[:, 1:]); j = 0
         o["a_cx"], j = a[..., j:j + DKN] + ctr, j + DKN
         o["a_cy"], j = a[..., j:j + DKN] + ctr, j + DKN
         o["a_off"], j = a[..., j:j + 2], j + 2
@@ -185,7 +194,7 @@ class Decoder(nn.Module):
         o["a_pres"], j = a[..., j:j + 1] + LOGIT_K * (2 * S["pres0"][..., None] - 1), j + 1
         o["a_state"] = a[..., j:j + N_STATES] + LOGIT_K * F.one_hot(S["state0"], N_STATES).float()
         # pooled over entities: the map is a property of the whole scene, not of one token
-        o["grid"] = self.grid(z.mean(1)).view(-1, N_GRID_CH, self.grid_n, self.grid_n)
+        o["grid"] = self.grid(zc.mean(1)).view(-1, N_GRID_CH, self.grid_n, self.grid_n)
         return o
 
 
@@ -225,9 +234,15 @@ def main():
     ap.add_argument("--w-bc", type=float, default=0.1, help="behaviour-cloning pressure on the encoder")
     ap.add_argument("--w-lat", type=float, default=0.05, help="aux latent distance to the EMA target")
     ap.add_argument("--w-grid", type=float, default=0.5, help="typed nav-grid occupancy decode")
+    ap.add_argument("--w-pos", type=float, default=4.0,
+                    help="multiplier on LINK position (cell + offset). The decode loss has ~12 terms over 9 "
+                         "actors plus a 3072-output occupancy map, so without this the one field the reward "
+                         "most depends on is a small fraction of the objective and gets traded away.")
     ap.add_argument("--eval-h", type=int, nargs="+", default=[1, 2, 5, 10, 20])
     ap.add_argument("--eval-n", type=int, default=4096)
-    ap.add_argument("--clip", type=float, default=1.0)
+    ap.add_argument("--clip", type=float, default=20.0,
+                    help="1.0 was calibrated for the single-step token WM; this model backprops "
+                         "through H decode passes")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ckpt-dir", default=None)
     ap.add_argument("--ckpt-every", type=int, default=2)
@@ -330,7 +345,11 @@ def main():
         dhp_a = (hp_a - S0["ahp0"]).clamp(-DHP, DHP) + DHP
         dl = (lc - lc0).clamp(-DK, DK) + DK
         da = (acj - ac0).clamp(-DK, DK) + DK
+        # the same displacement as a CONTINUOUS value in cell units, for the world-distance term
+        l_disp = (lc - lc0).float() + (D["link_off"][j].float() - D["link_off"][i].float())
+        a_disp = (acj - ac0).float() + (D["actor_off"][j].float() - D["actor_off"][i].float())
         return {"l_cx": dl[:, 0], "l_cy": dl[:, 1], "l_cell": lc,
+                "l_disp": l_disp, "a_disp": a_disp,
                 "l_off": D["link_off"][j].float() - D["link_off"][i].float(),
                 "a_cell_d": da, "a_cell": acj,
                 "a_off": D["actor_off"][j].float() - D["actor_off"][i].float(), "l_off": D["link_off"][j].float(),
@@ -340,21 +359,46 @@ def main():
                 "a_pres": D["mask"][j].float(), "a_state": D["states"][j].long(), "mask": m,
                 "is_baba": (D["ids"][j].long() == BABA_ID).float(), "hp_alive": (hp_a > 0).float()}
 
+    # cell size in world units per axis, so the position loss can be expressed in the SAME units the metric is.
+    # Relative axis weighting is kept (a cell is 28.8 x 57.1 world units, so an error along z costs more) but
+    # normalised to a mean of 1, so the position term is O(1) like every other term. In raw world units it was
+    # ~40x larger than the rest and produced grad norms of 1400-1600 against clip 10 -- 160x clipping, i.e.
+    # direction-only steps, which makes the learning rate meaningless.
+    _cell = np.asarray(grid.cell, np.float32)
+    CELL = torch.tensor(_cell / _cell.mean(), device=dev)
+    WORLD_PER_CELL = float(_cell.mean())
+    KOFF = torch.arange(-DK, DK + 1, device=dev, dtype=torch.float32)
+
+    def soft_disp(cx, cy, off):
+        """Expected displacement in CELL units: softmax over the cell classes plus the continuous offset.
+        Differentiable, so the world-distance loss below can actually train the cell head."""
+        ex = (cx.softmax(-1) * KOFF).sum(-1)
+        ey = (cy.softmax(-1) * KOFF).sum(-1)
+        return torch.stack([ex, ey], -1) + off
+
     def decode_loss(o, T):
         m, ms = T["mask"], T["mask"].sum().clamp(min=1)
         L = {
-            "l_cell": F.cross_entropy(o["l_cx"], T["l_cx"]) + F.cross_entropy(o["l_cy"], T["l_cy"]),
-            "l_off": F.l1_loss(o["l_off"], T["l_off"]),
+            # WORLD-UNIT DISTANCE, which is the metric. Training CE on the cell class plus L1 on the offset
+            # instead optimises a redundant decomposition: a wrong-but-confident cell is cheap in CE and costs a
+            # whole cell (28-57 world units), while a neighbouring cell with a compensating offset is expensive
+            # in CE and costs almost nothing. Measured with CE+L1 only: position error climbed from persistence
+            # (5.55) to 17.09 while the loss fell, at every horizon. CE is kept at low weight to sharpen the
+            # head; the world term is what is actually being asked for.
+            "l_world": (((soft_disp(o["l_cx"], o["l_cy"], o["l_off"])
+                          - (T["l_disp"])) * CELL).abs().mean()) * a.w_pos,
+            "l_cell": (F.cross_entropy(o["l_cx"], T["l_cx"]) + F.cross_entropy(o["l_cy"], T["l_cy"])) * 0.1,
             "l_rely": F.l1_loss(o["l_rely"], T["l_rely"]),
             "l_hp": F.cross_entropy(o["l_dhp"], T["l_dhp"]),
             "l_yaw": F.l1_loss(o["l_yaw"], T["l_yaw"]),
             "l_bits": F.binary_cross_entropy_with_logits(o["l_bits"], T["l_bits"]),
             "l_scene": F.cross_entropy(o["l_scene"], T["l_scene"]),
-            "a_cell": ((F.cross_entropy(o["a_cx"].reshape(-1, DKN), T["a_cell_d"][..., 0].reshape(-1),
-                                        reduction="none")
-                        + F.cross_entropy(o["a_cy"].reshape(-1, DKN), T["a_cell_d"][..., 1].reshape(-1),
-                                          reduction="none")).reshape(m.shape) * m).sum() / ms,
-            "a_off": ((o["a_off"] - T["a_off"]).abs().mean(-1) * m).sum() / ms,
+            "a_cell": (((F.cross_entropy(o["a_cx"].reshape(-1, DKN), T["a_cell_d"][..., 0].reshape(-1),
+                                         reduction="none")
+                         + F.cross_entropy(o["a_cy"].reshape(-1, DKN), T["a_cell_d"][..., 1].reshape(-1),
+                                           reduction="none")).reshape(m.shape) * m).sum() / ms) * 0.1,
+            "a_world": ((((soft_disp(o["a_cx"], o["a_cy"], o["a_off"]) - T["a_disp"]) * CELL).abs().mean(-1)
+                         * m).sum() / ms) * a.w_pos,
             "a_hp": (F.cross_entropy(o["a_dhp"].reshape(-1, DHPN), T["a_dhp"].reshape(-1),
                                      reduction="none").reshape(m.shape) * m).sum() / ms,
             "a_pres": F.binary_cross_entropy_with_logits(o["a_pres"].squeeze(-1), T["a_pres"]),
@@ -372,9 +416,9 @@ def main():
         """One training sample: encode at t, then roll the LATENT forward --horizon steps, decoding the reward
         fields at every step. No decoded value is ever re-encoded."""
         i = torch.from_numpy(i_np).to(dev)
-        z = enc(tokens(i))
+        z = z0 = enc(tokens(i))
         S0 = start_state(i)
-        L = {f"0/{k}": v for k, v in decode_loss(dec(z, S0), targets(i, i)).items()}
+        L = {f"0/{k}": v for k, v in decode_loss(dec(z, z0, S0), targets(i, i)).items()}
         for k in list(L):
             L[k] = L[k] * a.w_recon
         # BC pressure on the encoder: predict the action FROM THE STATE. The encoder's inputs are verified
@@ -383,12 +427,12 @@ def main():
         for h in range(1, a.horizon + 1):
             z = trans(z, onehot(i + h - 1))
             j = i + h
-            for k, v in decode_loss(dec(z, S0), targets(i, j)).items():
-                L[f"{h}/{k}"] = v * a.w_roll
+            for k, v in decode_loss(dec(z, z0, S0), targets(i, j)).items():
+                L[f"{h}/{k}"] = v * a.w_roll / a.horizon
             if a.w_lat > 0:
                 with torch.no_grad():
                     zt = tgt_enc(tokens(j))
-                L[f"{h}/lat"] = F.mse_loss(z, zt) * a.w_lat
+                L[f"{h}/lat"] = F.mse_loss(z, zt) * a.w_lat / a.horizon
         return sum(L.values()), L
 
     @torch.no_grad()
@@ -401,21 +445,22 @@ def main():
         enc.eval(); trans.eval(); dec.eval()
         out = {}
         i = torch.from_numpy(sel_np).to(dev)
-        z = enc(tokens(i))
+        z = z0 = enc(tokens(i))
         S0 = start_state(i)
         true0 = lpos[sel_np]
         for h in range(1, max(horizons) + 1):
             z = trans(z, onehot(i + h - 1))
             if h not in horizons:
                 continue
-            o = dec(z, S0)
+            o = dec(z, z0, S0)
             T = targets(i, i + h)
             # integrate OUTSIDE the latent: start cell/offset plus the decoded displacement. from_cell is
             # linear in (idx + off), so an offset outside [-0.5, 0.5] needs no renormalising.
-            dcell = torch.stack([o["l_cx"].argmax(-1), o["l_cy"].argmax(-1)], -1) - DK
-            cell = (D["link_cell"][i].long() + dcell).cpu().numpy()
-            off = (D["link_off"][i].float() + o["l_off"].float()).cpu().numpy()
-            pred = grid.from_cell(cell, off)
+            # decode the SAME quantity that is trained: expected displacement in cell units, integrated onto
+            # the observed start cell OUTSIDE the latent.
+            disp = soft_disp(o["l_cx"], o["l_cy"], o["l_off"]).float()
+            cell = (D["link_cell"][i].float() + disp).cpu().numpy()      # from_cell is linear in (idx + off)
+            pred = grid.from_cell(cell, D["link_off"][i].float().cpu().numpy())
             truth = lpos[sel_np + h]
             err = float(np.linalg.norm(pred - truth, axis=1).mean())
             per = float(np.linalg.norm(true0 - truth, axis=1).mean())
