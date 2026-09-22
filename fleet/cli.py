@@ -26,6 +26,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from fleet.runpod_api import GPU_IMAGE
+
 REPO = Path(__file__).resolve().parents[1]
 STATE_DIR = REPO / "runs" / "fleet"
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
@@ -120,7 +122,11 @@ def cmd_create(a) -> None:
     used = {p["rank"] for p in st["pods"]}
     free = [r for r in range(len(used) + a.count) if r not in used][:a.count]     # fill gaps so ranks stay 0..N-1
     plan = [f"zrl-{a.experiment}-r{r}" for r in free]
-    log(f"plan: {a.count} CPU pod(s) {plan} | {a.vcpu} vCPU {a.flavors} | {a.cloud} | image {a.image}")
+    if a.gpu:
+        log(f"plan: {a.count} GPU pod(s) {plan} | {a.gpu_count}x {a.gpu} | {a.cloud} | "
+            f"disk {a.container_disk}+{a.volume_gb}GB")
+    else:
+        log(f"plan: {a.count} CPU pod(s) {plan} | {a.vcpu} vCPU {a.flavors} | {a.cloud} | image {a.image}")
     if not a.confirm:
         log("dry run (add --confirm to create and start paying)")
         return
@@ -132,9 +138,14 @@ def cmd_create(a) -> None:
         for attempt in range(3):
             pod = None
             try:
-                pod = rp.create_cpu_pod(name, pub, vcpu=a.vcpu, flavors=a.flavors.split(","), image=a.image,
-                                        container_disk_gb=a.container_disk, volume_gb=a.volume_gb,
-                                        cloud=a.cloud)
+                if a.gpu:
+                    pod = rp.create_gpu_pod(name, pub, gpu_type_ids=a.gpu.split(","), gpu_count=a.gpu_count,
+                                            image=a.gpu_image, container_disk_gb=a.container_disk,
+                                            volume_gb=a.volume_gb, cloud=a.cloud)
+                else:
+                    pod = rp.create_cpu_pod(name, pub, vcpu=a.vcpu, flavors=a.flavors.split(","), image=a.image,
+                                            container_disk_gb=a.container_disk, volume_gb=a.volume_gb,
+                                            cloud=a.cloud)
                 log(f"  created {name}: id={pod.get('id')} costPerHr={pod.get('costPerHr')} vcpu={pod.get('vcpuCount')} "
                     f"mem={pod.get('memoryInGb')}GB")
                 ip, port, full = rp.wait_ssh(pod["id"], log=log, timeout=a.ssh_timeout)
@@ -949,6 +960,17 @@ def main() -> None:
     p.add_argument("--flavors", default="cpu5c,cpu3c")
     p.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])
     p.add_argument("--image", default="runpod/base:1.2.0-ubuntu2404")
+    # GPU pods. The world model is 2M params and needs no VRAM to speak of; what a GPU buys is throughput
+    # (measured 193k frames/s at dim 128 against 9.4k on the Mac) and, once the dataset is packed to ~590
+    # B/frame, the ability to hold all 91.5M transitions resident so training does no host-device transfer.
+    # gpu_type_ids is a PRIORITY LIST: pass several so a sold-out A100 falls through to an H100 instead of
+    # failing. RunPod returns "no instances available" and "balance too low" in the SAME 500, so if creation
+    # fails at every size, probe a tiny one -- the message drops the capacity clause when it is really money.
+    p.add_argument("--gpu", default=None,
+                   help="comma-separated gpuTypeIds in priority order, e.g. "
+                        "'NVIDIA A100 80GB PCIe,NVIDIA A100-SXM4-80GB,NVIDIA H100 80GB HBM3'")
+    p.add_argument("--gpu-count", type=int, default=1)
+    p.add_argument("--gpu-image", default=GPU_IMAGE, help="CUDA+torch image; building torch-cuda on the pod is a 10-min tax")
     p.add_argument("--container-disk", type=int, default=40, help="GB of container disk")
     p.add_argument("--volume-gb", type=int, default=20,
                    help="GB on /workspace. A collector needs ~1; a TRAINER holding the whole dataset needs "

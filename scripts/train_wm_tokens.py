@@ -166,6 +166,9 @@ def main():
                          "the per-pod shards) or a streaming loader. Measure before raising it.")
     ap.add_argument("--shards", default=None,
                     help="glob of shard dirs to use as --data/--extra-data, e.g. 'datasets/transitions/v5/rank*'")
+    ap.add_argument("--lr-sweep", default=None,
+                    help="comma-separated LRs. Loads the data ONCE, then trains a fresh model per LR for "
+                         "--epochs and prints a comparison table. No checkpoints, no wandb.")
     ap.add_argument("--sched", choices=["none", "cosine"], default="none",
                     help="cosine decays lr to 0 over --epochs after --warmup epochs of linear ramp")
     ap.add_argument("--warmup", type=float, default=2.0, help="warmup epochs (used by --sched cosine)")
@@ -471,6 +474,60 @@ def main():
                                          reduction="none").reshape(m.shape) * m).sum() / m.sum().clamp(min=1)}
         return sum(L.values()), L, (dp, hp)
 
+    def eval_pos(sel):
+        """Held-out one-step position error in WORLD UNITS, decoded through the same grid codec as the inputs,
+        against the persistence control. Shared by the LR sweep and the real run so the two are comparable."""
+        iu = torch.from_numpy(sel).to(dev)
+        _, parts, (dp, hp) = loss_fn(iu)
+        pc = dp[0].argmax(-1).cpu().numpy()
+        pcell = np.stack([pc // DW, pc % DW], 1) - DW // 2 + T["link_cell"][sel]
+        pred_xz = grid.from_cell(pcell, (T["link_off"][sel] + dp[1].float().cpu().numpy()).clip(-0.5, 0.5))
+        true_xz = lpos[nxt][sel]
+        werr = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
+        pers = float(np.linalg.norm(lpos[sel] - true_xz, axis=1).mean())
+        dcell_acc = float((dp[0].argmax(-1) == yg("dcell", iu)).float().mean())
+        hp_acc = float((hp.argmax(-1) == yg("hp_ev", iu)).float().mean())
+        hpv = yg("hp_ev", iu)
+        hp_rec = float((hp.argmax(-1)[hpv == 1] == 1).float().mean()) if (hpv == 1).any() else float("nan")
+        return parts, werr, pers, dcell_acc, hp_acc, hp_rec
+
+    def run_epochs(n_epochs, lr):
+        """Train a FRESH model for n_epochs at `lr`. Used by --lr-sweep, which rebinds `net`/`opt` in this
+        scope -- loss_fn closes over the NAMES, so it picks up the new model automatically."""
+        nonlocal net, opt
+        torch.manual_seed(a.seed)
+        net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows).to(dev)
+        opt = torch.optim.Adam(net.parameters(), lr=lr)
+        r = {}
+        for ep in range(n_epochs):
+            net.train()
+            perm = rng.permutation(tr)
+            gn, nb, tot = 0.0, 0, 0.0
+            for st in range(0, len(perm) - a.batch, a.batch):
+                i = torch.from_numpy(perm[st:st + a.batch]).to(dev)
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+                    loss, _, _ = loss_fn(i)
+                opt.zero_grad(); loss.backward()
+                g = float(nn.utils.clip_grad_norm_(net.parameters(), a.clip))
+                opt.step()
+                tot += float(loss.detach()); gn += g; nb += 1
+                if not np.isfinite(g):
+                    r["diverged"] = True
+                    print(f"    !! non-finite gradient at step {nb}")
+                    return r
+            net.eval()
+            with torch.no_grad():
+                _, werr, pers, dcell, _, hp_rec = eval_pos(tu[:8192])
+                roll = autoregressive(tu[:2048], a.rollout_h)
+            sk = 1 - werr / max(pers, 1e-9)
+            r = {"epoch": ep + 1, "loss": tot / max(nb, 1), "grad": gn / max(nb, 1), "skill": sk,
+                 "dcell": dcell, "hp_rec": hp_rec, "steps": nb * (ep + 1),
+                 **{k: v for k, v in roll.items() if k.endswith("_skill")}}
+            print(f"    ep {ep+1}/{n_epochs} loss {tot/max(nb,1):.4f} grad {gn/max(nb,1):.1f} "
+                  f"skill {sk:+.4f} dcell {dcell:.4f} hp_rec {hp_rec:.3f} "
+                  + " ".join(f"H{h} {roll.get(f'roll/h{h}_skill', float('nan')):+.4f}" for h in a.rollout_h))
+        return r
+
     def autoregressive(idx_np, horizons):
         """Roll the model forward on its OWN predictions and score position against ground truth.
 
@@ -505,6 +562,42 @@ def main():
                     out[f"roll/h{h}_persistence"] = per
                     out[f"roll/h{h}_skill"] = 1 - err / max(per, 1e-9)
         return out
+
+    if a.lr_sweep:
+        # ONE process, ONE load. Five separate processes each paid ~3 minutes to load and tokenise from the
+        # pod's network filesystem and spent 18 seconds training, which burned a 20-minute budget on four
+        # redundant loads. The model is re-initialised from the same seed for every LR, so the only thing
+        # that differs between rows is the learning rate.
+        lrs = [float(x) for x in a.lr_sweep.split(",")]
+        print(f"\nLR SWEEP: {lrs} | {a.epochs} epochs each | batch {a.batch} | dim {a.dim} | "
+              f"{len(tr):,} train frames ({len(tr) // a.batch} steps/epoch)")
+        table = []
+        for lr in lrs:
+            print(f"  --- lr={lr:g} ---")
+            t0 = time.time()
+            r = run_epochs(a.epochs, lr)
+            r["lr"] = lr; r["secs"] = time.time() - t0
+            table.append(r)
+        hh = a.rollout_h
+        print("\n" + "=" * 100)
+        print(f"{'lr':>8} {'loss':>8} {'grad':>7} {'1step':>9} {'dcell':>7} {'hp_rec':>7} "
+              + " ".join(f"{'H'+str(h):>9}" for h in hh))
+        for r in table:
+            if r.get("diverged"):
+                print(f"{r['lr']:>8.1e}   DIVERGED (non-finite gradient)")
+                continue
+            print(f"{r['lr']:>8.1e} {r['loss']:>8.4f} {r['grad']:>7.1f} {r['skill']:>+9.4f} "
+                  f"{r['dcell']:>7.4f} {r['hp_rec']:>7.3f} "
+                  + " ".join(f"{r.get(f'roll/h{h}_skill', float('nan')):>+9.4f}" for h in hh))
+        ok = [r for r in table if not r.get("diverged")]
+        if ok:
+            b = max(ok, key=lambda r: r.get(f"roll/h{hh[-1]}_skill", -9e9))
+            print(f"\nBEST on H{hh[-1]} rollout skill: lr={b['lr']:g} "
+                  f"(H{hh[-1]} {b.get(f'roll/h{hh[-1]}_skill', float('nan')):+.4f}, 1-step {b['skill']:+.4f})")
+            print("Rollout skill is the criterion, NOT loss: val loss fell 1.8x while the rollout got worse "
+                  "in the previous run (AGENTS.md 8).")
+        print("=" * 100)
+        return
 
     wb = None
     if a.wandb_project:
@@ -564,19 +657,7 @@ def main():
                 print(f"  !! non-finite gradient at step {nb}"); break
         net.eval()
         with torch.no_grad():
-            iu = torch.from_numpy(tu[:8192]).to(dev)
-            _, parts, (dp, hp) = loss_fn(iu)
-            k = tu[:8192]
-            pc = dp[0].argmax(-1).cpu().numpy()
-            pcell = np.stack([pc // DW, pc % DW], 1) - DW // 2 + T["link_cell"][k]
-            pred_xz = grid.from_cell(pcell, (T["link_off"][k] + dp[1].float().cpu().numpy()).clip(-0.5, 0.5))
-            true_xz = lpos[nxt][k]
-            werr = float(np.linalg.norm(pred_xz - true_xz, axis=1).mean())
-            pers = float(np.linalg.norm(lpos[k] - true_xz, axis=1).mean())
-            dcell_acc = float((dp[0].argmax(-1) == yg("dcell", iu)).float().mean())
-            hp_acc = float((hp.argmax(-1) == yg("hp_ev", iu)).float().mean())
-            _hpv = yg("hp_ev", iu)
-            hp_rec = float((hp.argmax(-1)[_hpv == 1] == 1).float().mean()) if (_hpv == 1).any() else float("nan")
+            parts, werr, pers, dcell_acc, hp_acc, hp_rec = eval_pos(tu[:8192])
         row = {"epoch": ep + 1, "lr": opt.param_groups[0]["lr"],
                "train": tot / nb, "grad_mean": gn / nb, "grad_max": gmax,
                "dpos_world": werr, "persistence_world": pers, "skill": 1 - werr / max(pers, 1e-9),

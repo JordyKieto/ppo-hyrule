@@ -159,3 +159,40 @@ fan out over.
 
 `load_many()` takes a list of directories and only the first needs `dataset.json`, so per-rank directories
 concatenate with no merge step.
+
+## Training the world model on ONE GPU pod (current fastest path)
+
+Measured: the model in isolation does 9,667 frames/s at batch 2048 on 6 Mac CPU threads, and real end-to-end
+training does 9,400 — so **CPU training is ~100% model forward/backward and data loading is noise.** Packing
+the data to parquet or any other on-disk format buys nothing for throughput; the only lever is the GPU, where
+the same model does **193k frames/s at dim 128 and ~290k at dim 384.**
+
+```sh
+python -m fleet create --experiment wm --count 1   --gpu "NVIDIA A100 80GB PCIe,NVIDIA A100-SXM4-80GB,NVIDIA H100 80GB HBM3"   --container-disk 60 --volume-gb 200 --confirm            # priority list: a sold-out A100 falls through
+# on the pod: pull the data straight from S3 (never push it from the Mac -- AGENTS.md 15)
+scripts/pull_dataset.sh s3://zelda-rl/zelda/transitions/v5 /workspace/v5 32 race-wm
+python scripts/rebuild_manifests.py /workspace/v5           # S3's manifests may be stale; see below
+python scripts/train_wm_tokens.py --shards '/workspace/v5/rank*' --rows 9 --device cuda --amp   --dim 384 --heads 6 --batch 16384 --lr <swept> --epochs N --ckpt-dir runs/... --ckpt-every 5
+```
+
+**The whole dataset fits in VRAM, and that is the point.** 91.5M transitions at the old 3,260 B/frame is
+298 GB; at ~590 B/frame it is ~54 GB, resident on an 80 GB card with room for activations, so training does
+**zero host-device transfer**. Three changes get it there, none lossy:
+- `--rows 9`: actor slots 9-15 are occupied in **0.000%** of v5 frames (at most 9 actors ever present). Slots
+  are STABLE ACROSS TIME and the per-actor targets are per-slot, so present actors cannot be sorted forward —
+  only always-empty trailing slots may be dropped. The trainer hard-errors if `--rows` would drop an occupied
+  slot.
+- f16 for continuous fields (already scaled to [-1,1], so 3 decimal digits are ample), uint8 for every index
+  and mask, cast back per batch on the device.
+- the action stays an **index**; its 63-wide f32 one-hot was 252 B/frame, more than Link's whole token.
+
+**Re-sweep the LR whenever the batch size changes.** "lr=1e-5 is the only stable setting" was measured at
+batch 512 on 203k frames. At batch 16384 that is 32x the batch and 450x the data; carrying the old number over
+is unjustified.
+
+**Two traps hit on the first GPU run:**
+- `python … | grep …` into a file **buffers**. Without `python -u` and `grep --line-buffered` the log stays
+  empty for the whole run, which is indistinguishable from a hang — 9.5 minutes were spent believing a healthy
+  job (GPU 97%) was stuck.
+- RunPod returns "no instances available" and "your account balance is too low" in the **same** 500. To tell
+  them apart, try to create a tiny pod: if it is really money, the message drops the capacity clause.
