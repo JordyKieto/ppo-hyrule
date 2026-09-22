@@ -60,8 +60,19 @@ def load_many(dirs, want_obs=True, max_frames=None, seed=0):
         index += [(d, i, r) for i, r in enumerate(rows)]
     if max_frames is not None:
         np.random.default_rng(seed).shuffle(index)
+    # PROGRESS. Loading the full v5 dataset off a pod's network filesystem takes ~25 minutes and used to
+    # print nothing at all, so the only signal that it was alive was RSS growth -- and a silent long job is
+    # indistinguishable from a hung one (AGENTS.md 17). Quiet for small loads, chatty for the ones that hurt.
+    t0 = time.time()
+    loud = len(index) > 5000
+    if loud:
+        print(f"loading {len(index):,} episodes from {len(dirs)} dir(s)...", flush=True)
     seen, ep = 0, 0
     for d, i, r in index:
+        if loud and ep and ep % 10000 == 0:
+            el = time.time() - t0
+            print(f"  {ep:,}/{len(index):,} episodes  {seen:,} frames  {el:.0f}s  "
+                  f"({ep / el:.0f} ep/s, eta {(len(index) - ep) / max(ep / el, 1e-9) / 60:.1f} min)", flush=True)
         arr = np.load(d / r["file"])
         a_, st = arr["action"], arr["state"]
         n = min(len(a_) + 1, len(st))
@@ -81,6 +92,8 @@ def load_many(dirs, want_obs=True, max_frames=None, seed=0):
         ep, seen = ep + 1, seen + n
         if max_frames is not None and seen >= max_frames:
             break
+    if loud:
+        print(f"  read {ep:,} episodes / {seen:,} frames in {time.time() - t0:.0f}s; concatenating...", flush=True)
     obs = np.zeros((0, OD), np.float32) if not want_obs else np.concatenate(OB)
     return (meta, np.concatenate(S), np.concatenate(A), np.concatenate(SL), np.concatenate(EP),
             obs, np.concatenate(HAS))

@@ -26,6 +26,13 @@ else
   xargs -P "$PAR" -I{} aws s3 sync "$SRC/{}/" "$DST/{}/" --profile "$PROF" --only-show-errors < "$RANKS"
 fi
 
+# ROOT-LEVEL OBJECTS. The fan-out iterates SUB-PREFIXES, so files sitting directly under the prefix belong to
+# none of them: v5/dataset.json was silently never pulled, and load_many reads dataset.json from its FIRST
+# directory, so the flat-prefix tree could not be used as dirs[0] at all until a rank dir was put first.
+# (v5/episodes/ came through only because it happens to BE a sub-prefix.) --exclude "*/*" leaves exactly the
+# top-level keys.
+aws s3 sync "$SRC/" "$DST/" --profile "$PROF" --exclude "*/*" --only-show-errors
+
 # AGENTS.md 16: verify the artefact landed, not that the command ran.
 remote=$(aws s3 ls "$SRC/" --recursive --profile "$PROF" | grep -c '\.npz$')
 local_n=$(find "$DST" -name '*.npz' | wc -l | tr -d ' ')
