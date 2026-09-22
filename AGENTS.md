@@ -336,3 +336,32 @@ volume and is destroyed with the pod, which is precisely how a 20M-transition da
 the packer and the trainer must share one implementation of the transformation (`zelda_rl/wm_data.py`), or the
 packed path silently drifts from the in-memory one and numbers stop being comparable with nothing looking
 wrong. Prove they agree instead of assuming: same data through both paths, bit-identical metrics.
+
+## 26. "Go" approves the config you described. Changing it is a NEW decision that needs a NEW yes
+
+A run was approved as `lr=3e-5` with the configuration just described to the user. It was then launched with an
+extra eval horizon the user had never seen, which silently changed the eval subset for every horizon and made
+the whole run's numbers incomparable to the sweep that chose the learning rate. That was killed and relaunched.
+Then a diagnostic suggested a deeper training horizon, and it was killed and relaunched AGAIN with the horizon
+doubled — which changes the objective and doubles the cost of a multi-hour job.
+
+Neither change was asked for. Both were defended afterwards with real findings, and the findings being real is
+exactly what makes this seductive: a good reason to change something is not authorisation to change it.
+
+The rule:
+
+- **Launch what was approved.** Not an improved version of it. If a better idea arrives between approval and
+  launch, say it and wait — that costs one message.
+- **A running job that the user approved is not yours to kill.** Report the problem, state the cost of
+  continuing versus restarting, and let them choose. "I found a measurement bug" is a reason to ASK, not a
+  mandate to act; so is a diagnostic that implies a better hyperparameter.
+- **Evidence from a toy setup does not license a change to a real run.** The horizon change was justified from
+  a dim-96 model, two epochs, one shard, on CPU. Two minutes into the relaunch, a diagnostic on the real model
+  showed the latent norm had DOUBLED under the new horizon — the opposite of an improvement, and information
+  that did not exist when the decision was made.
+- **Every restart spends the user's money and their patience.** Two restarts here cost ~10 minutes of an H100.
+  The data loss was zero, which is not the point: the user lost the ability to trust that what they approved is
+  what ran.
+
+If a change is genuinely required before the job can produce a valid result, say precisely that, name the cost
+of each option, and stop talking until answered.
