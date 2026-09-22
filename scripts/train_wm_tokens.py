@@ -270,6 +270,26 @@ def main():
         print(f"packed dataset {a.packed}: {N:,} frames | {pm['bytes_per_frame']} B/frame | "
               f"grid {grid.n}x{grid.n} | rows {pm['rows']}")
     else:
+        # REFUSE BEFORE SPENDING 20 MINUTES. The un-packed load holds the f32 state array and 16-row f32
+        # tokens at once, and np.concatenate copies them, so peak is ~6 KB/frame. A 100-epoch run was
+        # OOM-killed after 20 minutes of loading because `free` reports the HOST's 1.5 TB inside a 188 GB
+        # container; check_load_fits reads the cgroup instead (AGENTS.md 21 -- a rule that is not a check
+        # will be broken).
+        if not a.max_frames:
+            est = 0
+            for d in dirs:
+                for l in (Path(d) / "manifest.jsonl").read_text().splitlines():
+                    if l.strip():
+                        est += int(json.loads(l)["steps"]) + 1
+            fits, why = wm_data.check_load_fits(est, note=f" for {est:,} frames")
+            print(f"load estimate: {why}")
+            if not fits:
+                sys.exit(f"this load will not fit -- {why}.\n"
+                         f"Pack it once instead, then every run starts in ~2.5 minutes:\n"
+                         f"  python scripts/pack_dataset.py {dirs[0]} --extra {' '.join(dirs[1:3])} ... "
+                         f"--out <dir> --rows {a.rows}\n"
+                         f"  python scripts/train_wm_tokens.py --packed <dir> --rows {a.rows} ...\n"
+                         f"(or pass --max-frames to load a subset, which skips this check)")
         # want_obs=False: this model never touches the 483-d obs, and it is 57% of the memory.
         meta, state, act, slot, epid, obs, has = load_many(dirs, want_obs=False,
                                                           max_frames=a.max_frames, seed=a.seed)

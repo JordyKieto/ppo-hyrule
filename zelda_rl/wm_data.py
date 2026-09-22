@@ -21,6 +21,8 @@ them. `rel_xz` is not stored either -- it was a verbatim copy of `actors[:, :, :
 """
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 
 from zelda_rl.bc import LI, RI, _split
@@ -141,3 +143,40 @@ def tokens_and_targets(state, act, slot, epid, *, grid: NavGrid, scales: dict, d
     out["slot"] = slot
     out["lpos"] = lpos
     return {k: v.astype(dtype_of(k), copy=False) for k, v in out.items() if k != "start_idx"}
+
+
+# ---- host memory -------------------------------------------------------------------------------------------
+# `free` reports the HOST inside a container: on a 188 GB RunPod pod it cheerfully says 1511 GB. Reading it and
+# concluding memory was a non-issue is how a 100-epoch run was OOM-killed 20 minutes into loading. The cgroup
+# is the only honest source.
+LOAD_BYTES_PER_FRAME = 3300      # f32 state (1452) + 16-row f32 tokens (2032), measured
+CONCAT_FACTOR = 1.9              # np.concatenate copies, so the arrays exist twice at the seam
+
+
+def host_mem_limit() -> int | None:
+    """Bytes this process may actually use, from cgroup v2 then v1. None if unlimited/unknown."""
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            v = pathlib.Path(path).read_text().strip()
+        except OSError:
+            continue
+        if v == "max":
+            return None
+        try:
+            n = int(v)
+        except ValueError:
+            continue
+        return None if n > (1 << 62) else n       # v1 uses a huge sentinel for "unlimited"
+    return None
+
+
+def check_load_fits(n_frames: int, *, note: str = "") -> tuple[bool, str]:
+    """Would loading n_frames the un-packed way fit? Returns (ok, message)."""
+    lim = host_mem_limit()
+    need = int(n_frames * LOAD_BYTES_PER_FRAME * CONCAT_FACTOR)
+    g = 2 ** 30
+    if lim is None:
+        return True, f"peak host RAM ~{need / g:.0f} GiB; no cgroup limit visible{note}"
+    ok = need < 0.85 * lim
+    return ok, (f"peak host RAM ~{need / g:.0f} GiB vs cgroup limit {lim / g:.0f} GiB "
+                f"({need / lim:.0%} of it){note}")
