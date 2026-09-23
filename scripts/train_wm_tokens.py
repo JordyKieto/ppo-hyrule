@@ -721,8 +721,6 @@ def main():
     # commit to one fictional future and make every rollout deterministic.
     SC_RELY, SC_HP = sc.get("l_rel_y", 1.0), sc.get("l_hp", 1.0)
 
-    HIST_FIELDS = ("link", "actors", "ids", "cats", "states", "mask", "link_cell", "link_off",
-                   "actor_rcell", "actor_off", "cell_xy", "lhp_bin", "ahp_bin", "frames")
 
     def advance(tok, ol, oa, cur, sample=True):
         """tok -> tok at t+1 from the model's OWN predictions, SHIFTING the history window by one frame.
@@ -746,7 +744,7 @@ def main():
             pr = logits.sigmoid()
             return (torch.rand_like(pr) < pr).float() if sample else (pr > 0.5).float()
 
-        now = {k: (tok[k][:, -1] if k in HIST_FIELDS else tok[k]) for k in tok}
+        now = {k: (tok[k][:, -1] if (a.hist > 1 and k in HIST_FIELDS) else tok[k]) for k in tok}
         B = now["link"].shape[0]
         k = pick(dcl)
         dcell = torch.stack([torch.div(k, DW, rounding_mode="floor"), k % DW], -1) - DW // 2
@@ -817,6 +815,9 @@ def main():
                    "actor": {"pres": n_mask, "st": n_states}}
         return nt, nxt_cur
 
+    HIST_FIELDS = ("link", "actors", "ids", "cats", "states", "mask", "link_cell", "link_off",
+                   "actor_rcell", "actor_off", "cell_xy", "lhp_bin", "ahp_bin", "frames")
+
     def head_losses(ol, oa, j, cur=None, tok=None):
         """Twelve-plus typed heads, with every target taken RELATIVE TO THE STATE THE MODEL IS ACTUALLY IN.
 
@@ -826,13 +827,15 @@ def main():
         true state instead would have the model faithfully reproduce the right increment from the wrong place,
         i.e. perpetuate its own error -- which is the compounding failure we keep measuring.
         """
+        # the model's CURRENT state is the NEWEST history frame; defined first because several targets below
+        # need it
+        cur_of = (lambda k: tok[k][:, -1] if (a.hist > 1 and k in HIST_FIELDS) else tok[k])
         (dcl, dof), dyv, dyw, hpd, bits, scn, dvel, dcam, dfl, bg = \
             split_link(ol, j, cur["link"] if cur else None)
         (rdcl, rdof), rhpd, rpr, rst, a_drely, a_dyaw, a_dshape, a_dtimer, a_dvel = \
             split_actor(oa, j, cur["actor"] if cur else None)
         jn = (j + 1).clamp(max=N - 1)
         m = yg("pres_now", j) if tok is None else cur_of("mask")
-        cur_of = (lambda k: tok[k][:, -1] if tok[k].dim() > (2 if k in ("link", "link_cell", "link_off") else 3) else tok[k])
         L_now = tt["link"][j].float() if tok is None else cur_of("link").float()
         L_nxt = tt["link"][jn].float()
         A_now = tt["actors"][j].float() if tok is None else cur_of("actors").float()

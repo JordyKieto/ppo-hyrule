@@ -1,6 +1,6 @@
 # Repository map — read this before searching for anything
 
-There are 16 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
+There are 17 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
 suspects, finds a plausible file, reads the top of it and proceeds — which is exactly how a documented 3.5-minute
 fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the index. Keep it current.
 
@@ -10,6 +10,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 |---|---|---|
 | add a RAM field / observation | `ADDING_OBSERVATIONS.md`, `RAM_MAP.md` | offsets come from the OoT decomp, never recall; retail Player = decomp − 0x10 |
 | the **current** world model (tokens + attention) | `TOKEN_WORLD_MODEL.md` | `train_wm_tokens.py`: state in, state out. What is measured, what is confounded, what to run next |
+| **what is running right now** | `WM_EXPERIMENT_REGIME.md` | both pods, the teacher-forced → autoregressive two-stage regime, the depth mixture, and which conclusions are NOT safe yet |
 | a **latent** world model | `LATENT_WORLD_MODEL.md` (§1–§30), `JEPA_PLAN.md` | 30 sections of next-latent prediction. Six architectures, all lose to the identity. Most ideas here have been tried. |
 | run anything on RunPod | `RUNPOD.md` **all of it**, then `NEXT_SESSION_RUNPOD.md` | the fast paths and the measured timings are in the tables, not the top-of-file examples |
 | collect a dataset | `COMBAT_TASK.md`, then `scripts/collect_transitions.py` docstring | mixes, slots, savestate provenance |
