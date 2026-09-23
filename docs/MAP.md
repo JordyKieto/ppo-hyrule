@@ -10,7 +10,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 |---|---|---|
 | add a RAM field / observation | `ADDING_OBSERVATIONS.md`, `RAM_MAP.md` | offsets come from the OoT decomp, never recall; retail Player = decomp − 0x10 |
 | the **current** world model (tokens + attention) | `TOKEN_WORLD_MODEL.md` | `train_wm_tokens.py`: state in, state out. What is measured, what is confounded, what to run next |
-| **what is running right now** | `WM_EXPERIMENT_REGIME.md` | both pods, the teacher-forced → autoregressive two-stage regime, the depth mixture, and which conclusions are NOT safe yet |
+| train a WM at horizon / pick the next experiment | `WM_EXPERIMENT_REGIME.md` | the concluded teacher-forced → autoregressive regime: what it bought (positive through H5, nothing past it), the token WM regression, the saved checkpoints, and the next four experiments in order |
 | a **latent** world model | `LATENT_WORLD_MODEL.md` (§1–§30), `JEPA_PLAN.md` | 30 sections of next-latent prediction. Six architectures, all lose to the identity. Most ideas here have been tried. |
 | run anything on RunPod | `RUNPOD.md` **all of it**, then `NEXT_SESSION_RUNPOD.md` | the fast paths and the measured timings are in the tables, not the top-of-file examples |
 | collect a dataset | `COMBAT_TASK.md`, then `scripts/collect_transitions.py` docstring | mixes, slots, savestate provenance |

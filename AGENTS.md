@@ -312,6 +312,11 @@ Two more instruments that lied today, both cheap to get right:
   the pattern, so it reports a live process on an idle machine. Use `ps -eo cmd | grep "[p]attern"` — the
   bracket stops the grep matching itself — and corroborate with the thing you actually care about
   (`nvidia-smi` showing 0 MiB).
+- **`pkill -f <pattern>` over ssh kills the ssh session, for the same reason, and the trainer survives.**
+  `ssh pod "pkill -f train_jepa_latent"` returned 255 with no output: the remote shell's own argv contained
+  the pattern, so pkill killed its parent before reaching the trainer. It looks exactly like a network
+  failure. Bracket the pattern here too — `pkill -f '[t]rain_jepa_latent'` — and confirm with
+  `nvidia-smi` at 0 MiB rather than with pkill's exit status.
 - **`timeout` kills the shell, not the grandchild.** After `EXIT=124` a trainer was still holding the GPU and
   would have competed with the next launch. Kill the real process in the launcher's own trap.
 
