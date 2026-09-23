@@ -70,34 +70,69 @@ A_HP = 3
 
 
 class Encoder(nn.Module):
-    """tokens -> one latent per entity, (B, 1+R, d). Same trunk as the token WM's encoder side."""
+    """tokens -> one latent per entity, (B, 1+R, d), with THREE entity classes and a keys/values-only
+    environment pool.
 
-    def __init__(self, d=384, heads=6, n_rows=9, id_vocab=256):
+    Same structure as the token WM's encoder, deliberately: both models read the same packed tokens, so if their
+    encoders diverged a result from one would stop being comparable to the other.
+    """
+
+    def __init__(self, d=384, heads=6, n_rows=9, id_vocab=256, layers=3, hist=8, env_p=49, hp_bins=16):
         super().__init__()
-        self.n_rows = n_rows
+        self.n_rows, self.hist, self.hp_bins = n_rows, hist, hp_bins
         self.id_emb, self.cat_emb, self.st_emb = nn.Embedding(id_vocab, 8), nn.Embedding(16, 4), nn.Embedding(N_STATES, 4)
         self.cell_emb = nn.Embedding(64, 12)
         self.rcell_emb = nn.Embedding(2 * REL_CLIP + 1, 12)
-        self.link_enc = nn.Sequential(nn.Linear(LINK_DIM + 24 + 2, d), nn.ReLU(), nn.Linear(d, d))
-        self.actor_enc = nn.Sequential(nn.Linear(ACTOR_DIM + 16 + 24 + 2, d), nn.ReLU(), nn.Linear(d, d))
-        self.type_emb = nn.Parameter(torch.zeros(2, d))
-        self.attn = Attn(d, heads)
-        self.ln1, self.ln2 = nn.LayerNorm(d), nn.LayerNorm(d)
-        self.ff = nn.Sequential(nn.Linear(d, 2 * d), nn.ReLU(), nn.Linear(2 * d, d))
+        self.lhp_emb, self.ahp_emb = nn.Embedding(hp_bins, 8), nn.Embedding(hp_bins, 4)
+        L_IN = LINK_DIM + 24 + 2 + 8
+        A_IN = ACTOR_DIM + 16 + 24 + 2 + 4 + 4          # +4 = dual local frames (Link-facing and camera)
+        self.link_enc = nn.Sequential(nn.Linear(L_IN * hist, 2 * d), nn.ReLU(), nn.Linear(2 * d, d))
+        self.actor_enc = nn.Sequential(nn.Linear(A_IN * hist, 2 * d), nn.ReLU(), nn.Linear(2 * d, d))
+        self.env_off_emb = nn.Embedding(env_p, d // 2)
+        self.env_occ_emb = nn.Embedding(2, d // 2)
+        self.env_enc = nn.Linear(d, d)
+        self.type_emb = nn.Parameter(torch.zeros(3, d))             # 0 Link, 1 actor, 2 ENVIRONMENT
+        self.blocks = nn.ModuleList([nn.ModuleDict({
+            "attn": Attn(d, heads),
+            "ln1": nn.LayerNorm(d), "ln2": nn.LayerNorm(d),
+            "ff": nn.Sequential(nn.Linear(d, 2 * d), nn.ReLU(), nn.Linear(2 * d, d)),
+        }) for _ in range(layers)])
 
     def forward(self, T):
-        B = T["link"].shape[0]
-        e = torch.cat([self.id_emb(T["ids"]), self.cat_emb(T["cats"]), self.st_emb(T["states"])], -1)
-        lt = self.link_enc(torch.cat([T["link"], self.cell_emb(T["link_cell"]).flatten(-2),
-                                      T["link_off"]], -1))[:, None] + self.type_emb[0]
-        at = self.actor_enc(torch.cat([T["actors"], e, self.rcell_emb(T["actor_rcell"]).flatten(-2),
-                                       T["actor_off"]], -1)) + self.type_emb[1]
+        link, actors = T["link"], T["actors"]
+        if link.dim() == 2:
+            link = link[:, None]; actors = actors[:, None]
+        B, K = link.shape[0], link.shape[1]
+        def hx(k):
+            v = T[k]
+            return v if (v.dim() >= 3 and v.shape[1] == K) else v[:, None].expand(-1, K, *([-1] * (v.dim() - 1)))
+        e = torch.cat([self.id_emb(hx("ids")), self.cat_emb(hx("cats")), self.st_emb(hx("states"))], -1)
+        lce = self.cell_emb(hx("link_cell")).flatten(-2)
+        rce = self.rcell_emb(hx("actor_rcell")).flatten(-2)
+        lhp = self.lhp_emb(T["lhp_bin"] if T["lhp_bin"].dim() == 2 else T["lhp_bin"][:, None])
+        ahp = self.ahp_emb(T["ahp_bin"])
+        lt = self.link_enc(torch.cat([link, lce, hx("link_off"), lhp], -1).reshape(B, -1))[:, None] \
+            + self.type_emb[0]
+        at_in = torch.cat([actors, e, rce, hx("actor_off"), ahp, hx("frames")], -1)
+        at = self.actor_enc(at_in.transpose(1, 2).reshape(B, self.n_rows, -1)) + self.type_emb[1]
         x = torch.cat([lt, at], 1)
-        m = torch.cat([torch.ones(B, 1, device=x.device), T["mask"]], 1)      # Link is always valid
-        pos = torch.cat([torch.zeros(B, 1, 2, device=x.device), T["cell_xy"]], 1)
+        mask = T["mask"][:, -1] if T["mask"].dim() == 3 else T["mask"]
+        m = torch.cat([torch.ones(B, 1, device=x.device), mask], 1)          # Link is always valid
+        cxy = T["cell_xy"][:, -1] if T["cell_xy"].dim() == 4 else T["cell_xy"]
+        pos = torch.cat([torch.zeros(B, 1, 2, device=x.device), cxy], 1)
         D = (pos[:, :, None, :] - pos[:, None, :, :]).norm(dim=-1)
-        x = self.ln1(x + self.attn(x, m, D))
-        return self.ln2(x + self.ff(x))
+        ctx = ctx_m = ctx_D = None
+        if "env_occ" in T:
+            occ = T["env_occ"]
+            oid = torch.arange(occ.shape[1], device=occ.device)[None].expand(B, -1)
+            ctx = self.env_enc(torch.cat([self.env_off_emb(oid), self.env_occ_emb(occ.long())], -1)) \
+                + self.type_emb[2]
+            ctx_m = torch.ones(B, occ.shape[1], device=occ.device)
+            ctx_D = T["env_d"]
+        for blk in self.blocks:
+            x = blk["ln1"](x + blk["attn"](x, m, D, ctx, ctx_m, ctx_D))
+            x = blk["ln2"](x + blk["ff"](x))
+        return x
 
 
 class Transition(nn.Module):
@@ -217,6 +252,13 @@ def main():
     ap.add_argument("--rows", type=int, default=9)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--amp", action="store_true")
+    ap.add_argument("--hist", type=int, default=8,
+                    help="frames of history summarised into each entity token by a LOCAL encoder before the "
+                         "global attention (Wayformer polyline factorisation). 1 = the old Markovian behaviour.")
+    ap.add_argument("--layers", type=int, default=3, help="stacked attention blocks in the encoder")
+    ap.add_argument("--env-radius", type=int, default=3,
+                    help="half-width of the static wall patch fed as KEYS/VALUES-ONLY environment tokens")
+    ap.add_argument("--hp-bins", type=int, default=16)
     ap.add_argument("--dim", type=int, default=384)
     ap.add_argument("--heads", type=int, default=6)
     ap.add_argument("--batch", type=int, default=4096)
@@ -234,6 +276,12 @@ def main():
     # for the same price, and random depths stop the decoder specialising to the fixed h it always sees -- which
     # is what the horizon-10 run was doing: H1 climbed to +0.136 while H10 fell to -0.664 with latent drift
     # FALLING throughout, i.e. a capacity trade inside a decoder that never saw h > 10.
+    ap.add_argument("--h-mix", default=None,
+                    help='MIXED-DEPTH training, "H:weight,...". A fixed mixture sampled per batch, not a '
+                         'curriculum, so every depth is seen throughout. Replaces --h-max log-uniform sampling.')
+    ap.add_argument("--h-half-life", type=float, default=600.0,
+                    help="STEP DECAY: decode step h is weighted 0.5^((h-1)/half_life), renormalised. A "
+                         "half-life rather than a raw gamma, because gamma^1800 underflows to nothing.")
     ap.add_argument("--h-max", type=int, default=None,
                     help="sample rollout depth per batch, log-uniform in [--h-min, --h-max]. A Deku Baba match "
                          "is at most 1800 steps (180s at 10 steps/s), so 1800 is the entire task.")
@@ -256,6 +304,16 @@ def main():
                          "most depends on is a small fraction of the objective and gets traded away.")
     ap.add_argument("--eval-h", type=int, nargs="+", default=[1, 2, 5, 10, 20])
     ap.add_argument("--eval-n", type=int, default=4096)
+    ap.add_argument("--rare-h", type=int, nargs="*", default=[],
+                    help="horizons to evaluate only every --rare-every epochs. Deep evals are not free: rolling "
+                         "8192 samples through 100 and 400 transition steps every epoch cost more than the "
+                         "1000 TRAINING steps did, taking an epoch from ~77s to 200s. They are diagnostics, so "
+                         "they do not need to run every epoch.")
+    ap.add_argument("--rare-every", type=int, default=5)
+    ap.add_argument("--best-h", type=int, default=None,
+                    help="horizon that best-checkpoint selection uses; default is the deepest NON-rare one, so "
+                         "the criterion exists every epoch")
+    ap.add_argument("--resume", default=None, help="checkpoint to continue from")
     ap.add_argument("--clip", type=float, default=20.0,
                     help="1.0 was calibrated for the single-step token WM; this model backprops "
                          "through H decode passes")
@@ -316,11 +374,32 @@ def main():
         if n_ok < n:
             return None
         return tr[rng.choice(n_ok, n, replace=False)]
+    DEFAULT_MIX = "1:60,2:15,4:8,8:5,16:4,32:3,64:2,128:1.2,300:0.9,600:0.5,1200:0.25,1800:0.15"
+    H_VALS = H_P = None
+    if a.h_mix or not a.h_max:
+        spec = a.h_mix or (DEFAULT_MIX if a.h_mix is not None else None)
+    if a.h_mix is not None:
+        _m = [(int(x.split(":")[0]), float(x.split(":")[1])) for x in (a.h_mix or DEFAULT_MIX).split(",")]
+        H_VALS = np.array([h for h, _ in _m], np.int64)
+        H_P = np.array([w for _, w in _m], np.float64); H_P /= H_P.sum()
+        eh = float((H_VALS * H_P).sum())
+        share = (H_VALS * H_P) / eh
+        print("depth mixture: " + "  ".join(f"H{h}:{100*pp:.2f}%(cost {100*c:.0f}%)"
+                                            for h, pp, c in zip(H_VALS, H_P, share)))
+        print(f"  mean depth {eh:.1f} | step decay half-life {a.h_half_life:g} | bptt {a.bptt}")
+
     def sample_H():
+        if H_VALS is not None:
+            return int(rng.choice(H_VALS, p=H_P))
         if not a.h_max:
             return a.horizon
         lo, hi = np.log(a.h_min), np.log(a.h_max)      # log-uniform: every DECADE of depth equally likely
         return int(round(float(np.exp(rng.uniform(lo, hi)))))
+
+    def decay_w(ks, H):
+        """Step-decay weights for the DECODED steps only, renormalised to sum 1."""
+        w = np.array([0.5 ** ((k - 1) / max(a.h_half_life, 1e-9)) for k in ks], np.float64)
+        return dict(zip(ks, (w / w.sum()).tolist()))
     # ONE EVAL SUBSET PER HORIZON, not the intersection. Taking starts with runlen >= max(eval_h) makes the
     # H=1 number depend on which OTHER horizons were requested: adding H=20 restricted every horizon to frames
     # 20+ steps from an episode end, a slower-moving subset where persistence at H10 is 14.30 instead of 25.92,
@@ -331,7 +410,25 @@ def main():
           + ", ".join(f"H{h} {len(v):,}" for h, v in tu.items()))
 
     from zelda_rl.bc import BABA_ID
-    enc = Encoder(a.dim, a.heads, a.rows).to(dev)
+    # ---- static environment + history scaffolding (shared with the token WM via zelda_rl.wm_context) ----
+    from zelda_rl.combat import BG_BITS
+    from zelda_rl.tokens import SF1_KEEP as _SF1
+    from zelda_rl.wm_context import local_frames, patch_offsets, wall_patch, wall_map_from_packed, window_index
+    _nb = len(_SF1)
+    WMAP = torch.from_numpy(wall_map_from_packed(
+        np.asarray(P["link_cell"]), np.asarray(P["link"][:, 16 + _nb:], dtype=np.float32),
+        BG_BITS.index(3), grid.n)).to(dev)                       # BG_WALL == bit 3
+    print(f"static wall map: {int(WMAP.sum())} of {grid.n * grid.n} cells ever registered a wall contact")
+    ENV_OFF = patch_offsets(a.env_radius, dev)
+    print(f"environment tokens: {ENV_OFF.shape[0]} per frame (radius {a.env_radius}), KEYS/VALUES ONLY")
+    _st = np.zeros(N, np.int64)
+    _bb = np.r_[0, np.flatnonzero(~ok) + 1]
+    for _lo, _hi in zip(_bb[:-1], np.r_[_bb[1:], N]):
+        _st[_lo:_hi] = _lo
+    RSTART = torch.from_numpy(_st).to(dev)
+    CELLWH = torch.tensor(np.asarray(grid.cell, np.float32), device=dev)
+    enc = Encoder(a.dim, a.heads, a.rows, layers=a.layers, hist=a.hist,
+                  env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins).to(dev)
     tgt_enc = copy.deepcopy(enc).to(dev)                 # EMA TARGET: never gets gradients
     for p_ in tgt_enc.parameters():
         p_.requires_grad_(False)
@@ -348,8 +445,25 @@ def main():
     TOK = ("link", "actors", "ids", "cats", "states", "mask", "link_cell", "link_off",
            "actor_rcell", "actor_off", "cell_xy")
 
+
     def tokens(j):
-        o = {k: (D[k][j].long() if k in LONG else D[k][j].float()) for k in TOK}
+        """Tokens WITH a history axis (B, K, ...), newest last, plus the keys/values-only environment patch."""
+        K = a.hist
+        w = window_index(j, K, RSTART[j]) if K > 1 else j[:, None]
+        o = {k: (D[k][w].long() if k in LONG else D[k][w].float()) for k in TOK}
+        o["lhp_bin"] = (o["link"][:, :, 1].clamp(0, 1) * (a.hp_bins - 1)).round().long()
+        o["ahp_bin"] = (o["actors"][:, :, :, 3].clamp(0, 1) * (a.hp_bins - 1)).round().long()
+        B = o["link"].shape[0]
+        rel = (o["actor_rcell"].reshape(B * K, -1, 2).float() - REL_CLIP)
+        lk = o["link"].reshape(B * K, -1)
+        o["frames"] = local_frames(rel, o["actor_off"].reshape(B * K, -1, 2),
+                                   o["link_off"].reshape(B * K, 2), lk[:, 3:5], lk[:, 9:11], CELLWH,
+                                   scale=float(max(grid.cell)) * 8.0).reshape(B, K, -1, 4)
+        occ, _ = wall_patch(o["link_cell"][:, -1], WMAP, ENV_OFF)
+        o["env_occ"] = occ
+        # ctx_D is query -> env cell, measured from EACH entity: Link sits at (0,0), actor r at its own cell.
+        ent = torch.cat([torch.zeros(B, 1, 2, device=dev), o["cell_xy"][:, -1]], 1)
+        o["env_d"] = (ent[:, :, None, :] - ENV_OFF.float()[None, None]).norm(dim=-1)
         return o
 
     def acell(j, lc=None):
@@ -471,18 +585,20 @@ def main():
         # BC pressure on the encoder: predict the action FROM THE STATE. The encoder's inputs are verified
         # disjoint from CONTROL_ECHO_FEATS, so this cannot be read off a_{t-1}.
         L["bc"] = F.cross_entropy(bc_head(z.mean(1)), D["act"][i].long()) * a.w_bc
-        k_dec = set(rng.choice(np.arange(1, H + 1), size=min(a.n_decode, H), replace=False).tolist())
+        k_dec = sorted(rng.choice(np.arange(1, H + 1), size=min(a.n_decode, H), replace=False).tolist())
+        W = decay_w(k_dec, H)
         nd = len(k_dec)
+        k_dec = set(k_dec)
         for h in range(1, H + 1):
             z = trans(z, onehot(i + h - 1))
             if h in k_dec:
                 j = i + h
                 for k, v in decode_loss(dec(z, z0, S0), targets(i, j)).items():
-                    L[f"d{h}/{k}"] = v * a.w_roll / nd
+                    L[f"d{h}/{k}"] = v * a.w_roll * W[h]
                 if a.w_lat > 0:
                     with torch.no_grad():
                         zt = tgt_enc(tokens(j))
-                    L[f"d{h}/lat"] = F.mse_loss(z, zt) * a.w_lat / nd
+                    L[f"d{h}/lat"] = F.mse_loss(z, zt) * a.w_lat * W[h]
             # TRUNCATED BPTT. Backprop through 1800 chained transition applications is a memory impossibility
             # (~180 GB of activations at batch 4096); detaching every --bptt steps bounds it while the model
             # still sees the full-depth trajectory as input.
@@ -565,10 +681,24 @@ def main():
     if cdir:
         cdir.mkdir(parents=True, exist_ok=True)
 
-    hist, best = [], {"skill": -9e9}
-    for ep in range(a.epochs):
+    hist, best, start_ep = [], {"skill": -9e9}, 0
+    if a.resume:
+        rk = torch.load(a.resume, weights_only=False, map_location=dev)
+        enc.load_state_dict(rk["enc"]); trans.load_state_dict(rk["trans"]); dec.load_state_dict(rk["dec"])
+        tgt_enc.load_state_dict(rk["tgt_enc"]); bc_head.load_state_dict(rk["bc"])
+        if "opt" not in rk:
+            sys.exit(f"{a.resume} has no optimizer state: a fresh Adam on a trained model destroys it (this "
+                     f"produced a bogus 1.048 -> 10.572 jump in an earlier run). Train from scratch instead.")
+        opt.load_state_dict(rk["opt"])
+        start_ep = int(rk.get("epoch", 0)); hist = list(rk.get("hist", []))
+        print(f"resumed {a.resume} at epoch {start_ep} (optimizer restored, {len(hist)} epochs of history)")
+    rare = set(a.rare_h)
+    best_h = a.best_h or max([h for h in a.eval_h if h not in rare] or a.eval_h)
+    print(f"eval every epoch: {[h for h in a.eval_h if h not in rare]} | "
+          f"every {a.rare_every} epochs: {sorted(rare)} | best-checkpoint criterion: H{best_h}")
+    for ep in range(start_ep, a.epochs):
         t0, tot, nb_, gn = time.time(), 0.0, 0, 0.0
-        agg = {}
+        agg, dsums = {}, {}
         Hs = []
         for _ in range(a.steps_per_epoch):
             H = sample_H()
@@ -576,6 +706,7 @@ def main():
             if sel is None:                            # not enough starts that deep; draw another depth
                 continue
             Hs.append(H)
+            dsums[f"B{H}/n"] = dsums.get(f"B{H}/n", 0) + 1   # B = depth BUCKET; d{h} already means decode step h
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
                 loss, parts, _ = step_losses(sel, H)
             opt.zero_grad(); loss.backward()
@@ -589,11 +720,23 @@ def main():
             tot += float(loss.detach()); gn += g; nb_ += 1
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0.0) + float(v.detach())
+                _hd = k.split("/")[-1]
+                _g = "link" if _hd.startswith("l_") else "actor" if _hd.startswith("a_") else "other"
+                dsums[f"B{H}/{_g}"] = dsums.get(f"B{H}/{_g}", 0.0) + float(v.detach())
             if not np.isfinite(g):
                 print(f"  !! non-finite gradient at step {nb_}"); break
-        ev = evaluate(tu, a.eval_h, a.eval_n)
-        hh = a.eval_h
-        row = {"epoch": ep + 1, "loss": tot / max(nb_, 1), "grad": gn / max(nb_, 1),
+        hh = [h for h in a.eval_h if h not in rare or (ep + 1) % a.rare_every == 0]
+        ev = evaluate(tu, hh, a.eval_n)
+        dep = {k: (v if k.endswith("/n") else v / max(dsums.get(k.split("/")[0] + "/n", 1), 1))
+               for k, v in dsums.items()}
+        # PER-ENTITY totals over the whole epoch: link heads are l_*, actor heads a_*, and the grid / latent /
+        # BC terms are neither, so they are reported separately rather than folded into one of the two.
+        ent = {"ent/link": 0.0, "ent/actor": 0.0, "ent/other": 0.0}
+        for k, v in agg.items():
+            hd = k.split("/")[-1]
+            g = "link" if hd.startswith("l_") else "actor" if hd.startswith("a_") else "other"
+            ent[f"ent/{g}"] += v / max(nb_, 1)
+        row = {"epoch": ep + 1, "loss": tot / max(nb_, 1), "grad": gn / max(nb_, 1), **dep, **ent,
                "H_mean": float(np.mean(Hs)) if Hs else 0.0, "H_max": int(max(Hs)) if Hs else 0,
                **{k: v / max(nb_, 1) for k, v in agg.items()}, **ev}
         hist.append(row)
@@ -602,6 +745,8 @@ def main():
               + "  ".join(f"H{h} skill {ev[f'h{h}/pos_skill']:+.4f}" for h in hh) + f"  ({time.time()-t0:.0f}s)")
         print("      pos err/pers: " + "  ".join(
             f"H{h} {ev[f'h{h}/pos_err']:.2f}/{ev[f'h{h}/pos_pers']:.2f}" for h in hh))
+        print(f"      entity: link {ent['ent/link']:.4f}  actor {ent['ent/actor']:.4f}  "
+              f"other(grid/lat/bc) {ent['ent/other']:.4f}")
         print("      latent: " + "  ".join(
             f"H{h} |z| {ev[f'h{h}/z_norm']:.2f} drift {ev[f'h{h}/z_drift']:.2f}" for h in hh)
             + f"   |z0| {ev[f'h{hh[0]}/z0_norm']:.2f}")
@@ -609,7 +754,7 @@ def main():
             f"H{h} {ev[f'h{h}/hp_acc']:.3f}/{ev[f'h{h}/hp_pers']:.3f}" for h in hh)
             + "   state " + " ".join(f"H{h} {ev[f'h{h}/state_acc']:.3f}" for h in hh)
             + "   gridIoU " + " ".join(f"H{h} {ev[f'h{h}/grid_iou']:.3f}" for h in hh))
-        key = ev[f"h{hh[-1]}/pos_skill"]
+        key = ev[f"h{best_h}/pos_skill"]
         if key > best["skill"]:
             best = {"skill": key, "epoch": ep + 1,
                     "state": {n: {k: v.detach().clone() for k, v in m.state_dict().items()}
@@ -624,7 +769,7 @@ def main():
                             "tgt_enc": tgt_enc.state_dict(), "bc": bc_head.state_dict(),
                             "opt": opt.state_dict(), "epoch": ep + 1, "metrics": row, "hist": hist,
                             "meta": pm, "config": vars(a)}, cdir / f"ck_{ep+1:04d}.pt")
-    print(f"\nBEST H{a.eval_h[-1]} position skill {best['skill']:+.4f} at epoch {best.get('epoch')}")
+    print(f"\nBEST H{best_h} position skill {best['skill']:+.4f} at epoch {best.get('epoch')}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"best": {k: v for k, v in best.items() if k != "state"}, "state": best.get("state"),
                 "hist": hist, "meta": pm, "config": vars(a)}, a.out)
