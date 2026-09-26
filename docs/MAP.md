@@ -1,6 +1,6 @@
 # Repository map — read this before searching for anything
 
-There are 18 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
+There are 19 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
 suspects, finds a plausible file, reads the top of it and proceeds — which is exactly how a documented 3.5-minute
 fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the index. Keep it current.
 
@@ -18,6 +18,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 | touch the encoder/decoder | `zelda_rl/bc.py` docstring, `LATENT_WORLD_MODEL.md` §26–§30 | control echo, unified decoder, reward-only spec |
 | a causal / object-centric model | `CAUSAL_WORLD_MODEL.md`, `CAUSAL_DEBRIF.md` | 1221 lines incl. an OOCDM attempt and why it went wrong |
 | report results | `FINDINGS.md`, `FIELD_SCORECARD.md`, `BENCHMARK.md` | the numbers that are already established |
+| look at what a world model actually predicts | `WM_VIEWER.md` | `scripts/wm_replay.py --html out.html --open`: recorded episode beside the model's autoregressive dream, click any entity for every field |
 | **the Gohma task (current focus)** | `GOHMA_FOCUS.md` first, then `GOHMA_TASK.md` | FOCUS has the decision, the engaged-slots-only start set, the measured red-eye window and the next steps; TASK has the RAM signals, reward and run history |
 
 ## Code layout

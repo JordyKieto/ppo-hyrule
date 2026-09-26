@@ -1,0 +1,380 @@
+<title>Deku Tree Dream Diff</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#f3f1e6; --panel:#fbfaf4; --edge:#cdc8b2; --text:#1a1f16; --dim:#5d6654; --faint:#8b9280;
+    --grid-bg:#e9e6d6; --grid-line:rgba(26,31,22,.07); --wall:#b9b3a0;
+    /* ENTITY COLOURS. Identical in both panels: the panel is told apart by its label, never by recolouring
+       the same creature. */
+    --link:#4f9a2f; --larva:#d9a520; --baba:#c3352a; --gohma:#a83c80; --prop:#8b9280; --pickup:#2f88ab;
+    --heart:#cf4034; --amber:#c08a2e; --cool:#2f88ab;
+    --st-idle:#8b9280; --st-hidden:#5d6654; --st-wind:#c08a2e; --st-attack:#cf4034;
+    --st-hit:#e0913a; --st-stun:#2f88ab; --st-dying:#6b4a7a;
+    --shadow:0 1px 2px rgba(26,31,22,.06),0 8px 24px -12px rgba(26,31,22,.18);
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --paper:#131711; --panel:#171c14; --edge:#333d29; --text:#e8e6d8; --dim:#9aa38b; --faint:#6b7460;
+    --grid-bg:#10140e; --grid-line:rgba(232,230,216,.055); --wall:#3c4630;
+    --link:#7ec455; --larva:#e6bc49; --baba:#e05a4c; --gohma:#d96bab; --prop:#6b7460; --pickup:#5bb6d8;
+    --heart:#e8695e; --amber:#d9a84a; --cool:#5bb6d8;
+    --st-idle:#6b7460; --st-hidden:#4a5340; --st-wind:#d9a84a; --st-attack:#e8695e;
+    --st-hit:#eda85c; --st-stun:#5bb6d8; --st-dying:#9a72ab;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.6); color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --paper:#131711; --panel:#171c14; --edge:#333d29; --text:#e8e6d8; --dim:#9aa38b; --faint:#6b7460;
+    --grid-bg:#10140e; --grid-line:rgba(232,230,216,.055); --wall:#3c4630;
+    --link:#7ec455; --larva:#e6bc49; --baba:#e05a4c; --gohma:#d96bab; --prop:#6b7460; --pickup:#5bb6d8;
+    --heart:#e8695e; --amber:#d9a84a; --cool:#5bb6d8;
+    --st-idle:#6b7460; --st-hidden:#4a5340; --st-wind:#d9a84a; --st-attack:#e8695e;
+    --st-hit:#eda85c; --st-stun:#5bb6d8; --st-dying:#9a72ab;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.6); color-scheme:dark;
+  }
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:var(--paper);color:var(--text);
+       font:400 14px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1300px;margin:0 auto;padding-inline:20px;padding-block:22px 40px}
+  h1,h3{font-family:Jost,ui-sans-serif,system-ui,sans-serif;font-weight:600;margin:0;text-wrap:balance}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  header{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;
+         padding-bottom:14px;border-bottom:1px solid var(--edge)}
+  h1{font-size:clamp(21px,3.2vw,28px);letter-spacing:-.015em}
+  .sub{color:var(--dim);font-size:13px;margin-top:5px;max-width:64ch}
+  .meta{display:flex;flex-direction:column;gap:3px;font:400 11.5px/1.45 "IBM Plex Mono",monospace;
+        color:var(--faint);text-align:right}
+  .meta b{color:var(--dim);font-weight:500}
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+  @media (max-width:860px){.panels{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--edge);border-radius:4px;overflow:hidden;box-shadow:var(--shadow)}
+  .panel-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--edge);
+              font-family:Jost,sans-serif;font-weight:600;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase}
+  .panel-head .tag{margin-left:auto;font:400 10.5px/1 "IBM Plex Mono",monospace;text-transform:none;
+                   letter-spacing:0;color:var(--faint)}
+  .panel.dream .panel-head{border-bottom-color:var(--amber)}
+  canvas{display:block;width:100%;height:auto;background:var(--grid-bg);cursor:crosshair}
+  .strip{display:flex;flex-wrap:wrap;gap:8px 20px;padding:9px 12px;border-top:1px solid var(--edge);
+         font:400 11.5px/1 "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+  .strip span{color:var(--faint)} .strip b{color:var(--text);font-weight:500}
+  .bar{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:16px;padding:11px;
+       background:var(--panel);border:1px solid var(--edge);border-radius:4px}
+  button{font:500 12.5px/1 Jost,sans-serif;padding:8px 12px;border-radius:3px;border:1px solid var(--edge);
+         background:var(--paper);color:var(--text);cursor:pointer}
+  button:hover{border-color:var(--dim)} button:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--link);border-color:var(--link);color:#fff}
+  .k{font-family:"IBM Plex Mono",monospace;font-size:10px;opacity:.6;margin-left:5px}
+  .spacer{flex:1 1 10px}
+  .frameno{font:400 13px/1 "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;color:var(--dim);min-width:13ch}
+  .frameno b{color:var(--text);font-size:16px;font-weight:600}
+  input[type=range]{flex:1 1 240px;min-width:170px;accent-color:var(--link)}
+  .lower{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;margin-top:16px}
+  @media (max-width:860px){.lower{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:4px;box-shadow:var(--shadow)}
+  .card h3{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;padding:9px 12px;
+           border-bottom:1px solid var(--edge);display:flex;align-items:center;gap:8px}
+  .card h3 .tag{margin-left:auto;font:400 10.5px/1 "IBM Plex Mono",monospace;text-transform:none;
+                letter-spacing:0;color:var(--faint)}
+  .card .body{padding:12px}
+  table{width:100%;border-collapse:collapse;font:400 11.5px/1.5 "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+  th{text-align:right;font-weight:500;color:var(--faint);padding:0 0 6px;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase}
+  th:first-child{text-align:left}
+  td{padding:2px 0;border-top:1px solid var(--grid-line);text-align:right;white-space:nowrap}
+  td:first-child{text-align:left;color:var(--dim)}
+  td.v{color:var(--text)} td.d{color:var(--faint)} td.d.bad{color:var(--heart);font-weight:500}
+  .scroll{max-height:330px;overflow-y:auto;overflow-x:auto}
+  .hint{color:var(--faint);font-size:12px;padding:14px 10px;text-align:center;line-height:1.6}
+  .roster{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+  .chip{font:500 10.5px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:2px;border:1px solid var(--edge);
+        background:var(--paper);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .chip i{width:7px;height:7px;border-radius:1px;display:block}
+  .chip[aria-pressed="true"]{border-color:var(--text);box-shadow:inset 0 0 0 1px var(--text)}
+  .chip.gone{opacity:.42;text-decoration:line-through}
+  .legend{display:flex;flex-wrap:wrap;gap:5px 14px;font:400 11px/1.6 "IBM Plex Mono",monospace;
+          color:var(--faint);margin-top:14px}
+  .legend i{display:inline-block;width:9px;height:9px;margin-right:5px;vertical-align:-1px;border-radius:1px}
+  .note{margin-top:14px;padding:11px 13px;border-left:3px solid var(--amber);background:var(--panel);
+        border-radius:0 3px 3px 0;font-size:12.5px;color:var(--dim);line-height:1.55}
+  .note b{color:var(--text)}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Deku Tree Dream Diff</h1>
+      <div class="sub">Left is the recorded episode. Right is the world model rolled forward on its own
+        predictions from the same start, given only the real actions the player took. Hover or click any
+        entity to compare every field it predicts.</div>
+    </div>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div class="panels">
+    <div class="panel"><div class="panel-head">Recorded<span class="tag" id="tag-real"></span></div>
+      <canvas id="cv-real" width="560" height="560"></canvas><div class="strip" id="strip-real"></div></div>
+    <div class="panel dream"><div class="panel-head">Dreamed<span class="tag" id="tag-dream"></span></div>
+      <canvas id="cv-dream" width="560" height="560"></canvas><div class="strip" id="strip-dream"></div></div>
+  </div>
+
+  <div class="bar">
+    <button id="play" aria-pressed="false">Play<span class="k">space</span></button>
+    <button id="back">−1<span class="k">←</span></button>
+    <button id="fwd">+1<span class="k">→</span></button>
+    <button id="ghost" aria-pressed="false">Ghost<span class="k">g</span></button>
+    <button id="trail" aria-pressed="false">Trails<span class="k">t</span></button>
+    <button id="reset">Reset<span class="k">r</span></button>
+    <div class="frameno mono">step <b id="kk">0</b> <span id="kof"></span></div>
+    <input type="range" id="scrub" min="0" max="0" value="0" step="1" aria-label="Rollout step">
+    <div class="spacer"></div><button id="theme">Theme</button>
+  </div>
+
+  <div class="lower">
+    <div class="card"><h3>Inspector <span class="tag" id="insp-tag"></span></h3>
+      <div class="body"><div class="roster" id="roster"></div><div id="insp"></div></div></div>
+    <div class="card"><h3>Divergence <span class="tag">world units from the true position</span></h3>
+      <div class="body"><canvas id="cv-div" width="560" height="160"></canvas>
+        <table id="divtab" style="margin-top:10px"></table></div></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+const D = /*__REPLAY__*/null;
+const $ = i => document.getElementById(i), clamp = (v,a,b)=>v<a?a:v>b?b:v;
+const cv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let k=0, playing=false, ghost=false, trails=false, pin=null, hov=null, timer=null;
+
+/* state -> colour. Same mapping in both panels, so a colour change always means a STATE change and never
+   a change of panel. */
+const ST = {hidden:'--st-hidden', emerge_retract:'--st-wind', idle:'--st-idle', prepare_lunge:'--st-wind',
+            lunge:'--st-attack', pull_back:'--st-wind', hit:'--st-hit', stunned:'--st-stun',
+            dying:'--st-dying', other:'--st-idle'};
+const KIND = {link:'--link', larva:'--larva', baba:'--baba', gohma:'--gohma', prop:'--prop',
+              pickup:'--pickup', other:'--prop'};
+const stCol = s => cv(ST[s] || '--st-idle'), kdCol = kd => cv(KIND[kd] || '--prop');
+const ANG = new Set(['yaw']);
+const angDiff = (a,b) => { let d=(b-a)%65536; if(d>32768)d-=65536; if(d<-32768)d+=65536; return d; };
+
+function boot(){
+  const n = D.frames.length, m = D.meta;
+  $('scrub').max=n-1; $('kof').textContent=`of ${n-1}`;
+  $('meta').innerHTML = [['episode',(m.episode||'').split('/').pop()],
+    ['checkpoint',(m.checkpoint||'').split('/').slice(-2).join('/')],
+    ['mode', m.mode + (m.sampled?' · sampled':' · argmax')],
+    ['window',`frame ${m.start} + ${m.horizon} steps · ${m.grid_n}×${m.grid_n} grid`]]
+    .map(([a,b])=>`<div><b>${a}</b> ${b}</div>`).join('');
+  $('note').innerHTML = `<b>The right panel compounds its own error.</b> Each step the model is given its own
+    predicted state plus the real action, never the true state. Divergence is measured against a control that
+    does nothing at all — if the solid line sits above the dashed one, the model is worse than assuming Link
+    never moved.`;
+  legend(); render();
+}
+const esc = s => String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function legend(){
+  const ent = [['--link','Link'],['--baba','Deku Baba'],['--larva','Larva'],['--gohma','Gohma'],
+               ['--pickup','pickup'],['--prop','prop'],['--wall','wall']];
+  const st = [['--st-hidden','hidden'],['--st-idle','idle'],['--st-wind','winding up'],
+              ['--st-attack','attacking'],['--st-hit','hit'],['--st-stun','stunned'],['--st-dying','dying']];
+  $('legend').innerHTML =
+    '<span style="color:var(--dim)">fill = entity</span>' +
+    ent.map(([c,t])=>`<span><i style="background:${cv(c)}"></i>${t}</span>`).join('') +
+    '<span style="color:var(--dim)">· ring = state</span>' +
+    st.map(([c,t])=>`<span><i style="background:${cv(c)};border-radius:50%"></i>${t}</span>` ).join('') +
+    '<span style="color:var(--dim)">· Link outline: white = shield, red = damaged, dashed = cutscene</span>';
+}
+
+// ---- drawing ---------------------------------------------------------------
+const G = c => { const n=D.meta.grid_n, S=c.width; return {n,S,px:S/n}; };
+function panel(c, side){
+  const g=G(c), x=c.getContext('2d'), f=D.frames[k], st = side==='real'?f.truth:f.pred;
+  x.clearRect(0,0,g.S,g.S); x.fillStyle=cv('--grid-bg'); x.fillRect(0,0,g.S,g.S);
+  (D.walls||[]).forEach((w,i)=>{ if(w!==1) return;
+    x.fillStyle=cv('--wall'); x.fillRect((i%g.n)*g.px, ((i/g.n)|0)*g.px, g.px, g.px); });
+  x.strokeStyle=cv('--grid-line'); x.lineWidth=1;
+  for(let i=0;i<=g.n;i+=4){ x.beginPath(); x.moveTo(i*g.px,0); x.lineTo(i*g.px,g.S);
+    x.moveTo(0,i*g.px); x.lineTo(g.S,i*g.px); x.stroke(); }
+  if (trails) trail(x,g,side);
+  if (ghost && side==='dream') ghosts(x,g,f);
+  (st.actors||[]).forEach(a=>{ if(a.present) actor(x,g,a); });
+  if (st.link) link(x,g,st.link);
+}
+const P = (g,e)=>[e.cx*g.px, e.cz*g.px];
+
+function trail(x,g,side){
+  x.lineWidth=1.25;
+  for(let j=Math.max(0,k-40); j<k; j++){
+    const a=D.frames[j], b=D.frames[j+1];
+    const p=(side==='real'?a.truth:a.pred).link, q=(side==='real'?b.truth:b.pred).link;
+    if(!p||!q) continue;
+    x.globalAlpha=.10+.5*(j-Math.max(0,k-40))/40;
+    x.beginPath(); x.moveTo(...P(g,p)); x.lineTo(...P(g,q));
+    x.strokeStyle=cv('--link'); x.stroke();
+  }
+  x.globalAlpha=1;
+}
+
+function link(x,g,l){
+  const [cx,cy]=P(g,l), r=Math.max(6,g.px*.6);
+  x.beginPath(); x.arc(cx,cy,r,0,7); x.fillStyle=cv('--link'); x.fill();
+  // ACTION OUTLINE: shield / damaged / cutscene, from the state flags the model also predicts
+  let oc=null, dash=null;
+  if (l.damaged) oc=cv('--heart'); else if (l.shield) oc='#ffffff';
+  if (l.cutscene) { oc = oc || cv('--faint'); dash=[3,3]; }
+  if (l.melee) oc='#ffffff';
+  if (oc){ x.beginPath(); x.arc(cx,cy,r+3.5,0,7); x.strokeStyle=oc; x.lineWidth=2.25;
+    if(dash) x.setLineDash(dash); x.stroke(); x.setLineDash([]); }
+  const frac = clamp((l.hp??48)/(l.hp_cap||48),0,1);
+  if (frac<1){ x.beginPath(); x.arc(cx,cy,r+7,-Math.PI/2,-Math.PI/2+frac*6.2832);
+    x.strokeStyle=cv('--heart'); x.lineWidth=2.5; x.stroke(); }
+  // FACING: drawn on BOTH panels -- the model predicts yaw, so it has a heading too
+  if (l.yaw!=null){ const a=(l.yaw/65536)*6.2832;
+    x.beginPath(); x.moveTo(cx,cy); x.lineTo(cx+Math.sin(a)*r*2, cy+Math.cos(a)*r*2);
+    x.strokeStyle=cv('--link'); x.lineWidth=2.5; x.stroke(); }
+  if (sel('link')) halo(x,cx,cy,r+10);
+}
+
+function actor(x,g,a){
+  const [cx,cy]=P(g,a), r=Math.max(4.5,g.px*.46);
+  x.save(); x.translate(cx,cy); x.rotate(Math.PI/4);
+  x.fillStyle=kdCol(a.kind); x.globalAlpha=a.hp>0?1:.4; x.fillRect(-r,-r,r*2,r*2); x.restore(); x.globalAlpha=1;
+  x.beginPath(); x.arc(cx,cy,r+3,0,7); x.strokeStyle=stCol(a.state_name); x.lineWidth=2; x.stroke();
+  if (sel('actor',a.i)) halo(x,cx,cy,r+8);
+}
+function halo(x,cx,cy,r){ x.beginPath(); x.arc(cx,cy,r,0,7); x.strokeStyle=cv('--text');
+  x.lineWidth=1.5; x.setLineDash([3,3]); x.stroke(); x.setLineDash([]); }
+
+function ghosts(x,g,f){
+  x.setLineDash([2,3]); x.lineWidth=1.25;
+  const pr=(t,p)=>{ if(!t||!p) return; const [tx,ty]=P(g,t),[px,py]=P(g,p);
+    x.beginPath(); x.arc(tx,ty,Math.max(5,g.px*.55),0,7); x.strokeStyle=cv('--faint'); x.stroke();
+    x.beginPath(); x.moveTo(px,py); x.lineTo(tx,ty); x.strokeStyle=cv('--amber'); x.stroke(); };
+  pr(f.truth.link,f.pred.link);
+  (f.truth.actors||[]).forEach(t=>{ if(!t.present) return;
+    pr(t,(f.pred.actors||[]).find(q=>q.i===t.i&&q.present)); });
+  x.setLineDash([]);
+}
+
+// ---- inspector -------------------------------------------------------------
+const sel = (kind,i)=>{ const s=pin||hov; return !!s && s.kind===kind && (kind!=='actor'||s.i===i); };
+const ent = (s,w)=>{ const st = w==='real'?D.frames[k].truth:D.frames[k].pred;
+  return s.kind==='link' ? st.link : (st.actors||[]).find(a=>a.i===s.i); };
+
+function roster(){
+  const f=D.frames[k], out=[`<button class="chip" data-kind="link" aria-pressed="${sel('link')}">
+    <i style="background:${cv('--link')};border-radius:50%"></i>Link</button>`];
+  (f.truth.actors||[]).forEach(a=>{
+    const p=(f.pred.actors||[]).find(q=>q.i===a.i);
+    if (!a.present && !(p&&p.present)) return;
+    const gone = a.present && p && !p.present;
+    out.push(`<button class="chip${gone?' gone':''}" data-kind="actor" data-i="${a.i}"
+      aria-pressed="${sel('actor',a.i)}" title="${gone?'the model has this one gone':''}">
+      <i style="background:${kdCol(a.kind)}"></i>${esc(a.name)} ${a.i}</button>`);
+  });
+  $('roster').innerHTML = out.join('');
+  $('roster').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{
+    const s = b.dataset.kind==='link'?{kind:'link'}:{kind:'actor',i:+b.dataset.i};
+    pin = sel(s.kind, s.i) ? null : s; render(); });
+}
+
+function inspector(){
+  const s=pin||hov;
+  if(!s){ $('insp-tag').textContent='nothing selected';
+    $('insp').innerHTML=`<div class="hint">Hover an entity on either grid, or pick one above.</div>`; return; }
+  const t=ent(s,'real'), m=ent(s,'dream');
+  const nm = s.kind==='link' ? 'Link' : `${(t||m||{}).name||'actor'} · row ${s.i}`;
+  $('insp-tag').textContent = (pin?'pinned · ':'') + `step ${k} · frame ${D.frames[k].frame}`;
+  const order = D.fields && (s.kind==='link'?D.fields.link:D.fields.actor);
+  const keys = (order||[...new Set([...Object.keys(t||{}),...Object.keys(m||{})])]).filter(x=>x!=='i');
+  const fmt = v => v===undefined?'—':typeof v==='number'?(Number.isInteger(v)?v:v.toFixed(2)):esc(String(v));
+  const rows = keys.map(x=>{
+    const a=t?t[x]:undefined, b=m?m[x]:undefined, num = typeof a==='number'&&typeof b==='number';
+    let dtxt='', bad=false;
+    if (num){ const d = ANG.has(x)?angDiff(a,b):b-a;
+      dtxt=(d>0?'+':'')+d.toFixed(2); bad=Math.abs(d)>Math.abs(a)*.02+1e-6; }
+    else if (a!==b){ dtxt='differs'; bad=true; }
+    return `<tr><td>${esc(x)}</td><td class="v">${fmt(a)}</td><td class="v">${fmt(b)}</td>
+            <td class="d${bad?' bad':''}">${dtxt}</td></tr>`; }).join('');
+  $('insp').innerHTML=`<div class="scroll"><table>
+    <tr><th>${esc(nm)}</th><th>recorded</th><th>dreamed</th><th>diff</th></tr>${rows}</table></div>`;
+}
+
+function divergence(){
+  const c=$('cv-div'), x=c.getContext('2d'), W=c.width, H=c.height, M=D.metrics||{};
+  const a=M.pos_err_world||[], b=M.persist_err_world||[]; x.clearRect(0,0,W,H);
+  if(!a.length) return;
+  const p={l:46,r:8,t:10,b:20}, iw=W-p.l-p.r, ih=H-p.t-p.b, hi=Math.max(...a,...b,1e-6), n=a.length;
+  const X=i=>p.l+(n<2?0:i/(n-1))*iw, Y=v=>p.t+ih-(v/hi)*ih;
+  x.strokeStyle=cv('--grid-line');
+  [0,.5,1].forEach(fr=>{ const y=p.t+ih-fr*ih; x.beginPath(); x.moveTo(p.l,y); x.lineTo(W-p.r,y); x.stroke();
+    x.fillStyle=cv('--faint'); x.font='10px "IBM Plex Mono",monospace'; x.textAlign='right';
+    x.fillText((hi*fr).toFixed(0), p.l-6, y+3); });
+  const ln=(arr,col,dash)=>{ x.beginPath(); arr.forEach((v,i)=>i?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v)));
+    x.strokeStyle=col; x.lineWidth=1.8; x.setLineDash(dash||[]); x.stroke(); x.setLineDash([]); };
+  ln(b,cv('--faint'),[4,3]); ln(a,cv('--amber'));
+  const cx=X(clamp(k,0,n-1)); x.beginPath(); x.moveTo(cx,p.t); x.lineTo(cx,p.t+ih);
+  x.strokeStyle=cv('--cool'); x.lineWidth=1.25; x.stroke();
+  x.fillStyle=cv('--faint'); x.textAlign='left'; x.fillText('dashed = do nothing · solid = model', p.l+2, H-6);
+  const steps=[1,2,5,10,20,50,100,n-1].filter(s=>s>0&&s<n);
+  if(!steps.includes(k)&&k>0) steps.push(k);
+  $('divtab').innerHTML=`<tr><th>step</th><th>model</th><th>do nothing</th><th>skill</th></tr>`+
+    [...new Set(steps)].sort((u,v)=>u-v).map(s=>{ const sk=b[s]>1e-9?1-a[s]/b[s]:NaN;
+      return `<tr><td>${s}${s===k?' ←':''}</td><td class="v">${a[s].toFixed(1)}</td>
+        <td>${b[s].toFixed(1)}</td><td class="d${sk<0?' bad':''}">${isNaN(sk)?'—':(sk>0?'+':'')+sk.toFixed(3)}</td></tr>`;
+    }).join('');
+}
+
+function strips(){
+  const f=D.frames[k];
+  const one=(st,id)=>{ const l=st.link||{}, live=(st.actors||[]).filter(a=>a.present&&a.hp>0).length;
+    const fl=['shield','damaged','dead','cutscene'].filter(x=>l[x]).join(' ')||'—';
+    $(id).innerHTML=[['hp',`${l.hp??0}/${l.hp_cap??48}`],['cell',l.cell??'—'],
+      ['world',`${(l.wx??0).toFixed(0)}, ${(l.wz??0).toFixed(0)}`],['live',live],['flags',fl]]
+      .map(([a,b])=>`<div><span>${a}</span> <b>${b}</b></div>`).join(''); };
+  one(f.truth,'strip-real'); one(f.pred,'strip-dream');
+  $('tag-real').textContent=`frame ${f.frame} · action ${f.action_name}`;
+  $('tag-dream').textContent=`${k} step${k===1?'':'s'} of its own output`;
+}
+
+function render(){ if(!D) return; $('kk').textContent=k; $('scrub').value=k;
+  panel($('cv-real'),'real'); panel($('cv-dream'),'dream'); strips(); roster(); inspector(); divergence(); }
+
+// ---- controls --------------------------------------------------------------
+const go=d=>{ k=clamp(k+d,0,D.frames.length-1); render(); };
+function setPlay(on){ playing=on; $('play').setAttribute('aria-pressed',on); $('play').firstChild.textContent=on?'Pause':'Play';
+  clearInterval(timer); if(on) timer=setInterval(()=>{ if(k>=D.frames.length-1) return setPlay(false); go(1); },110); }
+['cv-real','cv-dream'].forEach(id=>{ const c=$(id), side=id==='cv-real'?'real':'dream';
+  c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect(), s=c.width/r.width, g=G(c);
+    const mx=(e.clientX-r.left)*s, my=(e.clientY-r.top)*s;
+    const st=side==='real'?D.frames[k].truth:D.frames[k].pred; let best=null,bd=1e9;
+    (st.actors||[]).forEach(a=>{ if(!a.present) return; const [x,y]=P(g,a), d=Math.hypot(x-mx,y-my);
+      if(d<bd&&d<Math.max(12,g.px*1.2)){bd=d;best={kind:'actor',i:a.i};} });
+    if(st.link){ const [x,y]=P(g,st.link), d=Math.hypot(x-mx,y-my);
+      if(d<bd&&d<Math.max(12,g.px*1.2)) best={kind:'link'}; }
+    hov=best; c.style.cursor=best?'pointer':'crosshair'; render(); });
+  c.addEventListener('mouseleave',()=>{hov=null;render();});
+  c.addEventListener('click',()=>{ if(hov) pin=sel(hov.kind,hov.i)?null:hov; render(); }); });
+$('play').onclick=()=>setPlay(!playing);
+$('back').onclick=()=>{setPlay(false);go(-1);}; $('fwd').onclick=()=>{setPlay(false);go(1);};
+$('reset').onclick=()=>{setPlay(false);k=0;render();};
+$('ghost').onclick=e=>{ghost=!ghost;e.currentTarget.setAttribute('aria-pressed',ghost);render();};
+$('trail').onclick=e=>{trails=!trails;e.currentTarget.setAttribute('aria-pressed',trails);render();};
+$('scrub').oninput=e=>{setPlay(false);k=+e.target.value;render();};
+$('theme').onclick=()=>{ const c=document.documentElement.getAttribute('data-theme');
+  const dark=c?c==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
+  document.documentElement.setAttribute('data-theme',dark?'light':'dark'); legend(); render(); };
+addEventListener('keydown',e=>{ if(e.target.tagName==='INPUT') return; const K=e.key;
+  if(K===' '){e.preventDefault();setPlay(!playing);}
+  else if(K==='ArrowRight'){setPlay(false);go(e.shiftKey?10:1);}
+  else if(K==='ArrowLeft'){setPlay(false);go(e.shiftKey?-10:-1);}
+  else if(K==='r'||K==='R'||K==='Home'){setPlay(false);k=0;render();}
+  else if(K==='End'){setPlay(false);k=D.frames.length-1;render();}
+  else if(K==='g'||K==='G') $('ghost').click();
+  else if(K==='t'||K==='T') $('trail').click(); });
+
+if (D) boot();
+else { $('insp').innerHTML='<div class="hint">This template has no replay in it. Generate one with '
+  + '<span class="mono">scripts/wm_replay.py --html out.html</span>.</div>'; }
+</script>

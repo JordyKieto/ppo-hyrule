@@ -46,3 +46,4 @@ datasets/transitions/**/instances/
 # half-written temp file.
 datasets/
 runs/
+viz/out/
