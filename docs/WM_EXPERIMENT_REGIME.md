@@ -8,7 +8,7 @@ regime as it was actually run, what it bought, and where it stopped paying.
 latent JEPA beat persistence at all beyond one step -- H2 went -2.63 to a 28-epoch mean of +0.251 -- and it
 buys nothing past H5. H10 is a coin flip, H20 is negative in 25 of 28 epochs, and the one deep evaluation
 that ran is **-0.289 at H100, -1.75 at H400, -2.44 at H1800**. For the token WM it was a straight regression:
-one-step skill fell from +0.091 teacher-forced to a negative mean over 7 epochs and did not recover.
+one-step skill fell from +0.188 teacher-forced to a negative mean over 7 epochs and did not recover.
 
 ## The two models
 
@@ -33,8 +33,11 @@ IMPORTED by the JEPA -- so a change to it must be pushed to both pods regardless
 * **Dual local frames**: each actor's offset in Link's FACING frame and in the CAMERA frame. Movement is
   camera-relative (the stick), combat is facing-relative (the sword hits in front). Both derived from packed
   fields, no repacking.
-* **No raw coordinates anywhere.** Position enters as a nav-grid cell EMBEDDING. Measured as the strongest
-  single input (+156% on the position head), so this is not a compromise.
+* **No raw coordinates anywhere.** Position enters as a nav-grid cell EMBEDDING. RETRACTED: an earlier draft
+  of this line claimed "+156% on the position head" for the cell codec. That number has no source in this
+  repo and I withdrew it -- position is not even an ablatable class in `scripts/ablate_classes.py`, so it has
+  never been measured. What the ablation DOES say about position inputs: `l_bg_bits` +39% (third strongest)
+  and `l_cam` +21%.
 * **Typed heads**, HP classified not regressed (damage F1 0.286 -> 0.906), HP binned on the INPUT side too.
 * **Zero-init heads + logit residuals**, so skill starts at exactly 0.000 and any deviation is learned.
 * **No action leak**: the action conditions the QUERY side only; token fields are verified disjoint from
@@ -95,7 +98,9 @@ in the regime that was supposed to fix it.
 |---|---|---|---|---|---|---|---|
 | skill | +0.013 | -0.617 | +0.040 | -0.030 | -0.406 | -0.358 | -0.130 |
 
-Teacher-forced was +0.091. The eval subset is a fixed prefix and the rollout uses `sample=False`
+Teacher-forced was +0.188 at its best and +0.187 at its last epoch (`runs/wm_v2/metrics.jsonl`; an
+earlier draft of this document said +0.091, which was the JEPA's H5 mean copied into the wrong row -- the
+regression is therefore LARGER than first written). The eval subset is a fixed prefix and the rollout uses `sample=False`
 (`train_wm_tokens.py` eval path), so this is genuine model movement, not measurement noise. Some one-step
 loss was the expected price of changing the objective; ending at a negative MEAN with no recovery trend in 7
 epochs is not. The likely mechanism is the depth mixture: 60% of batches are one-step but only ~3% of the
