@@ -329,6 +329,11 @@ class CombatConfig:
     g_pickup_cap: float = 6.0
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0
+    g_guard: float = 0.0               # per step LOCKED ON Gohma with the shield up WHILE SHE IS ATTACKING.
+    g_guard_cap: float = 6.0           #   The simplest defensive decomposition there is, and it was not even
+    #   expressible until ("L", "R") was added to the action space: the policy could lock on OR shield, never
+    #   both. Gated on GOHMA_ATTACK so it pays for defence rather than for standing still. Default 0.0 keeps
+    #   the `full` baseline reproducible; the `simple` preset turns it on.
     g_stun_on_convert: bool = False    # pay seed_stun / nut_stun only when that stun is CONVERTED into damage.
     #   Default False keeps the measured baseline reproducible; the `simple` preset turns it on. Paying at the
     #   stun TRANSITION rewards the stun itself, so a policy can farm stuns it never cashes in: measured
@@ -582,6 +587,8 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     "w_lockon": 0.0, "w_lock_step": 0.0,
     # stun credit survives at full value, but only when it is cashed in
     "g_stun_on_convert": True,
+    # the defensive channel, newly reachable now that Z+Shield exists
+    "g_guard": 0.15,
 }
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),

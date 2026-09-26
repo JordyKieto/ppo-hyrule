@@ -29,10 +29,20 @@ N_COMBAT_ACTIONS = len(COMBAT_ACTIONS)
 # after drawing, then every 0.4 s); holding C-down never fires; B puts it away. Appended AFTER the 63 v4 actions so
 # index a < 63 means exactly the same thing in v4 and v5 (checkpoint transfer copies those policy rows).
 # + C-left item (Deku Nut on the user's save; verified live: a tap throws one, Gohma is stunned ~0.22 s later for ~2 s).
-COMBAT_BUTTONS_V5 = COMBAT_BUTTONS + [("CD",), ("L", "CD"), ("CL",)]
+# + Z-TARGET AND SHIELD TOGETHER. Until now the only R combination was ("R",) alone, so "shield while locked
+# on" -- the one way Link reliably raises his shield, and exactly what the `block` reward pays for -- was not
+# expressible: the policy could lock on OR shield, never both. Measured on gohma-r0_u00050: it chose a shield
+# action 6.57% of steps and SF1_SHIELD set on only 17.44% of those, 1,378 presses of 1,669 doing nothing,
+# because 8 of the 9 shield actions carry a stick direction and Link does not raise his shield while walking.
+# Appended LAST so every index < 90 keeps its v5/v7 meaning and existing checkpoints transfer unchanged.
+# + Z-TARGET AND DEKU NUT. The same hole as Z+Shield, on the item every measured win depends on: over
+# gohma-v10's 360 defeats the mean was 2.53 nut stuns against 0.05 seed stuns, and the policy could not throw
+# a nut while locked on. Z orients Link at her, and the nut spawns 85 units AHEAD of him.
+COMBAT_BUTTONS_V5 = COMBAT_BUTTONS + [("CD",), ("L", "CD"), ("CL",), ("L", "R"), ("L", "CL")]
 C_TAP_VI = 3                          # C-button items are pressed for 3 VIs then released within the 6-VI step
-COMBAT_BUTTON_NAMES_V5 = COMBAT_BUTTON_NAMES + ["+Sling", "+Z+Sling", "+Nut"]
-COMBAT_ACTIONS_V5 = COMBAT_ACTIONS + [(d, b) for d in DIRECTIONS for b in (7, 8)] + [(d, 9) for d in DIRECTIONS]
+COMBAT_BUTTON_NAMES_V5 = COMBAT_BUTTON_NAMES + ["+Sling", "+Z+Sling", "+Nut", "+Z+Shield", "+Z+Nut"]
+COMBAT_ACTIONS_V5 = (COMBAT_ACTIONS + [(d, b) for d in DIRECTIONS for b in (7, 8)]
+                     + [(d, 9) for d in DIRECTIONS] + [(d, b) for b in (10, 11) for d in DIRECTIONS])
 N_COMBAT_ACTIONS_V5 = len(COMBAT_ACTIONS_V5)
 
 

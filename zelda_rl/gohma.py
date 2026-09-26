@@ -137,7 +137,7 @@ class GohmaTracker(CombatTracker):
         self.last_nut_t = None
         self.seed_state = "other"
         self.ep.update(boss_hp_start=g.hp if g else 0, boss_hp_max=10, nut_stuns=0, nuts_thrown=0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
-                       seed_stuns_cashed=0, nut_stuns_cashed=0,
+                       seed_stuns_cashed=0, nut_stuns_cashed=0, guard_steps=0, guard_attack_steps=0,
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
@@ -412,6 +412,12 @@ class GohmaTracker(CombatTracker):
             locked = cur.targeted == g.ptr
             vulnerable = gs in GOHMA_VULNERABLE
             sling = cur.held_item == HELD_SLINGSHOT
+            shielded = cur.bit(SF1_SHIELD)
+            if locked and shielded:
+                ep["guard_steps"] = ep.get("guard_steps", 0) + 1     # diagnostic: counted whether or not paid
+                if gs in GOHMA_ATTACK:
+                    ep["guard_attack_steps"] = ep.get("guard_attack_steps", 0) + 1
+                    self._capped(pay, "guard", c.g_guard, c.g_guard_cap)
             if locked:
                 ep["lock_steps"] += 1
                 if prev.targeted != g.ptr and ep["lockons"] < c.lockon_cap:

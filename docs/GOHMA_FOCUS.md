@@ -194,6 +194,42 @@ And `shield_steps` is confirmed structurally dead for a boss: Link is within its
 5.62% of steps and shields at a median distance of 399. It cannot report defensive progress here no matter what
 the policy does.
 
+## STEP 3: the action space could not express the defence, and the defence is SPACING
+
+**Two capability holes, found by auditing the button table rather than by training.** The only combination
+containing R was `("R",)` alone, so **"shield while Z-targeting" was literally inexpressible** -- the policy
+could lock on or shield, never both -- and that is exactly what the `block` reward pays for. The Deku Nut had
+the same hole, on the item every measured win depends on (2.53 nut stuns per defeat against 0.05 seed stuns).
+
+| | solo | with Z |
+|---|---|---|
+| sword (B) | yes | yes |
+| A | yes | yes |
+| slingshot (C-down) | yes | yes |
+| **shield (R)** | yes | **was MISSING -- added as `("L","R")`** |
+| **Deku Nut (C-left)** | yes | **was MISSING -- added as `("L","CL")`** |
+
+Both appended last, so actions 0-89 keep their meaning and existing checkpoints transfer unchanged; 90-98 are
+`+Z+Shield` and 99-107 `+Z+Nut`, for 108 total. `send_action` already handles them: the C-tap path keys on
+`"CL" in held` and L/R come from the held tuple.
+
+**But the shield is probably not the answer.** In 17,182 frames of recorded human play across three fights the
+`SF1_SHIELD` bit is set **0.00% of the time**, while Z-target fires 36-63% of frames. The bit is real -- in the
+live rollout it co-occurred with a chosen shield action 291 times of 293, 99.3% -- so this is not a decoding
+bug. A competent human beats Gohma without ever raising his shield.
+
+What he does instead, measured during her attack states only:
+
+| | median distance to her | attack frames inside 150u | hearts lost |
+|---|---|---|---|
+| **the WIN** | **311** | 8.7% | 0.5 |
+| **the DEATH** | **131** | 61.8% | 3.0, died |
+
+Same player, same boss, and the whole difference is **where he stands while she is attacking**. Survival here
+is SPACING, not blocking -- which means a reward for "locked on and shielding while she attacks" pays for
+standing inside the range the winning run stayed out of. `g_guard` is implemented and reachable, and it is
+**not validated by the only competent play we have**; the spacing term the data supports has not been written.
+
 ## Next steps, in order (revised after step 1)
 
 Everything local. No pods; the fleet is not the bottleneck at 10 Dolphins per machine and remote setup cost
