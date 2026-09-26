@@ -1,6 +1,6 @@
 # Repository map — read this before searching for anything
 
-There are 19 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
+There are 20 documents and ~5,600 lines of notes in `docs/`. Without a map an agent greps for words it already
 suspects, finds a plausible file, reads the top of it and proceeds — which is exactly how a documented 3.5-minute
 fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the index. Keep it current.
 
@@ -12,6 +12,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 | the **current** world model (tokens + attention) | `TOKEN_WORLD_MODEL.md` | `train_wm_tokens.py`: state in, state out. What is measured, what is confounded, what to run next |
 | train a WM at horizon / pick the next experiment | `WM_EXPERIMENT_REGIME.md` | the concluded teacher-forced → autoregressive regime: what it bought (positive through H5, nothing past it), the token WM regression, the saved checkpoints, and the next four experiments in order |
 | a **latent** world model | `LATENT_WORLD_MODEL.md` (§1–§30), `JEPA_PLAN.md` | 30 sections of next-latent prediction. Six architectures, all lose to the identity. Most ideas here have been tried. |
+| fix the world model's MOTION | `WM_MOTION.md` | position is not action-conditioned (the action buys +0.002); what the MOBA token WM did differently, and the four changes in order |
 | run anything on RunPod | `RUNPOD.md` **all of it**, then `NEXT_SESSION_RUNPOD.md` | the fast paths and the measured timings are in the tables, not the top-of-file examples |
 | collect a dataset | `COMBAT_TASK.md`, then `scripts/collect_transitions.py` docstring | mixes, slots, savestate provenance |
 | change the reward | `COMBAT_TASK.md`, `zelda_rl/combat.py::CombatTracker.step` | 18 terms; the dream calls the same tracker, so parity is structural |
