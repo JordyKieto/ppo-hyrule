@@ -232,10 +232,17 @@ standing inside the range the winning run stayed out of. `g_guard` is implemente
 
 ## The defence, implemented: SPACING, not shielding
 
-`--reward simple` now carries `g_spacing` = 0.05 per step spent **outside 150 units while Gohma is in an attack
-state**, capped at 4.0, and `g_guard` is 0.0. The threshold is the measurement, not a guess: over her attack
-frames the WIN held a median 311 units and was inside 150 for 8.7% of them, the DEATH held 131 and was inside
-for 61.8% -- a 7x separation from the same player on the same boss.
+`--reward simple` carries `g_spacing` = **0.02 per step spent in the BAND [150, 600] units while Gohma is in an
+attack state, capped at 1.5**, and `g_guard` is 0.0. The band is the measurement, not a guess: over her attack
+frames the WIN held a median 311 units (p10 162, p90 533) and was inside 150 for 8.7% of them, the DEATH held
+131 and was inside for 61.8% -- a 7x separation from the same player on the same boss.
+
+It is a BAND rather than a floor because a floor paid a do-nothing policy exactly as much as it paid the human
+win: at 0.05/step capped at 4.0 the cap saturated for the win, the death AND a smoke-run episode that banked
+the whole cap over 3,000 attack steps with zero boss damage (slot 6 starts at `floor_eye_red` 357 units away,
+so she is "attacking" from t=0 and standing still collected the maximum). `far_attack_steps` is now a separate
+unpaid bucket, and the validation that [150, 600] is right is that the human's `far_attack_steps` is 0 in all
+three recordings -- nothing about competent play falls outside it.
 
 It pairs with `approach_stunned` / `sword_ready_stunned`, which pay for CLOSING while she is down, so the
 learned behaviour is phase-dependent spacing rather than distance for its own sake. The cap is reached only by
@@ -246,9 +253,9 @@ Replayed against the recordings, it separates good play from bad:
 
 | recording | safe attack frames | too close | `spacing` paid | outcome |
 |---|---|---|---|---|
-| **WIN** | 137 (**90.7%**) | 14 | **+4.00** (cap) | 0.5 hearts |
-| **DEATH** | 45 (**40.2%**) | 67 | +2.25 | 3 hearts, died |
-| nut fight | 154 (73%) | 57 | +4.00 | 2.5 hearts |
+| **WIN** | 137 (**90.7%**) | 14 | **+1.50** (cap) | 0.5 hearts |
+| **DEATH** | 45 (**40.2%**) | 67 | **+0.90** | 3 hearts, died |
+| nut fight | 154 (73%) | 57 | +1.50 | 2.5 hearts |
 
 `close_attack_steps` is the failure counter to watch: it should fall as the defeat rate rises.
 
@@ -381,3 +388,52 @@ Against arm B as the measured baseline, in this order, each its own run:
 * No reward changes (30 terms already; four runs of patches aimed at farming that 0c removes at the source).
 * No control-rate change and no "fire on red" macro -- the window is 11-35 policy steps, so that is not the bug.
 * No new observation version until v7 has been judged at matched updates.
+
+---
+
+# The run: `gohma-band` / `v11` (launched 2026-09-26)
+
+20 CPU pods x 8 envs, **$10.32/hr**, ~4,110 env steps/s fleet-wide. 150 updates x 24,000 x 20 = **72M env
+steps ~ 4.9 h ~ $50**. wandb group `gohma-band-v11` in `zelda-rl-gohma-ppo`, FedAvg with rank 4 as aggregator.
+
+```
+--profile gohma --obs-version 7 --reward simple --episode-seconds 300
+--start-slots 1,2,3,4,5,6,7,8,9,10 --slot-weights 1=1.25,2=1.25,7=10,9=1.25,10=1.25
+--init-from checkpoints/inbox/gohma-r13_u00050.pt --transfer-action-margin 0.3
+--fleet-aggregator 4 --total-updates 150          (+ --num-envs 8)
+```
+
+Resumed from `gohma-r13_u00050.pt`, the best of v10's 18 rank checkpoints by late-update defeat rate on engaged
+slots (8.43%, against 5.10% for the r0 checkpoint first used by mistake). Widened 90 -> 108 actions
+function-preservingly at load.
+
+## What to watch, in priority order
+
+1. **`close_attack_steps` share of attack steps.** 40.5% at launch; the human win is 9.3%. This is the
+   mechanism the run is testing and it should move within 10-20 updates.
+2. **`nut_stuns_cashed / nut_stuns`.** 15% at launch. The conversion gate withholds the rest, so this rising
+   means stuns are being turned into damage rather than farmed.
+3. **Defeat rate on engaged slots, against v10's 4.27%.** Needs ~50 updates to read.
+4. **`boss_hp_start` of the defeats.** THE TRAP: slot 7 is 50% of episodes and starts with Gohma stunned at
+   5 HP, 38 units away -- a rank-19 episode won it in **4.3 s** for +289.4. A rising defeat rate made
+   entirely of 5-HP finishes is not progress on the fight. 324 of v10's 360 wins already started at 5 HP.
+   Watch the share of defeats with `boss_hp_start` 10.
+5. **`far_attack_steps`.** 0 in human play and near-0 at launch. If it climbs, the spacing term is teaching
+   retreat rather than positioning, and that is also the trigger to build the boss-room wall map.
+
+## Fleet lessons from this deploy (new, not in RUNPOD.md)
+
+* **`fleet launch` does not check that `--fleet-aggregator N` names a rank that exists.** Creation came up
+  9/20 then 18/20 with ranks 1 and 4 missing; launching then would have pointed FedAvg at a nonexistent
+  aggregator and every follower would have silently fallen back to its own weights after the timeout. This
+  belongs in preflight as a hard refusal.
+* **One unreachable pod anywhere in the state file blocks bootstrapping ALL others.** `cmd_bootstrap` calls
+  `setup_seed_access` over every pod in the state, not just the selected ranks, so a single dud raised before
+  any pod was seeded and the first `--via-seeds` run bootstrapped zero. Terminating and recreating that pod
+  fixed it.
+* **`fleet audit` is collector-shaped.** It greps tmux session `zrl` and counts episodes under
+  `datasets/transitions/v5`, so a TRAINING fleet always shows "episodes on pod disks: 0" and its liveness
+  collapses to `pgrep dolphin-emu` -- which reported 4 pods idle that were mid-Dolphin-boot, the exact §22
+  trap. For a trainer, check tmux session `train` plus the trainer process.
+* **The Linux binary is `dolphin-emu`, not `Dolphin`.** A macOS-shaped `grep "[D]olphin"` returns 0 on a
+  perfectly healthy pod.
