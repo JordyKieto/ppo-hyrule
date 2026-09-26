@@ -329,6 +329,14 @@ class CombatConfig:
     g_pickup_cap: float = 6.0
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0
+    g_spacing: float = 0.0             # per step OUTSIDE g_spacing_range while she is in an attack state.
+    g_spacing_cap: float = 4.0         #   This is the defence the recordings actually show. Measured over her
+    g_spacing_range: float = 150.0     #   attack frames only: the WIN held a median 311 units and was inside
+    #   150 for 8.7% of them, losing half a heart; the DEATH held a median 131 and was inside 150 for 61.8%,
+    #   losing three hearts and dying -- same player, same boss. 150 separates them by 7x, which is why it is
+    #   the threshold. It pairs with approach_stunned / sword_ready_stunned, which pay for closing while she is
+    #   DOWN: the skill is phase-dependent spacing, not distance for its own sake, and the cap (reached only by
+    #   spacing correctly through essentially every attack step) stops it becoming a reason to never engage.
     g_guard: float = 0.0               # per step LOCKED ON Gohma with the shield up WHILE SHE IS ATTACKING.
     g_guard_cap: float = 6.0           #   The simplest defensive decomposition there is, and it was not even
     #   expressible until ("L", "R") was added to the action space: the policy could lock on OR shield, never
@@ -587,8 +595,11 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     "w_lockon": 0.0, "w_lock_step": 0.0,
     # stun credit survives at full value, but only when it is cashed in
     "g_stun_on_convert": True,
-    # the defensive channel, newly reachable now that Z+Shield exists
-    "g_guard": 0.15,
+    # the defensive channel. g_guard stays OFF: 17,182 frames of human play set the shield bit 0.00% of the
+    # time, so paying for "locked on and shielding while she attacks" rewards standing inside the range the
+    # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
+    "g_guard": 0.0,
+    "g_spacing": 0.05,
 }
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),

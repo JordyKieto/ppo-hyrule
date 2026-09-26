@@ -230,6 +230,69 @@ is SPACING, not blocking -- which means a reward for "locked on and shielding wh
 standing inside the range the winning run stayed out of. `g_guard` is implemented and reachable, and it is
 **not validated by the only competent play we have**; the spacing term the data supports has not been written.
 
+## The defence, implemented: SPACING, not shielding
+
+`--reward simple` now carries `g_spacing` = 0.05 per step spent **outside 150 units while Gohma is in an attack
+state**, capped at 4.0, and `g_guard` is 0.0. The threshold is the measurement, not a guess: over her attack
+frames the WIN held a median 311 units and was inside 150 for 8.7% of them, the DEATH held 131 and was inside
+for 61.8% -- a 7x separation from the same player on the same boss.
+
+It pairs with `approach_stunned` / `sword_ready_stunned`, which pay for CLOSING while she is down, so the
+learned behaviour is phase-dependent spacing rather than distance for its own sake. The cap is reached only by
+spacing correctly through essentially every attack step, and at 4.0 against `boss_defeat`'s 60 it cannot
+dominate.
+
+Replayed against the recordings, it separates good play from bad:
+
+| recording | safe attack frames | too close | `spacing` paid | outcome |
+|---|---|---|---|---|
+| **WIN** | 137 (**90.7%**) | 14 | **+4.00** (cap) | 0.5 hearts |
+| **DEATH** | 45 (**40.2%**) | 67 | +2.25 | 3 hearts, died |
+| nut fight | 154 (73%) | 57 | +4.00 | 2.5 hearts |
+
+`close_attack_steps` is the failure counter to watch: it should fall as the defeat rate rises.
+
+## The verified slot set (decoded offline from the savestate files, 2026-09-26)
+
+Not trusted from the agent that wrote them, and not from `GOHMA_TASK.md`, whose table no longer matches the
+files on disk for slots 4-8. Decoded with `read_combat_state` over the decompressed savestate RAM, with the
+larva/debris split done by category and params (id `0x0028` is shared -- trap 2):
+
+| slot | Gohma state | HP | larvae | Link HP | distance |
+|---|---|---|---|---|---|
+| 1 | `ceiling_move` | 5 | 3 | 48 | 473 |
+| 2 | `ceiling_move` | 5 | 3 | 40 | 368 |
+| 3 | `stunned` | 10 | 0 | 48 | 188 |
+| 4 | `ceiling_spawn` | 8 | 0 | 40 | 541 |
+| 5 | `ceiling_eye_red` | 10 | 0 | 40 | 472 |
+| 6 | `floor_eye_red` | 6 | 0 | 48 | 357 |
+| 7 | `stunned` | 5 | 0 | 40 | 38 |
+| 8 | `stunned` | 10 | 0 | 40 | 448 |
+| 9 | `ceiling_move` | 5 | 3 | 48 | 394 |
+| 10 | `ceiling_move` | 5 | 3 | 48 | 490 |
+
+**No `ceiling_wait` remains in the set.** 1, 2 and 10 are slot-9-like variants at three distinct ranges rather
+than copies (distinct md5s). Curriculum weights, for 50% slot 7 / 25% the slot-9 family / 5% each of 3,4,5,6,8:
+
+```
+--start-slots 1,2,3,4,5,6,7,8,9,10 --slot-weights 1=1.25,2=1.25,7=10,9=1.25,10=1.25
+```
+
+## What a LOCAL run can and cannot settle
+
+This Mac has 8 logical / 4 performance cores and sustains **~85-111 env steps/s at 4 Dolphins** (it stalls
+occasionally; `train_combat` retries 3x and restarts the bad env, so it survives). One update at 4 envs x 3,000
+steps = 12,000 env steps ~ 2 minutes.
+
+`gohma-v10` moved its defeat rate 2.15% -> 4.27% over 56 updates at 8 envs per rank across 19 ranks -- roughly
+25 million env steps. An hour on this laptop is ~180,000. **A local run cannot reproduce that learning curve**,
+and claiming otherwise would repeat the mistake of reading an unmatched comparison (`AGENTS.md` 11, 12).
+
+What it CAN do, and what it is for: validate end to end that the new action space and reward work -- that
+`+Z+Shield` and `+Z+Nut` are chosen and register, that `spacing` / `close_attack_steps` / `*_stuns_cashed`
+populate, that the rebuilt slots produce engaged episodes with real boss damage. That is the gate before
+deciding whether the comparison is worth fleet time at all.
+
 ## Next steps, in order (revised after step 1)
 
 Everything local. No pods; the fleet is not the bottleneck at 10 Dolphins per machine and remote setup cost
