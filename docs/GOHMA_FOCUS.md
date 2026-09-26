@@ -106,19 +106,110 @@ v8's 126, and `gohma-v10` (obs v7) has no recorded result at all. Two observatio
 to fix aiming, neither run long enough to be judged, and `AGENTS.md` sections 11 and 12 both say an architecture
 comparison means training both arms to matched updates.
 
-## Next steps, in order
+## STEP 1 RESULT (2026-09-26, local, zero compute): the premise was wrong
 
-1. **Re-measure v7/v8 from the existing wandb history** -- `red_eye_seeds / seeds_fired` against the 4-11%
-   chance band, per slot. No compute. Confirms or kills the below-chance reading above before anything is
-   launched on it.
-2. **Finish the comparison that was abandoned**: obs v7 vs the v8 baseline, engaged slots only, **matched
-   update count**, nothing else changed. This is the cheapest experiment that could actually resolve aiming,
-   and it is a repeat of an approved design, not a new one.
-3. **Only then** consider porting the WM's representation (attention over typed tokens, three classes,
-   environment pool, cell-embedded positions) into the policy encoder. It is one change at a time against a
-   measured baseline (`AGENTS.md` 9, 13), and the position codec in particular is unproven -- see the table.
-4. **Do not touch the reward.** It already has ~30 terms and four runs' worth of patches aimed at farming
-   behaviour that the slot change now removes at the source.
+`gohma-v10` -- observation v7, the run `GOHMA_TASK.md` left as "(running)" with no result -- **did run**, to
+update 56 across 19 ranks, and its per-episode logs were on this laptop the whole time in
+`runs/gohma-r*/episodes.jsonl` (15,560 episodes, every field needed). No wandb required. The chance rate does
+not have to be estimated from the human recordings either: `vulnerable_steps / length` gives it per episode,
+matched to the fight the policy actually experienced.
+
+**Retraction.** I wrote that the policy fires into the red eye at or below chance and that Gohma has 0 reliable
+defeats. Both are wrong. They came from `GOHMA_TASK.md`'s `v7`/`v8` rows; the obs-v7 run is a different animal.
+
+| | measured |
+|---|---|
+| red-eye seeds / seeds fired | **38.55%** against a **11.46%** chance rate = **3.36x chance** |
+| trend over updates | 3.14x -> 3.14x -> 3.10x -> 3.71x -> 3.82x -> 3.56x, i.e. **rising** |
+| seed stuns | 2,099 |
+| defeats | **360** of 15,560 episodes; **3.29% on engaged slots**, rising 2.15% -> 4.27% |
+
+So the aim hypothesis is answered, and answered in favour of obs v7. The aim information helped. Phase 1 as
+originally written -- "does obs v7 help?" -- no longer needs running.
+
+### The pre-fight slots are worse than suspected, and the cost is now exact
+
+| | slots 1, 2, 10 | slots 3-9 |
+|---|---|---|
+| episodes | 4,631 (29.8%) | 10,929 |
+| **share of env steps** | **43.7%** | 56.3% |
+| Gohma HP dealt, total | **49** across 4,631 episodes | 22,500 |
+| defeats | **0** | 360 |
+| deaths | 0.2% | 64.5% |
+| timeouts | **98.1%** | 32.2% |
+| mean return | **-9.1** | +29.6 |
+
+They consume **43.7% of all compute** -- more than their episode share, because they always run to the 300 s
+cap -- and return nothing. Slot 10 fired 6,134 seeds across 1,506 episodes and landed **zero** in a red-eye
+state. Removing them is a ~1.8x effective speedup before any other change, and it is the largest single win
+available.
+
+### The real blocker is SURVIVAL, and it has not moved at all
+
+| engaged slots, by update | u01-10 | u21-30 | u41-50 | u51-60 |
+|---|---|---|---|---|
+| death rate | 64.9% | 64.2% | 63.8% | 64.6% |
+| Gohma HP dealt | 1.92/10 | 2.10/10 | 2.14/10 | 2.13/10 |
+
+Aim improves, damage plateaus at ~2 of her 10 HP, and the death rate is **flat across all 56 updates**.
+Died episodes took 7.46 of her attacks and lost 47.3 of 48 HP; survived episodes took 2.04. The policy is not
+losing because it cannot shoot her -- it is losing because it dies after two hearts of progress.
+
+**How the 360 wins were actually won:** mean 55 s, `nut_stuns` 2.53, `seed_stuns` **0.05**, `stun_hits` 5.23,
+and **324 of 360 started from Gohma at 5 HP** (9 from full HP). So the policy's working kill is *Deku Nut stun
+plus sword, from half health* -- not the slingshot skill the reward was built around. Slot 7 (already stunned,
+38 units away) supplies 292 of the 360.
+
+### The defensive channel is UNMEASURED, which is its own finding
+
+`shield_steps` is 0.0 in every episode and `blocks` is 0.00 -- but neither is evidence the policy never
+shields. `shield_steps` requires a live target **within 150 units** (`shield_radius`, calibrated for a Deku
+Baba lunge) and Gohma starts 188-448 away and spends much of the fight on the ceiling. `boss_blocks`
+(0.10/episode against 5.57 attacks) requires a whole attack cycle that was *shielded AND took zero damage AND
+was inside `g_block_range`* -- it counts defensive **successes**, not attempts. **No logged metric answers
+"does the policy ever raise the shield against Gohma".** With survival as the blocker, that is the gap to close
+first, and it is a local measurement, not a training run.
+
+## STEP 2 RESULT: the shield action barely registers
+
+Measured locally with `scripts/measure_shield.py` on `gohma-r0_u00050` (obs v7, update 50), 4 Dolphins,
+25,395 steps over 12 episodes on slots 3/4/5/7/9:
+
+| | |
+|---|---|
+| shield action CHOSEN | **6.57%** of steps (1,669) -- against a 10.0% uniform-random baseline |
+| `SF1_SHIELD` actually set | **1.15%** of steps (293) |
+| **shield presses that registered** | **17.44%** -- 1,378 of 1,669 produced no shield bit |
+| shielded while she is ATTACKING | 22 of 949 attack steps = **2.32%** |
+| steps within 150 units of her | 5.62% -- which is why `shield_steps` reads 0.0 |
+| distance when shielding | median **399**, p10 187, p90 824 |
+
+So it is neither "never explores shield" nor "shields and dies anyway". **The action mostly does not work.**
+The policy picks a shield action 1,669 times and Link raises his shield 291 times. 8 of the 9 shield actions
+carry a stick direction (`-`, E, NE, N, NW, W, SW, S, SE and `+Shield` = index 4 of the button list), and Link
+does not raise his shield while walking, so most of the shield action space is expected to be a no-op -- 1/9
+would be 11.1% against the 17.4% measured.
+
+And `shield_steps` is confirmed structurally dead for a boss: Link is within its 150-unit `shield_radius` for
+5.62% of steps and shields at a median distance of 399. It cannot report defensive progress here no matter what
+the policy does.
+
+## Next steps, in order (revised after step 1)
+
+Everything local. No pods; the fleet is not the bottleneck at 10 Dolphins per machine and remote setup cost
+more than the experiments did.
+
+1. **Drop the pre-fight slots.** `--start-slots 3,4,5,6,7,8,9`, plus the rebuilt 1, 2, 10. Recovers 43.7% of
+   compute for free. Done as part of phase 0c.
+2. **Measure whether the policy uses the shield at all**, from a local rollout of `gohma-r*_u00050` with 10
+   Dolphins: the raw action distribution over the 90 actions, and the `SF1_SHIELD` bit per step, logged
+   directly rather than through a Baba-scoped counter. This is a ~10-minute local run and it decides whether
+   survival is an exploration problem or a reward-measurement problem.
+3. **Fix the defensive metrics for a boss** -- `shield_radius` 150 is a Baba number. Whatever step 2 shows,
+   `shield_steps` as currently defined cannot report progress on a boss that attacks from 200+ units.
+4. **Then** address survival with ONE change, measured against the u56 baseline (3.29% defeat, 64.5% death).
+5. **Phase 2 (WM representation port) is deprioritised.** The policy's problem is not representation --
+   it aims at 3.4x chance and is still improving. Revisit only if survival work stalls.
 
 ## Open questions worth one measurement each
 

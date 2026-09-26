@@ -54,6 +54,11 @@ def parse_args():
     ap.add_argument("--total-updates", type=int, default=200)
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--start-slots", default="1,2,3,4,5,6,7,8,9,10")
+    ap.add_argument("--reward", choices=["full", "simple"], default="full",
+                    help="gohma only. `simple` applies combat.GOHMA_SIMPLE: drops the entrance-era slingshot "
+                         "shaping cluster and the distraction terms, and pays seed/nut stun credit only when "
+                         "the stun is converted into damage. Every OUTCOME term is unchanged. See "
+                         "docs/GOHMA_FOCUS.md for the measurements behind it.")
     ap.add_argument("--slot-weights", default="", help="curriculum: slot=weight,... (others 1), e.g. '4=2.33,5=2.33,6=2.33' "
                     "makes half of all episodes start from slots 4-6")
     ap.add_argument("--episode-seconds", type=float, default=180.0)
@@ -108,6 +113,11 @@ def main():
     if args.profile == "gohma" and args.episode_seconds == 180.0:     # boss fight: 5-minute episodes unless overridden
         args.episode_seconds = 300.0
     profile_defaults = GOHMA_DEFAULTS if args.profile == "gohma" else {}
+    if args.profile == "gohma" and args.reward == "simple":
+        from zelda_rl.combat import GOHMA_SIMPLE
+        profile_defaults = {**profile_defaults, **GOHMA_SIMPLE}
+        LOGGER.info("reward preset `simple`: %d terms zeroed, stun credit paid on conversion only",
+                    sum(1 for v in GOHMA_SIMPLE.values() if v == 0.0))
     ccfg = CombatConfig(profile=args.profile, max_seconds=args.episode_seconds,
                         **{**profile_defaults, **(json.loads(args.combat_json) if args.combat_json else {})})
     env_cfg = EnvConfig(episode_vi=int(args.episode_seconds * 60), vi_per_step=args.vi_per_step,

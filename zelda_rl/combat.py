@@ -329,6 +329,11 @@ class CombatConfig:
     g_pickup_cap: float = 6.0
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0
+    g_stun_on_convert: bool = False    # pay seed_stun / nut_stun only when that stun is CONVERTED into damage.
+    #   Default False keeps the measured baseline reproducible; the `simple` preset turns it on. Paying at the
+    #   stun TRANSITION rewards the stun itself, so a policy can farm stuns it never cashes in: measured
+    #   40,353 nut stuns over 15,560 episodes while Gohma lost a mean 2.06 of 10 HP.
+
 
 
 @dataclass
@@ -542,6 +547,42 @@ def make_tracker(cfg: "CombatConfig"):
         return GohmaTracker(cfg)
     return CombatTracker(cfg)
 
+
+# ---------------------------------------------------------------------------------------------------------
+# GOHMA_SIMPLE: the reward with the entrance-era shaping removed.
+#
+# The slingshot-shaping cluster (sling_ready, unfired_red_eye, drop_red_eye_shot, elevated_seed,
+# slingshot_on_red_eye, red_eye_seed) was added across gohma-v5..v7 to stop the ENTRANCE slots being farmed
+# -- v5 measured the policy milking `sling_ready` for ~150 steps without ever starting the fight -- and to
+# unstick slot 6, which waited cocked for ~1,400 steps. With the pre-fight slots gone from the start set,
+# those terms patch a problem that no longer exists. On slots 1/2/10 they now sum to +0.011 per episode.
+#
+# Worse, measurement over 10,929 engaged episodes of gohma-v10 showed the cluster had become the dominant
+# reward source: shaping was 88% of reward magnitude, `red_eye_seed` paid +8.34/episode against
+# `boss_defeat`'s +1.98, and the skill it pays for appears in none of the 360 wins (seed_stuns 0.05 per
+# defeat, against nut_stuns 2.53 and stun_hits 5.23). The policy optimised it correctly -- red-eye aim
+# reached 3.36x chance and kept rising -- and still died 64.5% of the time with her at 8 of 10 HP.
+#
+# So this preset keeps only the chain the wins actually used: stun -> sword while stunned -> HP -> defeat,
+# and it gates the stun credit on conversion (g_stun_on_convert) so stunning without cashing in pays zero.
+# Every OUTCOME term is untouched: boss_damage, hp progress, defeat, speed bonus, success, larva, link
+# damage, death, timeout.
+GOHMA_SIMPLE: dict[str, float | bool] = {
+    # the entrance-era slingshot cluster: gone
+    "g_red_eye_seed": 0.0, "g_red_eye_seed_cap": 0.0,
+    "g_sling_red_eye": 0.0, "g_sling_red_eye_cap": 0.0,
+    "g_sling_ready": 0.0, "g_sling_ready_cap": 0.0,
+    "g_unfired_red_eye": 0.0,
+    "g_drop_red_eye_shot": 0.0,
+    "g_elevated_seed": 0.0, "g_elevated_seed_cap": 0.0,
+    "g_lock_red_eye": 0.0, "g_lock_red_eye_cap": 0.0,
+    # distractions from a boss fight
+    "g_grass_cut": 0.0, "g_grass_cut_cap": 0.0,
+    "g_seed_pickup": 0.0, "g_nut_pickup": 0.0, "g_pickup_cap": 0.0,
+    "w_lockon": 0.0, "w_lock_step": 0.0,
+    # stun credit survives at full value, but only when it is cashed in
+    "g_stun_on_convert": True,
+}
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),
                  ("locked_on_target", 1), ("arrow_on_target", 1), ("shielding", 1), ("damaged", 1),

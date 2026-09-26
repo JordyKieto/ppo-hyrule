@@ -125,6 +125,7 @@ class GohmaTracker(CombatTracker):
 
     def reset(self, s: CombatState, max_steps: int) -> None:
         super().reset(s, max_steps)
+        self._pending_stun = None          # a held stun credit never survives an episode boundary
         g = find_gohma(s)
         self.tracks = {p: Track(target=(kind(e) == "gohma" and e.hp > 0), hp=e.hp, age=self.cfg.spawn_grace_steps)
                        for p, e in s.enemies.items()}
@@ -136,6 +137,7 @@ class GohmaTracker(CombatTracker):
         self.last_nut_t = None
         self.seed_state = "other"
         self.ep.update(boss_hp_start=g.hp if g else 0, boss_hp_max=10, nut_stuns=0, nuts_thrown=0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
+                       seed_stuns_cashed=0, nut_stuns_cashed=0,
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
@@ -152,6 +154,32 @@ class GohmaTracker(CombatTracker):
             v = min(value, cap - got)
             self._r[name] = got + v
             pay(name, v, kind_)
+
+    def _stun_credit(self, pay, ep, kind: str) -> None:
+        """Credit a stun -- immediately, or held until it is cashed in.
+
+        Paying at the stun transition rewards the stun itself, which a policy can farm without ever hitting
+        her: gohma-v10 logged 40,353 nut stuns over 15,560 episodes while taking a mean 2.06 of her 10 HP.
+        With `g_stun_on_convert` the credit is held and paid by `_cash_stun` on the first damage dealt during
+        that stun, so an uncashed stun is worth zero. The stun is still COUNTED either way, so the
+        conversion rate stays measurable.
+        """
+        c = self.cfg
+        w, cap = (c.g_seed_stun, c.g_seed_stun_cap) if kind == "seed" else (c.g_nut_stun, c.g_nut_stun_cap)
+        if not c.g_stun_on_convert:
+            self._capped(pay, f"{kind}_stun", w, cap)
+            return
+        self._pending_stun = kind                         # one credit per stun, cashed by the first hit
+
+    def _cash_stun(self, pay, ep) -> None:
+        """Pay a held stun credit; called when damage lands while she is down. No-op if nothing is held."""
+        kind, self._pending_stun = getattr(self, "_pending_stun", None), None
+        if kind is None:
+            return
+        c = self.cfg
+        w, cap = (c.g_seed_stun, c.g_seed_stun_cap) if kind == "seed" else (c.g_nut_stun, c.g_nut_stun_cap)
+        self._capped(pay, f"{kind}_stun", w, cap)
+        ep[f"{kind}_stuns_cashed"] = ep.get(f"{kind}_stuns_cashed", 0) + 1
 
     def _resolve_shot(self, kind: str) -> bool:
         """Mark the oldest pending shot of this kind as a hit (no miss penalty). False if none is pending."""
@@ -209,6 +237,7 @@ class GohmaTracker(CombatTracker):
                     if stunned_before or gs in GOHMA_STUNNED:
                         pay("stun_hit", c.g_stun_hit * dmg, "shape")
                         ep["stun_hits"] += dmg
+                        self._cash_stun(pay, ep)      # a deferred stun credit is earned the moment it is cashed in
                     if e.hp == 0:
                         tr.defeated = True
                         mins = self.t / c.steps_per_second / 60.0
@@ -252,12 +281,14 @@ class GohmaTracker(CombatTracker):
                         self._resolve_shot("seed")
                         ep["seed_stuns"] += 1
                         ev["seed_stun"] = True
-                        self._capped(pay, "seed_stun", c.g_seed_stun, c.g_seed_stun_cap, "shape")
+                        self._stun_credit(pay, ep, "seed")
                     elif recent_nut:                                     # Deku Nut flash: shorter stun, smaller credit
                         self._resolve_shot("nut")
                         ep["nut_stuns"] += 1
                         ev["nut_stun"] = True
-                        self._capped(pay, "nut_stun", c.g_nut_stun, c.g_nut_stun_cap, "shape")
+                        self._stun_credit(pay, ep, "nut")
+                if self.g_prev_state in GOHMA_STUNNED and gs not in GOHMA_STUNNED:
+                    self._pending_stun = None        # she recovered un-hit: the stun was never cashed in
                 if gs in GOHMA_ATTACK and self.g_prev_state not in GOHMA_ATTACK:
                     ep["boss_attacks"] += 1
                     self.attack_cycle = {"shield": False, "dmg": 0}
