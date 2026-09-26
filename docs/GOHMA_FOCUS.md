@@ -437,3 +437,60 @@ function-preservingly at load.
   trap. For a trainer, check tmux session `train` plus the trainer process.
 * **The Linux binary is `dolphin-emu`, not `Dolphin`.** A macOS-shaped `grep "[D]olphin"` returns 0 on a
   perfectly healthy pod.
+
+---
+
+# v11 at 20 updates: the arc is good, and two things it revealed (2026-09-26)
+
+**Verdict: training well, right speed, right curriculum. It is a waiting game now.** 3,023 episodes from 5 of
+20 ranks, engaged slots:
+
+| updates | defeat | Gohma HP taken | died | return |
+|---|---|---|---|---|
+| 1-5 | 3.54% | 1.89 | 69% | +2.6 |
+| 6-10 | 3.76% | 1.90 | 68% | +4.4 |
+| 11-15 | 5.47% | 2.05 | 66% | +11.3 |
+| **16-21** | **6.95%** | **2.16** | **65%** | **+15.7** |
+
+Defeat rate nearly doubled and is already past v10's 4.27% ceiling; return went +2.6 to +15.7. **The death rate
+is moving for the first time** -- it sat at 64.5% for all 56 updates of v10 and is now 69% -> 65%.
+
+The reward is shifting toward the outcome as intended: `boss_defeat` entered the top-9 components in the later
+half (+3.72/ep, previously outside it) and `boss_defeat_speed_bonus` went +3.69 -> +6.22, so return is
+increasingly earned by winning faster rather than by shaping. `death` remains the largest single term at -19.7.
+
+## What is NOT working yet
+
+* **The spacing term has not changed the behaviour it targets.** `close_attack_steps` ran 20.7 / 22.4 / 23.3 /
+  19.9 % across the four bands -- noise around 21%, no trend, against the human win's 9.3%. The death rate is
+  falling anyway, so something else is driving that. The one change made for survival is not the thing
+  producing the survival gain, and that needs saying plainly before anyone credits it.
+* **Stun conversion is flat at ~19%** (218 of 1,133 nut stuns cashed, from 20% at the start). The gate is
+  correctly withholding the other 80%, but the policy is not learning to cash in -- it stuns and walks away.
+* **The rebuilt slots 1/2/10 underperform.** 41% close-during-attack, 79-85% death, 0.4% defeat, return -12 to
+  -18. They place Link 473/368/490 units out against slot 9's 394, and he dies at range without closing. They
+  are 25% of episodes for almost no return -- better than the pre-fight slots' 0%, but worth rebuilding nearer
+  or reweighting down.
+
+## The curriculum is a FINISHER curriculum, and the numbers say so
+
+Gohma has **10 HP**, one per sword hit while stunned. The verified start distribution:
+
+| Gohma HP at start | slots | share of episodes |
+|---|---|---|
+| **10 (full)** | 3, 5, 8 | **15%** |
+| 8 | 4 | 5% |
+| 6 | 6 | 5% |
+| **5 (half dead)** | 1, 2, 7, 9, 10 | **75%** |
+
+75% of episodes begin with her already at half health, and slot 7 alone -- stunned, 5 HP, 38 units away -- is
+50%. **1 full-HP win in 3,023 episodes.** So the doubling defeat rate measures a finisher on a half-dead boss,
+which is a real skill and is not the task. Nothing to change while the arc is still climbing; the number to
+watch is the share of defeats with `boss_hp_start` 10, and the moment the finisher saturates, the weights
+should shift toward slots 3/5/8.
+
+## Note on the slot rebuild, since the naming confuses
+
+The three `ceiling_wait` states were replaced in place, not dropped: `NACE01.s01`, `s02` and `s10` now hold
+engaged states derived from slot 9 (`ceiling_move`, 5 HP, 3 larvae), verified by decoding the files. No slot in
+the set holds `ceiling_wait` any more. "Slot-9-derived slots 1/2/10" means those rebuilt files.
