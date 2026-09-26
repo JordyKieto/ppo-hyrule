@@ -137,7 +137,7 @@ class GohmaTracker(CombatTracker):
         self.last_nut_t = None
         self.seed_state = "other"
         self.ep.update(boss_hp_start=g.hp if g else 0, boss_hp_max=10, nut_stuns=0, nuts_thrown=0, boss_damage=0, boss_defeated=False, stuns=0, seed_stuns=0,
-                       seed_stuns_cashed=0, nut_stuns_cashed=0, guard_steps=0, guard_attack_steps=0, spacing_steps=0, close_attack_steps=0,
+                       seed_stuns_cashed=0, nut_stuns_cashed=0, guard_steps=0, guard_attack_steps=0, spacing_steps=0, close_attack_steps=0, far_attack_steps=0,
                        seeds_fired=0, red_eye_seeds=0, seeds_start=s.seeds, larva_kills=0, larva_damage=0, larvae_seen=0,
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
@@ -414,11 +414,13 @@ class GohmaTracker(CombatTracker):
             sling = cur.held_item == HELD_SLINGSHOT
             if gs in GOHMA_ATTACK:
                 d_now = math.dist(g.pos, cur.pos)
-                if d_now > c.g_spacing_range:
+                if c.g_spacing_range < d_now <= c.g_spacing_far:
                     ep["spacing_steps"] = ep.get("spacing_steps", 0) + 1
                     self._capped(pay, "spacing", c.g_spacing, c.g_spacing_cap)
-                else:
+                elif d_now <= c.g_spacing_range:
                     ep["close_attack_steps"] = ep.get("close_attack_steps", 0) + 1   # the failure counter
+                else:
+                    ep["far_attack_steps"] = ep.get("far_attack_steps", 0) + 1       # hiding, unpaid
             shielded = cur.bit(SF1_SHIELD)
             if locked and shielded:
                 ep["guard_steps"] = ep.get("guard_steps", 0) + 1     # diagnostic: counted whether or not paid

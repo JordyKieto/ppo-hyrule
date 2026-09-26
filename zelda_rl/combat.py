@@ -329,9 +329,16 @@ class CombatConfig:
     g_pickup_cap: float = 6.0
     g_death_penalty: float = 30.0
     g_block_range: float = 250.0
-    g_spacing: float = 0.0             # per step OUTSIDE g_spacing_range while she is in an attack state.
-    g_spacing_cap: float = 4.0         #   This is the defence the recordings actually show. Measured over her
-    g_spacing_range: float = 150.0     #   attack frames only: the WIN held a median 311 units and was inside
+    g_spacing: float = 0.0             # per step in the BAND [g_spacing_range, g_spacing_far] while she is in
+    g_spacing_cap: float = 1.5         #   an attack state. A band, not a floor: a floor paid a policy that
+    g_spacing_range: float = 150.0     #   stood off all episode doing nothing exactly as much as it paid the
+    g_spacing_far: float = 600.0       #   human win -- observed live, a smoke-run episode on slot 6 banked the
+    #   whole cap over 3,000 attack steps with zero boss damage. The band is the WIN's own distribution during
+    #   her attack frames: median 311, p10 162, p90 533. The cap is deliberately SMALL (1.5 against
+    #   boss_defeat's 60 and death's -30) because this is a nudge on positioning, not a strategy -- the signal
+    #   that stalling is bad already exists in timeout + time_penalty, worth about -13.   This is the defence
+    #   the recordings actually show. Measured over her
+    #   attack frames only: the WIN held a median 311 units and was inside
     #   150 for 8.7% of them, losing half a heart; the DEATH held a median 131 and was inside 150 for 61.8%,
     #   losing three hearts and dying -- same player, same boss. 150 separates them by 7x, which is why it is
     #   the threshold. It pairs with approach_stunned / sword_ready_stunned, which pay for closing while she is
@@ -599,7 +606,7 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # time, so paying for "locked on and shielding while she attacks" rewards standing inside the range the
     # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
     "g_guard": 0.0,
-    "g_spacing": 0.05,
+    "g_spacing": 0.02,
 }
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),
