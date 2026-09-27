@@ -338,3 +338,76 @@ Next, in order: **run the two winners together** (grid 96 + gated masked supervi
 independent and both positive; **re-score conditioning on the 57% action-sensitive subset** from the
 counterfactual set rather than on all states; and **seed-repeat the grid arms** before trusting the size of
 that number.
+
+---
+
+# Where else the change gate applies in the Zelda WM (measured, 2026-09-26)
+
+The gate took the MLP probe from +0.3893 to +0.4696. The question is which of the token WM's heads it belongs
+on. MOBA's own answer was "every delta field **except movement**", because a field that changes almost every
+tick gains nothing from a gate and the gate's BCE then crowds out the value head. So this is a measurement,
+not a blanket application.
+
+## Two of the three MOBA rules are ALREADY implemented here
+
+Worth stating before proposing anything, so nobody re-adds them:
+
+* **Per-head loss averaging.** Every head is its own entry in the `head_losses` dict and is averaged on its own
+  before the sum, so a rare head already weighs as much as a common one.
+* **Structural supervision mask.** `mrow = (x * m).sum() / msum` masks every actor head by presence, so absent
+  rows contribute nothing. That matters: **13.3% of the 9 actor slots are absent** at any moment.
+* **Discrete heads already have a soft gate.** Zero-init plus the `LOGIT_K = 6` logit residual on the
+  persistence class means argmax defaults to "no change" and the model must actively overcome a bias to predict
+  an event. That IS a gate, built in.
+
+**So the gap is exactly the REGRESSION heads.** They are zero-initialised, which makes them start at
+persistence, but nothing holds them there during training — they are trained with L1 over every frame, most of
+which are zero, so they learn to emit small wrong values everywhere. That is the failure the gate fixes.
+
+## Change rate of every predicted field
+
+| field | head kind | changes on | gate? |
+|---|---|---|---|
+| `a_vel` (actor velocity) | **regression** | **0.03%** | **GATE — tier 1** |
+| `a_yaw` (actor facing) | **regression** | **0.04%** | **GATE — tier 1** |
+| actor `present` | BCE | 0.03% | has logit residual |
+| actor hp | class | 0.06% | has logit residual |
+| `a_dcell` | class | 0.23% | has logit residual |
+| Link hp | class | 0.29% | has logit residual |
+| `a_state` | class | 0.55% | has logit residual |
+| `a_shape` | **regression** | **1.82%** | **GATE — tier 1** |
+| `l_bits` (kept sf1 flags) | BCE | 0.99% | has logit residual |
+| `a_doff` (actor offset) | **regression** | **3.55%** | **GATE — tier 1** |
+| `a_timer` | **regression** | **4.44%** | **GATE — tier 1** |
+| `l_dcell` | class | 7.45% | has logit residual |
+| `l_bg` (ground contact) | BCE | 9.16% | has logit residual |
+| `l_floor` (floor_dy) | **regression** | **10.4%** | **GATE — tier 2** |
+| `l_yaw` | **regression** | **19.8%** | **GATE — tier 2** |
+| `l_y` (Link rel_y) | **regression** | **22.0%** | **GATE — tier 2** |
+| `l_vel` / speed | regression | 28.9% | **no** — changes too often |
+| `a_rely` (actor rel_y) | regression | 34.3% | **no** |
+| `l_cam` (camera yaw) | regression | 38.9% | **no** |
+| `l_doff` (Link offset) | regression | **60.1%** | **no — this is movement, MOBA's own exclusion** |
+
+## The proposal, highest impact first
+
+**Tier 1: the five actor regression heads.** `a_vel`, `a_yaw`, `a_shape`, `a_doff`, `a_timer` — all between
+0.03% and 4.44% non-zero, so they are trained on **95–99.97% zeros** with no logit residual protecting them.
+`a_vel` and `a_yaw` are the extreme cases: a regression head fitting a target that is zero 9,997 times in
+10,000. These are where the gate has the most to recover, and they are all on the same head block so it is one
+change.
+
+**Tier 2: three Link regression heads.** `l_floor`, `l_yaw`, `l_y` at 10–22%.
+
+**Explicitly do NOT gate:** `l_doff`, `l_cam`, `l_vel`, `a_rely`. All above 28% and `l_doff` is movement itself,
+which is the field MOBA names as the exclusion. Gating it would spend a classifier on something that changes
+most steps and, per their measurement, would crowd out the head that matters.
+
+**Keep the BCE/class heads as they are.** Their logit residual is the same mechanism under another name, and
+adding a second gate on top would be two defaults fighting.
+
+Implementation shape, matching what worked in the probe: one extra logit per gated head, BCE on "this field is
+non-zero this step" at **×0.2 weight** (MOBA down-weight, and the probe used it), the value loss averaged only
+over changed elements, and in the rollout the predicted delta multiplied by `gate > 0.5` so an ungated field
+advances by exactly zero instead of by noise. The last part is what makes it matter for the autoregressive
+rollout, where 1,800 steps of small wrong deltas is how `wm_v3` ended up worse than doing nothing.
