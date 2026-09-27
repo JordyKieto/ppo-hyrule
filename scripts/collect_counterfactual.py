@@ -30,9 +30,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.combat import SF1_CUTSCENE, SF1_DEAD, read_combat_state  # noqa: E402
 from zelda_rl.env import COMBAT_ACTIONS_V5, action_name  # noqa: E402
-from zelda_rl.obs import read_state_file_v2, read_state_v2  # noqa: E402
+from zelda_rl.obs import read_state_file_v2  # noqa: E402
 from zelda_rl.policy_io import DEFAULT_SLOTS_DIR  # noqa: E402
 from zelda_rl.state_layout import link_fields  # noqa: E402
+
+# encode_state is the collector's OWN flattener (scripts/collect_transitions.py), so these pairs land in
+# exactly the 363-column layout every model here already reads. Re-deriving it would be a second copy of the
+# layout, which zelda_rl/state_layout.py exists to prevent.
+from scripts.collect_transitions import EnemyRows, encode_state  # noqa: E402
 
 MOVE_ONLY = [a for a, (d, b) in enumerate(COMBAT_ACTIONS_V5) if b == 0 and d is not None]   # 8 directions
 
@@ -58,8 +63,9 @@ def step(env, a, settle=0.0005):
     return env.observe()
 
 
-def raw(env):
-    return read_state_v2(env.ram)
+def flat(env, rows):
+    """The 363-column state row, via the collector's own encoder so the layout cannot drift."""
+    return encode_state(read_combat_state(env.ram), rows).copy()
 
 
 def main():
@@ -67,6 +73,9 @@ def main():
     p.add_argument("--pairs", type=int, default=200)
     p.add_argument("--slots", default="3,4,5,7,9")
     p.add_argument("--prefix", type=int, default=12, help="random steps replayed before the branch point")
+    p.add_argument("--lag", type=int, default=3, help="how many steps the branch action is HELD. The measured "
+                   "action/displacement alignment is 0.006 at one step and 0.24 by three, so branching one "
+                   "step apart would measure nothing (docs/WM_MOTION.md).")
     p.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     p.add_argument("--out", default="datasets/cf/pairs.npz")
     p.add_argument("--seed", type=int, default=0)
@@ -79,7 +88,6 @@ def main():
     slots = [int(s) for s in a.slots.split(",")]
     rng = np.random.default_rng(a.seed)
     env = build(0, slots, a.slots_dir, 60.0)
-    lf = link_fields(len(raw(env).flat) if hasattr(raw(env), "flat") else 363)
     S0, S1, S2, A1, A2, SL = [], [], [], [], [], []
     kept = dropped = 0
     t0 = time.time()
@@ -97,9 +105,11 @@ def main():
                 if s0.bit(SF1_DEAD) or s0.bit(SF1_CUTSCENE):
                     branch = None
                     break
-                pre_state = np.asarray(read_state_v2(env.ram), np.float32).copy()
-                step(env, aa)
-                branch.append((pre_state, np.asarray(read_state_v2(env.ram), np.float32).copy()))
+                rows = EnemyRows()
+                pre_state = flat(env, rows)
+                for _ in range(a.lag):                     # the action is applied for `lag` steps: the lag
+                    step(env, aa)                          # table says its effect is ~0 at one step
+                branch.append((pre_state, flat(env, rows)))
             if branch is None or len(branch) != 2:
                 dropped += 1
                 continue
@@ -118,7 +128,7 @@ def main():
             pass
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out, s0=np.stack(S0), s1=np.stack(S1), s2=np.stack(S2),
-                        a1=np.array(A1), a2=np.array(A2), slot=np.array(SL))
+                        a1=np.array(A1), a2=np.array(A2), slot=np.array(SL), lag=a.lag)
     print(f"wrote {out}  {kept} pairs, {dropped} dropped, {time.time()-t0:.0f}s")
     report(a.out)
 

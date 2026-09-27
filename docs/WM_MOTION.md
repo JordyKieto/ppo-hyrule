@@ -243,3 +243,98 @@ written but has not produced data yet — two bugs found so far, an env built wi
 instead of the combat 108) and a state reader returning an object rather than the flat 363-vector. It is still
 the right test to own, because it would measure action effect directly instead of inferring it from
 correlations, and the lag table above says it should branch the actions at least 3 steps apart.
+
+---
+
+# Round 2 (2026-09-26): both remaining changes work, and one was structurally impossible
+
+## Step 1 — the counterfactual set exists now
+
+`scripts/collect_counterfactual.py`, 150 pairs: load a slot, replay a fixed random prefix, record the state,
+hold move action A for 3 steps, record; reload, replay the identical prefix, hold action B, record. 0 pairs
+dropped, so the branch points reproduce exactly. Branching is at **lag 3** because the lag table above says one
+step would measure nothing.
+
+| | |
+|---|---|
+| displacement under A / B | 15.11 / 15.54 world units |
+| **separation of the two outcomes** | mean **12.13**, median 4.24 |
+| **pairs where the two actions change nothing** (<0.5u) | **43%** |
+| on the 85 pairs where the action DOES matter | separation mean **21.40**, max 57.61 |
+
+**This is the fact that explains the whole motion story.** On 43% of states the game ignores the movement
+command — animation lock, a wall, turn-in-place — so no model can be scored on action-conditioning there. On
+the other 57% the action is worth 21 units against a 15-unit mean displacement, which is a large effect.
+
+The weak average correlation (cosine 0.24) was never "the action barely matters". It was two populations
+averaged together: one where it matters a lot and one where it cannot matter at all. Any conditioning metric
+must be computed on the action-sensitive subset, and this set is how you find it.
+
+## Step 2 (reframed) — lag ≥ 2 is directionally right, and small
+
+Gain in position skill from having the real action rather than a zeroed one:
+
+| horizon | with action | action zeroed | gain |
+|---|---|---|---|
+| lag 1 | +0.3893 | +0.3971 | **−0.008** |
+| lag 3 | +0.3128 | +0.3014 | **+0.011** |
+
+The gain goes from nothing (negative, i.e. noise) to +0.011 — a real sign flip, but tiny. Consistent with step
+1: averaged over all states, 43% of which are action-insensitive, there is not much for the action to explain.
+The reframe holds — conditioning is only measurable at lag ≥ 2 — but the effect is small until the metric is
+restricted to the action-sensitive subset.
+
+## Step 3 — masked supervision WITH the change gate: the biggest win measured
+
+| arm | position skill | aggregate over 191 live dims |
+|---|---|---|
+| baseline | +0.3893 | +0.3597 |
+| masked, **no gate** | +0.2125 | −181.8 |
+| **masked + change gate** | **+0.4696** | **+0.4297** |
+
+**+0.080 position skill over baseline**, and the aggregate rises too. The gate is a per-dimension "does this
+change" logit trained with BCE at ×0.2 weight (MOBA down-weights it for exactly this reason); the value head is
+used only where the gate fires. Masked supervision without it was much worse than doing nothing, so the two
+halves are not separable — which is the lesson, and the reason my first attempt read as a refutation of a
+design that is in fact correct.
+
+## Step 4 — the grid: a win, and it was impossible to run until today
+
+**First, a hardcoded constant made this experiment unrunnable.** `TokenWM.__init__` had
+`self.cell_emb = nn.Embedding(64, 12)` for Link's absolute cell, so **any `--grid` above 64 died with
+"index out of range in self"** — silently, because the arms were in a shell loop and a crashed arm prints
+nothing. The `--grid` flag has existed all along and every value above 64 was broken. Now sized from the actual
+grid.
+
+Token WM, 60k frames, dim 128, 2 layers, hist 4, 5 epochs, seed 0 — best epoch by position skill:
+
+| grid | cell size | best skill | dcell accuracy | still improving at ep 5? |
+|---|---|---|---|---|
+| 32 (current) | 142 × 66 | −0.006 | 0.836 | no, collapses to −0.218 |
+| 64 | 71 × 33 | +0.039 | 0.735 | no, collapses to −1.073 |
+| **96** | **47 × 22** | **+0.068** | 0.718 | **yes, best epoch IS epoch 5** |
+| 128 | 36 × 17 | −0.002 | 0.618 | no, collapses to −0.603 |
+
+**96 is the best and the only stable arm**, going −0.006 → +0.068. The `dcell` accuracy falling from 0.836 to
+0.718 is the point, not a regression: at 32 the head was right 84% of the time by answering "same cell", and at
+96 it has to actually predict a cell. 128 is worse than 96, consistent with data sparsity (16,384 cells over
+60k frames is under 4 frames per cell).
+
+**Caveat, stated because it matters:** one seed, 60k frames, a 128-dim model. `AGENTS.md` §7 — one seed is not
+a measurement, and six seeds of one config once spanned 1.38x–3.43x on this project. Every arm except 96 also
+degraded badly by epoch 5, which is a small-data overfitting signature, so these are rankings at a small scale
+and not effect sizes at full scale.
+
+## Where motion stands
+
+| change | effect on position skill | status |
+|---|---|---|
+| change gate + masked supervision | **+0.080** | works, largest single win |
+| nav grid 32 → 96 | **+0.074** (token WM, small scale) | works, was structurally blocked |
+| lag ≥ 2 for conditioning metrics | +0.011 gain from the action, up from −0.008 | right reframe, small effect |
+| action geometry (sin/cos) | +0.004 | closed, no effect |
+
+Next, in order: **run the two winners together** (grid 96 + gated masked supervision) since they are
+independent and both positive; **re-score conditioning on the 57% action-sensitive subset** from the
+counterfactual set rather than on all states; and **seed-repeat the grid arms** before trusting the size of
+that number.

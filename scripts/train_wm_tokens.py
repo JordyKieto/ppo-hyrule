@@ -167,12 +167,16 @@ class TokenWM(nn.Module):
     """
 
     def __init__(self, n_actions: int, d: int = 128, heads: int = 4, n_rows: int = 16, id_vocab: int = 256,
-                 attn: str = "softmax", layers: int = 3, hist: int = 8, env_p: int = 49, hp_bins: int = 16):
+                 attn: str = "softmax", layers: int = 3, hist: int = 8, env_p: int = 49, hp_bins: int = 16,
+                 grid_n: int = 64):
         super().__init__()
         self.n_rows, self.hist, self.env_p, self.hp_bins = n_rows, hist, env_p, hp_bins
         self.id_emb, self.cat_emb, self.st_emb = nn.Embedding(id_vocab, 8), nn.Embedding(16, 4), nn.Embedding(N_STATES, 4)
         # Position as EMBEDDINGS, not floats: a cell index has no magnitude to leak into a query-key dot product.
-        self.cell_emb = nn.Embedding(64, 12)                      # Link's absolute cell, per axis
+        # Sized from the ACTUAL grid. This was hardcoded to 64, which silently made every --grid above 64
+        # crash with "index out of range in self" -- so the one motion change with a measured mechanism behind
+        # it (docs/WM_MOTION.md step 4) could not be run at all.
+        self.cell_emb = nn.Embedding(max(64, grid_n), 12)          # Link's absolute cell, per axis
         self.rcell_emb = nn.Embedding(2 * REL_CLIP + 1, 12)       # actor cell RELATIVE to Link, per axis
         # HP as a BINNED EMBEDDING, not a scaled float. Our own measured result -- damage F1 0.286 -> 0.906 --
         # says classify HP, and the output head is already a bounded delta class; the input side was the
@@ -259,7 +263,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--grid", type=int, default=32, help="nav-grid resolution (cell ~29x45 world units at 32)")
+    ap.add_argument("--grid", type=int, default=32, help="nav-grid resolution. MEASURED: at 32 the fitted cell is 142x66 world units against a 5.5-unit mean step, so 87%% of MOVING steps never leave their cell and the dcell head is nearly constant (docs/WM_MOTION.md)")
     ap.add_argument("--device", default="cpu", help="cpu | cuda")
     ap.add_argument("--rows", type=int, default=16,
                     help="actor token slots to KEEP. The state layout has 16, but measured over the v5 "
@@ -629,7 +633,7 @@ def main():
               f"aggregator {a.fleet_aggregator}")
 
     net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows, attn=a.attn, layers=a.layers,
-                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins).to(dev)
+                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     sched = None
     if a.sched == "cosine":
@@ -965,7 +969,7 @@ def main():
         nonlocal net, opt
         torch.manual_seed(a.seed)
         net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows, attn=a.attn, layers=a.layers,
-                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins).to(dev)
+                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid).to(dev)
         opt = torch.optim.Adam(net.parameters(), lr=lr)
         r = {}
         for ep in range(n_epochs):

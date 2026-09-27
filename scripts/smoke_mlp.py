@@ -88,12 +88,14 @@ def load(target: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, in
     return S, A, np.concatenate(E), int(max(int(a.max()) for a in A) + 1)
 
 
-def flatten(S, A, E):
-    """Stack per-episode arrays into (X_state, action, Y_next_state) with no episode-crossing pairs."""
-    xs = np.concatenate([s[:-1] for s in S])
-    ys = np.concatenate([s[1:] for s in S])
-    ac = np.concatenate(A)
-    return xs, ac, ys, E
+def flatten(S, A, E, lag=1):
+    """Stack per-episode arrays into (state[t], action[t], state[t+lag]) with no episode-crossing pairs."""
+    xs = np.concatenate([s[:-lag] for s in S if len(s) > lag])
+    ys = np.concatenate([s[lag:] for s in S if len(s) > lag])
+    ac = np.concatenate([a[:len(a) - lag + 1] for a in A if len(a) >= lag])
+    n = min(len(xs), len(ys), len(ac))
+    ep = np.concatenate([np.full(len(s) - lag, i, np.int32) for i, s in enumerate(S) if len(s) > lag])
+    return xs[:n], ac[:n], ys[:n], ep[:n]
 
 
 def main():
@@ -105,6 +107,14 @@ def main():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--lag", type=int, default=1,
+                   help="predict state[t+LAG] instead of state[t+1]. The measured action/displacement alignment "
+                        "is 0.006 at lag 1 and 0.24 by lag 3, so a shuffled-action control at lag 1 reads flat "
+                        "no matter what the model does (docs/WM_MOTION.md).")
+    p.add_argument("--gate", action="store_true",
+                   help="with --moved-only: also train a per-dim CHANGE GATE and use the value head only where "
+                        "the gate fires. Masked supervision WITHOUT the gate was measured much worse (+0.21 vs "
+                        "+0.39) because the model never learns to emit zero; this is the missing half.")
     p.add_argument("--act-geom", action="store_true",
                    help="append sin/cos of the action's WORLD direction to the one-hot. env.py::_stick already "
                         "converts a world direction to a stick deflection using live camera yaw, so the action "
@@ -137,7 +147,7 @@ def main():
 
     t0 = time.time()
     S, A, E, n_act = load(a.transitions, a.seed)
-    X, AC, Y, E = flatten(S, A, E)
+    X, AC, Y, E = flatten(S, A, E, a.lag)
     del S, A
     W = X.shape[1]
     print(f"  state width {W}, {n_act} actions, load {time.time()-t0:.1f}s")
@@ -179,9 +189,10 @@ def main():
 
     EX = 2 if a.act_geom else 0
     AG = torch.from_numpy(AGEOM[:n_act]) if a.act_geom else None
+    OUT = W * 2 if a.gate else W        # second half: per-dim "this dim changes" logit
     net = nn.Sequential(nn.Linear(W + n_act + EX, a.hidden), nn.GELU(),
                         nn.Linear(a.hidden, a.hidden), nn.GELU(),
-                        nn.Linear(a.hidden, W)).to(dev)
+                        nn.Linear(a.hidden, OUT)).to(dev)
     nn.init.zeros_(net[-1].weight); nn.init.zeros_(net[-1].bias)   # start AS persistence
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     nparam = sum(p.numel() for p in net.parameters())
@@ -216,7 +227,11 @@ def main():
         for st in range(0, len(vat), a.batch):
             idx = vat[st:st + a.batch]
             xb, db = batch(idx)
-            pred = net(xb) * dsd_t                      # predicted delta, real units
+            o = net(xb)
+            if a.gate:
+                pred = o[:, :W] * (o[:, W:].sigmoid() > 0.5).float() * dsd_t
+            else:
+                pred = o * dsd_t                            # predicted delta, real units
             true = db * dsd_t
             err += (pred - true).abs().sum(0)
             per += true.abs().sum(0)                    # persistence predicts zero delta
@@ -264,7 +279,19 @@ def main():
         tot, nb = 0.0, 0
         for st in range(0, len(perm) - a.batch, a.batch):
             xb, db = batch(perm[st:st + a.batch])
-            pred = net(xb)
+            raw_out = net(xb)
+            if a.gate:
+                pred, glog = raw_out[:, :W], raw_out[:, W:]
+                chg = (db.abs() > 1e-6).float()
+                gl = nn.functional.binary_cross_entropy_with_logits(glog, chg)
+                per = (pred - db).abs() if a.loss == "l1" else (pred - db) ** 2
+                vl = (per * chg).sum() / chg.sum().clamp(min=1.0)
+                # MOBA down-weights the gate's yes/no loss x0.2 because it crowds out movement
+                loss = vl + 0.2 * gl
+                tot += float(loss.detach()); nb += 1
+                opt.zero_grad(); loss.backward(); opt.step()
+                continue
+            pred = raw_out
             if a.moved_only:
                 w = (db.abs() > 1e-6).float()            # supervise a dim only where it actually changed
                 per = (pred - db).abs() if a.loss == "l1" else (pred - db) ** 2
