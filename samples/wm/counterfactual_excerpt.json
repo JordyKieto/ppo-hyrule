@@ -1,0 +1,8 @@
+{
+  "source": "datasets/cf/pairs.npz",
+  "pairs_in_source": 150,
+  "pairs_in_excerpt": 20,
+  "lag_steps": 3,
+  "layout": "s0 = state at the branch point; a1/a2 = the two move actions held `lag` steps; s1/s2 = the two real outcomes. Built by scripts/collect_counterfactual.py.",
+  "what_it_measures": "On 43% of pairs the two actions produce outcomes <0.5 world units apart -- the game ignores the command. On the other 57% they separate by a mean of 21.4 units. Any action-conditioning metric must be scored on the sensitive subset."
+}

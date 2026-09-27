@@ -1,0 +1,21 @@
+{
+  "_runtime": 12475,
+  "_step": 266,
+  "_timestamp": 1789813053.425371,
+  "authoritative_env_steps": 0,
+  "charts/real_reference_return": 55.5,
+  "combat/blocks_dodges": 3.1262135922330097,
+  "combat/damage_dealt": 0.7087378640776699,
+  "combat/death_rate": 0,
+  "combat/defeated": 0.17475728155339806,
+  "combat/hearts_lost": 0,
+  "combat/left_room_rate": 0,
+  "combat/lockons": 3.728155339805826,
+  "combat/success_rate": 0.17475728155339806,
+  "dream_transitions": 40995840,
+  "episode/length": 1544.22,
+  "episode/return": 23.92972783625126,
+  "final_return": 23.92972783625126,
+  "global_step": 40857600,
+  "perf/dream_steps_per_sec": 3131.2403272613974
+}

@@ -1,0 +1,61 @@
+{
+  "note": "Checkpoints are NOT committed (gitignored; up to 138 MB). This manifest identifies them by md5 so a file found later can be matched to a run. Provenance: PROVENANCE.md.",
+  "artifacts": [
+    {
+      "name": "rl/deku_baba_G150",
+      "path": "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt",
+      "present": true,
+      "bytes": 7419801,
+      "md5": "51cd69f624b82f12dc40ce89993420f5",
+      "description": "Deku Baba SOLVED policy, global update 150. obs v4 483d, 63 actions, GRU 256."
+    },
+    {
+      "name": "rl/gohma_v10_r13_u50",
+      "path": "checkpoints/inbox/gohma-r13_u00050.pt",
+      "present": true,
+      "bytes": 8128749,
+      "md5": "da49fba4a63ccbc6e6130626c1a72b94",
+      "description": "Gohma v10 rank 13 update 50; best of 18 ranks by late defeat rate (8.43%). The v11 starting point."
+    },
+    {
+      "name": "rl/gohma_v13_r12_u70",
+      "path": "runs/gohma_v13/v13_r12_latest.pt",
+      "present": true,
+      "bytes": 8184493,
+      "md5": "49cf19963f4f0cedd7be575357f1f203",
+      "description": "BEST Gohma policy to date: v13 rank 12 update 70, 7.4% defeat, 0.64% at full HP. Optimizer state intact."
+    },
+    {
+      "name": "wm/token_v2_ck0080",
+      "path": "runs/wm_v2/ck_0080.pt",
+      "present": true,
+      "bytes": 84319348,
+      "md5": "16419e8d337dae044a7b3b9811535faf",
+      "description": "Token WM, teacher-forced. Best one-step skill +0.188."
+    },
+    {
+      "name": "wm/token_v3_ck0085",
+      "path": "runs/wm_v3/ck_0085.pt",
+      "present": true,
+      "bytes": 84364980,
+      "md5": "5ef096a872e3a1e42218d57091cabb0f",
+      "description": "Token WM after autoregressive fine-tune; one-step skill went negative."
+    },
+    {
+      "name": "wm/jepa_v2_ck0045",
+      "path": "runs/jepa_v2/ck_0045.pt",
+      "present": true,
+      "bytes": 137650436,
+      "md5": "cf2373f7535d3c96b35f37c89c0eef67",
+      "description": "Latent JEPA stage 1, teacher-forced."
+    },
+    {
+      "name": "wm/jepa_v3_ck0070",
+      "path": "runs/jepa_v3/ck_0070.pt",
+      "present": true,
+      "bytes": 138565124,
+      "md5": "5023082962201f4e1d214fb63c9770b1",
+      "description": "Latent JEPA stage 2, autoregressive."
+    }
+  ]
+}
