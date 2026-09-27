@@ -139,3 +139,107 @@ animation state, not of timestep), and do not extend the rollout horizon until o
 `../puffertank/docs/moba/EXPERIMENTS.md` (the shuffled-action control, the walking-under-the-gate loss-balance
 result), `../puffertank/mobawm/wm/model.py` (action embedding added to the entity token; per-head distance and
 team attention bias).
+
+---
+
+# Results (2026-09-26). Two of my four proposals are wrong, and the fourth is the real problem.
+
+All measured locally in minutes, in `scripts/smoke_mlp.py` (1.5M transitions, L1, 5 epochs, ~70 s an arm) and
+in direct data analysis. Baseline to beat: **position skill +0.3893**.
+
+## Step 2 — action geometry: DISPROVED
+
+| arm | position skill |
+|---|---|
+| one-hot action (baseline) | +0.3893 |
+| + sin/cos of the action's world direction | +0.3937 |
+| + geometry, **action zeroed** (the control) | **+0.3971** |
+
+Feeding the geometry changed nothing, and the arm with *no action at all* scored highest. The encoding was
+never the problem: the model does not use the action, so how the action is written down is irrelevant.
+
+### Why — and it is not a model failure
+
+The action's direction barely predicts displacement **in the data**. Cosine between the commanded world
+direction and the actual displacement direction, by lag:
+
+| filter | lag 1 | lag 2 | lag 3 | lag 5 |
+|---|---|---|---|---|
+| all actions | **0.006** | 0.097 | 0.124 | 0.135 |
+| move-only actions (no button) | 0.044 | 0.111 | 0.205 | 0.234 |
+| move-only, from a standstill | 0.032 | 0.126 | 0.233 | 0.263 |
+| move-only, no sword swing | 0.060 | 0.142 | 0.241 | **0.260** |
+
+**At one step the action carries almost no directional information (0.006), and it never gets strong** — the
+best conditional alignment is 0.26, from a clean move command with no swing. Momentum, turn-in-place animation,
+animation lock and collision dominate.
+
+So a one-step objective cannot be action-conditioned on position: the relationship is not there to learn.
+`AGENTS.md` §1 says a number is not a result until its controls are run; this is the control that should have
+been run before proposing step 2 at all.
+
+**A correction to my own first attempt at this test.** It reported cosine ≈ 0.000 at *every* lag, which I nearly
+wrote up as "no relationship exists". That was my bug: I built the direction vector as `(sin θ, cos θ)`, which
+is Link's YAW convention, where the action angles need `(cos θ, sin θ)`. A 90° rotation reads as exactly zero
+correlation. Six conventions were then tested against the data and only `(cos, sin)` shows signal.
+
+## Step 3 — moved-only supervision and non-zero-delta scaling: WORSE
+
+| arm | position skill | aggregate over 191 live dims |
+|---|---|---|
+| baseline | +0.3893 | +0.3597 |
+| masked to moved frames + non-zero-delta scale | **+0.2125** | **−181.8** |
+
+Nearly halves position skill and destroys everything else. The reason is that **MOBA pairs masked supervision
+with a change GATE** — a "does this field change this tick" classifier, with the value head used only where the
+gate says yes. I implemented the mask without the gate, so the model was never trained to emit zero on a
+no-change frame, and the metric (error over all frames, 44% of which do not move) punishes that enormously.
+
+MOBA's design is not disproved; my implementation of it was half a design. Their own notes say the gate's
+yes/no losses then crowd out movement and need down-weighting ×0.2, which is a second knob this experiment
+never reached.
+
+## Step 4 — the grid: this is the real problem
+
+Measured on 400,813 transitions, no training. Per-step displacement: mean **5.50** world units, median 2.28,
+zero on 44.1% of steps; among moving steps mean 9.82.
+
+| grid | cell size (x, z) | same-cell, all steps | **same-cell, MOVING steps** | quantisation error |
+|---|---|---|---|---|
+| **32 (current)** | **142.3 × 65.9** | 92.6% | **86.9%** | **44.4** |
+| 48 | 94.8 × 43.9 | 89.3% | 80.8% | 30.0 |
+| 64 | 71.1 × 32.9 | 86.0% | 74.9% | 22.6 |
+| 96 | 47.4 × 22.0 | 80.3% | 64.8% | 15.0 |
+| 128 | 35.6 × 16.5 | 75.6% | 56.4% | 10.7 |
+
+**The 32×32 cell is 142 units wide against a 5.5-unit mean step.** The `dcell` head — a 25-way class whose
+whole purpose was to carry the multi-modal "where in the room" decision — answers "same cell" on **87% of
+moving steps**, so it is nearly a constant, and every bit of real motion signal sits in `doff`, the unscaled
+offset regression that step 3 was supposed to fix. Worse, quantisation error is **44 units**: even a perfect
+cell prediction is 8× the mean step away from the truth.
+
+**This also corrects the estimate in this document.** I wrote that a 32×32 grid gives a ~29 × 57 unit cell. The
+grid is fitted to the data's robust percentiles (`NavGrid.fit`), and the real extent is much wider on x, so the
+cell is 142 × 65.9. The conclusion is stronger than the guess was, but the guess was wrong and was arithmetic I
+should have run rather than estimated (§3).
+
+## Where this leaves motion
+
+The ordering in my proposal was wrong. Corrected, by measured effect:
+
+1. **The grid is too coarse by an order of magnitude.** Test 96 or 128 against 32 on the token WM. This is the
+   one change with a measured mechanism behind it.
+2. **Any action-conditioning test must be at lag ≥ 2 and conditioned on animation state.** At lag 1 there is
+   nothing to condition on, so the shuffled-action control will always read flat and no model change can pass
+   it. This reframes the autoregressive work: multi-step training is not an optional refinement for motion, it
+   is the only regime where the action is learnable at all.
+3. **Masked supervision needs the change gate, or not at all.** Half of it is worse than none.
+4. Action geometry is not worth pursuing. Closed.
+
+## Not finished
+
+`scripts/collect_counterfactual.py` (proposal step 1, the ground-truth "same state, two actions" set) is
+written but has not produced data yet — two bugs found so far, an env built with `task="goal"` (27 actions
+instead of the combat 108) and a state reader returning an object rather than the flat 363-vector. It is still
+the right test to own, because it would measure action effect directly instead of inferring it from
+correlations, and the lag table above says it should branch the actions at least 3 steps apart.

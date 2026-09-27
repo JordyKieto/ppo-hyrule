@@ -28,6 +28,8 @@ import sys
 import time
 from pathlib import Path
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -103,6 +105,15 @@ def main():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--act-geom", action="store_true",
+                   help="append sin/cos of the action's WORLD direction to the one-hot. env.py::_stick already "
+                        "converts a world direction to a stick deflection using live camera yaw, so the action "
+                        "carries a clean world vector; the one-hot throws that geometry away and makes the "
+                        "model memorise 63 rows instead. This is proposal step 2 from docs/WM_MOTION.md.")
+    p.add_argument("--moved-only", action="store_true",
+                   help="supervise each dimension only on frames where it CHANGED, and scale its target by the "
+                        "std of its NON-ZERO deltas (proposal step 3, the MOBA target-scaling rule). Most "
+                        "frames do not move, so an unmasked loss is dominated by 'predict nothing'.")
     p.add_argument("--no-action", action="store_true",
                    help="zero the action one-hot. The control for 'did it learn DYNAMICS or just "
                         "momentum?' -- state[t] alone already implies most of state[t+1] through velocity, "
@@ -115,6 +126,12 @@ def main():
     a = p.parse_args()
 
     torch.manual_seed(a.seed)
+    # action -> unit world vector. DIRECTIONS[0] is None (neutral) -> (0,0); the rest are world angles.
+    from zelda_rl.env import COMBAT_ACTIONS, DIRECTIONS
+    AGEOM = np.zeros((len(COMBAT_ACTIONS), 2), np.float32)
+    for _i, (_d, _b) in enumerate(COMBAT_ACTIONS):
+        if _d is not None:
+            AGEOM[_i] = (math.sin(_d), math.cos(_d))
     dev = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"device {dev}")
 
@@ -142,6 +159,15 @@ def main():
     D = Y; D -= X                                # the thing the head predicts, built in place over Y
     del Y
     dmu, dsd = D[tr].mean(0), D[tr].std(0)
+    if a.moved_only:
+        # MOBA's rule: the scale is the std of the NON-ZERO deltas, not of all deltas. With 99% zeros the
+        # all-frames std is tiny and the loss is dominated by frames whose right answer is "nothing".
+        nz = np.abs(D[tr]) > 1e-6
+        cnt = nz.sum(0)
+        rms = np.sqrt((D[tr].astype(np.float64) ** 2 * nz).sum(0) / np.maximum(cnt, 1))
+        dsd = np.where(cnt > 32, rms, dsd).astype(np.float32)
+        print(f"  non-zero-delta scaling: {int((cnt > 32).sum())} of {D.shape[1]} dims rescaled; "
+              f"median change rate {np.median(cnt / max(len(tr), 1)) * 100:.2f}%")
     dsd = np.maximum(dsd, 1e-6)
 
     # in place, and torch.from_numpy shares the buffer: three float32 copies of 363 dims x millions of
@@ -151,21 +177,28 @@ def main():
     Xt, Dt, At = torch.from_numpy(X), torch.from_numpy(D), torch.from_numpy(AC)
     trt, vat = torch.from_numpy(tr), torch.from_numpy(va)
 
-    net = nn.Sequential(nn.Linear(W + n_act, a.hidden), nn.GELU(),
+    EX = 2 if a.act_geom else 0
+    AG = torch.from_numpy(AGEOM[:n_act]) if a.act_geom else None
+    net = nn.Sequential(nn.Linear(W + n_act + EX, a.hidden), nn.GELU(),
                         nn.Linear(a.hidden, a.hidden), nn.GELU(),
                         nn.Linear(a.hidden, W)).to(dev)
     nn.init.zeros_(net[-1].weight); nn.init.zeros_(net[-1].bias)   # start AS persistence
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     nparam = sum(p.numel() for p in net.parameters())
-    print(f"  MLP {W}+{n_act} -> {a.hidden} -> {a.hidden} -> {W}   {nparam/1e6:.2f}M params, "
-          f"{a.loss} loss, lr {a.lr}\n")
+    print(f"  MLP {W}+{n_act}{'+2geom' if a.act_geom else ''} -> {a.hidden} -> {a.hidden} -> {W}   "
+          f"{nparam/1e6:.2f}M params, {a.loss} loss, lr {a.lr}"
+          f"{', moved-only supervision' if a.moved_only else ''}\n")
 
     def batch(idx):
         x = Xt[idx].to(dev)
         oh = torch.zeros(len(idx), n_act, device=dev)
         if not a.no_action:
             oh.scatter_(1, At[idx].to(dev).unsqueeze(1), 1.0)
-        return torch.cat([x, oh], 1), Dt[idx].to(dev)
+        parts = [x, oh]
+        if AG is not None:
+            g = AG[At[idx]].to(dev)
+            parts.append(torch.zeros_like(g) if a.no_action else g)
+        return torch.cat(parts, 1), Dt[idx].to(dev)
 
     groups = field_groups(W)
     dsd_t = torch.from_numpy(dsd).to(dev)
@@ -232,8 +265,13 @@ def main():
         for st in range(0, len(perm) - a.batch, a.batch):
             xb, db = batch(perm[st:st + a.batch])
             pred = net(xb)
-            loss = (nn.functional.mse_loss(pred, db) if a.loss == "mse"
-                    else nn.functional.l1_loss(pred, db))
+            if a.moved_only:
+                w = (db.abs() > 1e-6).float()            # supervise a dim only where it actually changed
+                per = (pred - db).abs() if a.loss == "l1" else (pred - db) ** 2
+                loss = (per * w).sum() / w.sum().clamp(min=1.0)
+            else:
+                loss = (nn.functional.mse_loss(pred, db) if a.loss == "mse"
+                        else nn.functional.l1_loss(pred, db))
             opt.zero_grad(); loss.backward(); opt.step()
             tot += float(loss.detach()); nb += 1
         e, pr, co, pe_, pp_ = evaluate()
