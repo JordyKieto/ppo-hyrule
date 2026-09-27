@@ -183,30 +183,143 @@ pods, 8 envs each, $10.32/hr, aggregator rank 4, one update = 8 × 3,000 = 24,00
 
 ## 4. WM track
 
-**Result so far: negative, and the negative is the contribution.** Six latent architectures lose to the
-identity (`docs/LATENT_WORLD_MODEL.md`); the token model is positive to about 5 steps and worse than
-doing nothing beyond ~100 (`docs/WM_EXPERIMENT_REGIME.md`).
+**Result so far: negative, and the negative is the contribution.** This track is older than the RL track and
+ran in four distinct phases, each with its own architecture family, its own dataset scale and its own reason for
+being abandoned. The phases are what a paper needs; the individual arms are in the docs.
 
-| Group | What | Exported | Class |
+### 4.0 Phase table
+
+| Phase | Dates | Architecture family | Dataset | Verdict | Doc |
+|---|---|---|---|---|---|
+| **P1 latent** | to 2026-09-19 | frozen/joint BC encoder + latent transition (6 configs, latent swept 32→512) | 203,424 transitions, 398 episodes, four v3 collections | every config **loses to the identity**, best −1.14 | `docs/LATENT_WORLD_MODEL.md` (§1–30, 1,554 lines) |
+| **P2 causal / OOCDM** | 2026-09-19/20 | object-oriented causal dynamics (Yu et al., ICML 2024) | same 203k | **the paper's own method was never run**; what trained was its baseline | `docs/CAUSAL_WORLD_MODEL.md`, `docs/CAUSAL_DEBRIF.md` |
+| **P3 token, fleet scale** | 2026-09-22 | entity tokens + attention, state in / state out | **20,545,657** transitions, 39 pods, FedAvg on 32 shards | **val loss fell 1.8× while rollout skill collapsed +0.0026 → −0.41** | `docs/TOKEN_WORLD_MODEL.md` |
+| **P4 token + JEPA, single H100** | 2026-09-22/23 | same tokens, 3 entity classes, 8-frame history, dual frames; and a latent JEPA beside it | **91,522,473** transitions (packed v5, resident in 80 GB VRAM) | positive to H5, **−2.44 at H1800** | `docs/WM_EXPERIMENT_REGIME.md` |
+| **P5 motion post-mortem** | 2026-09-26/27 | diagnosis, not a new model | 1.5–2 M subsets + 150 counterfactual pairs | motion is **not action-conditioned**; 43% of states cannot be | `docs/WM_MOTION.md` |
+
+### 4.1 P1 — the six latent configurations that lose to the identity (M)
+
+Skill is `1 − model_error / identity_error`; the identity predicts no change. **Negative means worse than
+predicting nothing.** `scripts/train_joint.py`, `docs/LATENT_WORLD_MODEL.md` §2:
+
+| configuration | skill |
+|---|---|
+| frozen BC latent, MSE, no residual, stride 5 | −7.24 |
+| frozen BC latent, MSE, residual, stride 1 | −1.73 |
+| unfrozen, EMA target + stop-gradient, L1 on normalised targets, 2-step rollout | −1.78 |
+| joint decode+predict, no BC, lr 1e-4 | −1.37 |
+| joint, with exit data (`joint_v3`) | −1.14 |
+| three further architecture changes (§29) | all negative |
+
+Swept and recorded: latent width 32→512 (decode saturates at 128, predictability degrades monotonically with
+width), BC training length 2→300 epochs. **A**: the selection metric went degenerate — a zero-init residual
+predictor *is* the identity, so skill = 0 at epoch 0 beat every learned value (§462).
+
+**The most expensive single lesson on this track (M, `docs/LATENT_WORLD_MODEL.md` §1, and AGENTS.md §1):** a
+competent PPO policy's `proj` latent scored skill **+0.742** as a predictive surface and was nearly adopted as
+the encoder. Controls destroyed it: random untrained weights of the same architecture **+0.617**, minus the
+control echo **+0.240**, minus velocity **+0.053**, minus `time_left` and the goal block **−0.012**. The whole
+number was artefacts.
+
+### 4.2 P2 — the causal phase, and why it is not evidence for OOCDM (M/A)
+
+Stage 0 (schema + census) and Stage 1 (per-field model at the full graph) were built as planned. Then six
+unrequested experiments added a change gate, per-field `pos_weight` oversampling, binned direction+magnitude
+heads and firing-threshold calibration — **none of which appear in the paper**, and all four of which came from
+the *failed* latent line OOCDM was adopted to escape. Meanwhile the paper's actual contribution never ran: no
+masking, no CMI, no causal discovery, no `Ĝ` vs `G₁` vs empty-graph comparison, no shuffled-class control.
+
+**So P2 is evidence about OOCDM's baseline, not about OOCDM.** It is the origin of `AGENTS.md` §13. Recorded in
+full in `docs/CAUSAL_DEBRIF.md`; deviations are listed in the header of `zelda_rl/oocdm.py`.
+
+### 4.3 P3 — fleet scale, and the anti-correlation result (M)
+
+20,545,657 transitions collected on 39 RunPod pods with the `badplay` mix (61% success, 5% death, 5% room-exit,
+28% timeout), then data-parallel FedAvg on the 32 pods that had a shard, `lr=1e-5`, batch 512, averaged every
+epoch.
+
+| Group | What | Exported |
+|---|---|---|
+| `v4-collect-wm` | the collection + first WM training | `results/ut6gdkgb/` (57 ranks) |
+| `v4-collect-wm100` | **the 100-epoch run: val loss fell 1.8× while rollout skill went +0.0026 → −0.41** | `results/c3zurq8g/` (32 ranks) |
+
+That single pair of curves is the strongest evidence on this track for **W2 (loss is not the metric)** and is
+why `AGENTS.md` §8 exists. Local copies of the metric histories: `runs/wm5_synced/`, `runs/wm100_synced/`.
+
+### 4.4 P4 — 91.5 M transitions on one H100 (M)
+
+Dataset packed once to 579 B/frame (49.4 GiB, 91,626,189 frames) and held **resident in VRAM** — 49.7 GiB of
+79.2, peak 52.0 with training. Packed vs in-memory paths verified **bit-identical**. LR 3e-5 chosen by a sweep
+in which loss decreased monotonically across the whole range while rollout skill peaked in the middle — the
+cleanest loss/task anti-correlation in the project.
+
+| Group | Runs | Exported |
+|---|---|---|
+| `v5-h100` | `wm_v2`/`wm_v3` token WM and `jepa_v2`/`jepa_v3` | `results/gymco2ix/` |
+| (ungrouped) | the LR sweep and one-off arms | `results/di0qmlz3/` |
+
+**The two-stage regime is the finding:** teacher-forced pretrain, then an autoregressive fine-tune over a fixed
+depth mixture (60% of batches at H=1 but only ~3% of the compute; 0.15% at H=1800 is ~15% of it), step decay as
+a half-life, drift-correcting targets, truncated BPTT with backward per window.
+
+| H | stage 1 | stage 2 mean (28 epochs) | epochs negative |
 |---|---|---|---|
-| `v4-collect-wm` | 20.5 M-transition fleet collection + FedAvg WM training | `results/ut6gdkgb/` (57 ranks) | M |
-| `v4-collect-wm100` | the 100-epoch run where **val loss fell 1.8× while rollout skill collapsed +0.0026 → −0.41** | `results/c3zurq8g/` (32 ranks) | M |
-| `v5-h100` | the 91.5 M single-H100 runs: `wm_v2`/`wm_v3` token WM and `jepa_v2`/`jepa_v3` | `results/gymco2ix/` | M |
-| (ungrouped) | LR sweep and one-off arms | `results/di0qmlz3/` | M |
+| 1 | +0.370 | **+0.333** | 0/28 |
+| 2 | **−2.63** | **+0.251** | 0/28 |
+| 5 | **−2.65** | **+0.091** | 0/28 |
+| 10 | −1.29 | −0.002 | 16/28 |
+| 20 | −0.83 | −0.055 | 25/28 |
+| 100 / 400 / 1800 | — | **−0.289 / −1.753 / −2.442** (one eval, ep 60) | 1/1 |
 
-**Checkpoints:**
+**Read the mean column, not the best.** A mid-run report of epoch 56 as "all positive through H20" was wrong:
+H20 was positive in 3 epochs of 28.
+
+Architecture, shared by both models via `zelda_rl/wm_context.py` so they cannot drift: three entity classes
+(Link / actor / **static environment**, the last keys-values-only — 49 env tokens against ≤10 entity tokens),
+8-frame history summarised locally per entity into one token before global attention, dual rotation frames
+(camera for movement, Link-facing for combat), position only as nav-grid cell **embeddings**, HP classified and
+input-binned, zero-init heads + logit residuals so skill starts at exactly 0.000.
+
+**Utilisation, corrected (A):** I claimed autoregressive rollout caps GPU at ~27%. True of the thin model; with
+3 blocks, 8-frame history and 49 env keys the token WM held **96%** for a whole run. The JEPA sat at **33%** and
+that gap was never explained.
+
+### 4.5 P5 — the motion post-mortem (M), and the instrument errors it exposed
+
+| Finding | Number | Class |
+|---|---|---|
+| Position is **not action-conditioned** at one step | action ablation +0.002 (+0.4143 vs +0.4127 zeroed) | M |
+| Action/displacement cosine by lag | 0.006 (lag 1) → 0.135 (lag 5); 0.26 conditioned on a clean move | M |
+| **43% of states are action-INSENSITIVE** | 150 counterfactual pairs; the other 57% separate by a mean 21.4 world units | M |
+| A 1.35 M-param MLP matches both token models at one step | +0.393 vs JEPA +0.379 / token +0.188 | M |
+| **L1 vs MSE**, nothing else changed | aggregate skill **−0.379 → +0.392** | M |
+| Change gate on sparse regression heads | `a_yaw` −3.71 → **+0.00**, 3 others likewise, at full scale | M |
+| Motion loss ×10 (MOBA's ego-motion fix) | `l_doff` **−0.193 → −0.079** — the only thing that has moved motion | U (3 epochs, 1 seed) |
+
+**Three conclusions on this track were artefacts of the instrument, not the model, and all three are recorded
+with their retraction in `docs/WM_MOTION.md`:**
+
+1. Scoring a change gate on **position skill** when the gate deliberately excludes position.
+2. Measuring the nav grid on a **re-fit** rather than the grid stored in the checkpoint — published 142×66, the
+   real cell is **28.8 × 57.1**, and the original estimate had been right.
+3. A "gate below 4% change rate" threshold rule derived from arms using the **wrong gate normalisation**
+   (changed-only instead of MOBA's `--gate-value-norm all`). Withdrawn.
+
+### 4.6 WM checkpoints
 
 | File | md5 | Bytes | What | Class |
 |---|---|---|---|---|
-| `runs/wm_v2/ck_0080.pt` | `16419e8d337d` | 84,319,348 | token WM, teacher-forced. **Best 1-step skill +0.188** | M |
-| `runs/wm_v3/ck_0085.pt` | `5ef096a872e3` | 84,364,980 | token WM after autoregressive fine-tune. 1-step skill went **negative** | M |
-| `runs/jepa_v2/ck_0045.pt` | `cf2373f7535d` | 137,650,436 | latent JEPA, teacher-forced stage 1 | M |
-| `runs/jepa_v3/ck_0070.pt` | `502308296220` | 138,565,124 | JEPA stage 2, AR. H1 +0.333 mean, H1800 −2.44 | M |
+| `runs/wm_v2/ck_0080.pt` | `16419e8d337d` | 84,319,348 | token WM, teacher-forced. **Best 1-step skill +0.188** — prefer over v3 | M |
+| `runs/wm_v3/ck_0085.pt` | `5ef096a872e3` | 84,364,980 | token WM after AR fine-tune; 1-step skill went **negative** (~−0.13) | M |
+| `runs/jepa_v2/ck_0045.pt` | `cf2373f7535d` | 137,650,436 | JEPA stage 1, the resume point for any stage-2 rerun | M |
+| `runs/jepa_v3/ck_0070.pt` | `502308296220` | 138,565,124 | JEPA stage 2. H1 +0.333 mean, H1800 −2.44 | M |
 
-Grid: every WM checkpoint uses n=32 with lo `[-389.96, -911.47]`, hi `[531.36, 917.12]` → a **28.8 × 57.1**
-world-unit cell (stored in `ck["grid"]`; read it, do not re-fit — see the retraction in `docs/WM_MOTION.md`).
+Every WM checkpoint uses nav grid n=32 with lo `[-389.96, -911.47]`, hi `[531.36, 917.12]` → a **28.8 × 57.1**
+world-unit cell, stored in `ck["grid"]`. **Read it; do not re-fit** (see 4.5).
 
----
+**Inspecting any of them:** `scripts/wm_replay.py --ckpt <ck> --html out.html --open` rolls the model
+autoregressively over a real episode and writes a self-contained viewer (`docs/WM_VIEWER.md`). This is the only
+instrument that shows the failure directly — a dreamed Link 429 world units adrift.
 
 ## 5. Open items — the U list
 

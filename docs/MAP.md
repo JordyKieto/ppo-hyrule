@@ -20,6 +20,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 | touch the encoder/decoder | `zelda_rl/bc.py` docstring, `LATENT_WORLD_MODEL.md` §26–§30 | control echo, unified decoder, reward-only spec |
 | a causal / object-centric model | `CAUSAL_WORLD_MODEL.md`, `CAUSAL_DEBRIF.md` | 1221 lines incl. an OOCDM attempt and why it went wrong |
 | report results | `FINDINGS.md`, `FIELD_SCORECARD.md`, `BENCHMARK.md` | the numbers that are already established |
+| **record a result you just produced** | `AGENTS.md` §27, then `PROVENANCE.md` | provenance is written AS IT HAPPENS or it is lost; reference template is `../neural-simulators/PROVENANCE.md` |
 | look at what a world model actually predicts | `WM_VIEWER.md` | `scripts/wm_replay.py --html out.html --open`: recorded episode beside the model's autoregressive dream, click any entity for every field |
 | **the Gohma task (current focus)** | `GOHMA_FOCUS.md` first, then `GOHMA_TASK.md` | FOCUS has the decision, the engaged-slots-only start set, the measured red-eye window and the next steps; TASK has the RAM signals, reward and run history |
 

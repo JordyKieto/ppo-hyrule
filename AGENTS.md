@@ -370,3 +370,61 @@ The rule:
 
 If a change is genuinely required before the job can produce a valid result, say precisely that, name the cost
 of each option, and stop talking until answered.
+
+## 27. Every result is provenanced AS IT HAPPENS, or it is lost
+
+This repository is private research; the papers will be written elsewhere, from **`PROVENANCE.md` alone**. The
+failure mode is not losing the numbers — it is keeping the numbers and losing what produced them, so a claim
+cannot be defended months later. That already happened on an earlier project, which is why the reference
+template exists.
+
+**The reference template is `../neural-simulators/PROVENANCE.md`.** Read it before adding a section here. Its
+shape, which this repo now follows:
+
+- **Evidence classes on every row.** **M** measured with a recoverable artefact · **Q** qualitative (a watched
+  episode, a screenshot) · **I** inferred · **A** author-confirmed · **U** unverified. A **U** row is a promise,
+  not a result, and `PROVENANCE.md` §5 is the list of them.
+- **W&B is exported, never linked.** `scripts/export_wandb.py --history` writes
+  `results/<run_id>/{run.json,config.json,summary.json,history.csv}` for every group, and `run.json` records
+  **all 20 rank run-ids** so a fleet is recoverable and not just its aggregator. A claim cites the directory.
+- **Artefacts are identified by md5**, not by filename: `scripts/make_samples.py` writes
+  `artifacts/MANIFEST.json`. Checkpoints stay gitignored; the manifest is what lets a stray `.pt` be matched to
+  a run later.
+- **`samples/`** holds committed excerpts *with their field names*, so the state layout is legible without the
+  loader.
+- **`paper/CLAIMS.md`** is one row per claim a paper could make, with its class and its artefact. Fill the row
+  when the measurement happens, not when the paper is written.
+
+### What to write down at the moment it happens, because it is unrecoverable later
+
+1. **The resume lineage.** Not "we trained Gohma" — *which* checkpoint each version started from, per rank, and
+   what was widened. Thirteen Gohma attempts across three sessions were nearly guesswork.
+2. **Wall clock and cost**, from W&B timestamps plus the fleet kill log, while the pods still exist.
+3. **Step-axis discontinuities.** `global_step` restarts at 0 on a resumed fleet run; without that written down
+   the curve is misread. (`deku-combat-gru-v2b`: wandb step *S* ≈ global update 30 + S/14,400.)
+4. **Why a version exists.** Each numbered attempt is a stop, a review and a deliberate change. Record the
+   change AND the result, including the ones that failed — `gohma-v1`'s "held C never fires" is worth more than
+   its reward curve.
+5. **What the number is NOT.** "10/10 slots" was one watched episode per slot: **Q**, not a rate. Say so in the
+   same breath, or someone will cite it as one.
+6. **Retractions stay in the file.** Three conclusions this project published were artefacts of the instrument
+   rather than the model (scoring a gate on a metric the gate excludes; measuring a grid by re-fitting instead
+   of reading `ck["grid"]`; a threshold rule derived from a normalisation bug). Each is recorded WITH its
+   retraction, because the correction is the reusable part.
+
+### Tracks are provenanced separately
+
+`PROVENANCE.md` has an **RL** track and a **WM** track. They share a game, a RAM reader and
+`zelda_rl/state_layout.py`, and nothing else. **A claim about one is not evidence about the other**, and a
+single "Zelda results" section would invite exactly that error.
+
+### The check
+
+Before ending any session that produced a number: does `PROVENANCE.md` let someone else re-derive it without
+asking you, and does `paper/CLAIMS.md` say what class it is? If not, the session is not finished. Regenerate the
+inputs with:
+
+```sh
+.venv/bin/python scripts/export_wandb.py --history    # results/<run_id>/ for every W&B group
+.venv/bin/python scripts/make_samples.py             # samples/ + artifacts/MANIFEST.json
+```
