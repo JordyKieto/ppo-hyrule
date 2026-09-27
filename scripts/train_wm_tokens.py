@@ -74,6 +74,20 @@ AHPD_K = 2                        # a Baba has 2 HP, so +-2 covers it -> 5 class
 AHPD_N = 2 * AHPD_K + 1
 # Delta-cell window: 5x5 cells, so a step may move at most 2 cells on either axis (at n=32 that is ~58 x 89
 # world units, far beyond the 13-unit moving step). Index 12 is (0,0) = SAME CELL, the persistence class.
+# CHANGE GATES. Only the REGRESSION heads get one: the discrete heads already default to "no change" through
+# the LOGIT_K persistence residual, and a second gate would be two defaults fighting. Movement is excluded --
+# l_doff changes on 60.1% of steps, which is MOBA's own named exclusion, and l_cam / l_vel / a_rely are all
+# above 28%. These eight are the sparse ones (a_vel 0.03%, a_yaw 0.04%, a_shape 1.82%, a_doff 3.55%,
+# a_timer 4.44%, l_floor 10.4%, l_yaw 19.8%, l_y 22.0%); see docs/WM_MOTION.md for the full table.
+# MEASURED SET, corrected. The threshold is a change rate around 4%, not MOBA's coarser "everything except
+# movement": gating a field that changes 14-33% of steps makes it WORSE, because the gate misfires often and
+# the value head -- trained only on changed frames -- emits a large delta on each misfire. Measured on the
+# identical per-field eval, no-gate -> gate: a_yaw -6.05 -> +0.00, a_shape -1.69 -> +0.00, a_timer -0.40 ->
+# +0.01, a_doff -0.22 -> -0.02 (all <=3.7% change), against l_y -0.09 -> -1.01 (23%), l_floor -0.02 -> -0.96
+# (14.5%) and a_vel +0.17 -> +0.14 (33%, already fine without one).
+GATE_L = ("l_yaw",)                                          # 19.9%: marginal (-0.011 -> +0.004), kept
+GATE_A = ("a_doff", "a_yaw", "a_shape", "a_timer")           # 3.7 / 0.02 / 1.7 / 3.7 %
+GATE_W = 0.2          # BCE weight: MOBA down-weights it x0.2 because the yes/no loss crowds out the value head
 DW, DC = 5, 25
 CENTRE = (DW // 2) * DW + DW // 2      # LOGIT_K: how hard the persistence prior is asserted on discrete heads
 
@@ -168,7 +182,7 @@ class TokenWM(nn.Module):
 
     def __init__(self, n_actions: int, d: int = 128, heads: int = 4, n_rows: int = 16, id_vocab: int = 256,
                  attn: str = "softmax", layers: int = 3, hist: int = 8, env_p: int = 49, hp_bins: int = 16,
-                 grid_n: int = 64):
+                 grid_n: int = 64, gate: bool = False):
         super().__init__()
         self.n_rows, self.hist, self.env_p, self.hp_bins = n_rows, hist, env_p, hp_bins
         self.id_emb, self.cat_emb, self.st_emb = nn.Embedding(id_vocab, 8), nn.Embedding(16, 4), nn.Embedding(N_STATES, 4)
@@ -203,9 +217,10 @@ class TokenWM(nn.Module):
             "ff": nn.Sequential(nn.Linear(d, 2 * d), nn.ReLU(), nn.Linear(2 * d, d)),
         }) for _ in range(layers)])
         self.act_emb = nn.Sequential(nn.Linear(n_actions, d), nn.ReLU())    # action: QUERY-SIDE ONLY
-        self.link_head = nn.Linear(2 * d, DC + 2 + 1 + 2 + HPD_N + len(SF1_KEEP) + 2
+        self.n_gl, self.n_ga = (len(GATE_L), len(GATE_A)) if gate else (0, 0)
+        self.link_head = nn.Linear(2 * d, self.n_gl + DC + 2 + 1 + 2 + HPD_N + len(SF1_KEEP) + 2
                                    + 3 + 2 + 1 + len(BG_BITS))
-        self.actor_head = nn.Linear(2 * d, DC + 2 + AHPD_N + 1 + N_STATES + 1 + 2 + 2 + 1 + 3)
+        self.actor_head = nn.Linear(2 * d, self.n_ga + DC + 2 + AHPD_N + 1 + N_STATES + 1 + 2 + 2 + 1 + 3)
         for h in (self.link_head, self.actor_head):
             nn.init.zeros_(h.weight)
             nn.init.zeros_(h.bias)                                          # PERSISTENCE at step 0
@@ -263,6 +278,11 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--gate", action="store_true",
+                    help="per-head CHANGE GATE on the sparse REGRESSION heads (GATE_L / GATE_A). The value "
+                         "head is supervised only where the field changed and, in a rollout, is multiplied by "
+                         "gate>0.5 so an unchanged field advances by exactly zero instead of by noise. "
+                         "Measured +0.080 position skill on the MLP probe; docs/WM_MOTION.md.")
     ap.add_argument("--grid", type=int, default=32, help="nav-grid resolution. MEASURED: at 32 the fitted cell is 142x66 world units against a 5.5-unit mean step, so 87%% of MOVING steps never leave their cell and the dcell head is nearly constant (docs/WM_MOTION.md)")
     ap.add_argument("--device", default="cpu", help="cpu | cuda")
     ap.add_argument("--rows", type=int, default=16,
@@ -633,7 +653,8 @@ def main():
               f"aggregator {a.fleet_aggregator}")
 
     net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows, attn=a.attn, layers=a.layers,
-                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid).to(dev)
+                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid,
+                  gate=a.gate).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=a.lr)
     sched = None
     if a.sched == "cosine":
@@ -737,6 +758,17 @@ def main():
         (dcl, dof), dyv, dyw, hpd, bits, scn, dvel, dcam, dfl, bg = split_link(ol, None, cur["link"])
         (rdcl, rdof), rhpd, rpr, rst, a_drely, a_dyaw, a_dshape, a_dtimer, a_dvel = \
             split_actor(oa, None, cur["actor"])
+        if a.gate:
+            # THE HALF THAT MATTERS FOR A ROLLOUT: where the gate says nothing changed, the field advances by
+            # EXACTLY zero rather than by a small wrong delta. 1800 steps of small wrong deltas on heads whose
+            # target is zero 95-99.97% of the time is how wm_v3 ended up worse than doing nothing.
+            gl = (ol[:, -len(GATE_L):] > 0).float()
+            ga = (oa[..., -len(GATE_A):] > 0).float()
+            dyw = dyw * gl[:, 0:1]
+            rdof = rdof * ga[..., 0:1]
+            a_dyaw = a_dyaw * ga[..., 1:2]
+            a_dshape = a_dshape * ga[..., 2:3]
+            a_dtimer = a_dtimer * ga[..., 3:4]
 
         def pick(logits):
             if not sample:
@@ -866,10 +898,31 @@ def main():
                  .round().clamp(-AHPD_K, AHPD_K) + AHPD_K).long()
         msum = m.sum().clamp(min=1)
         mrow = lambda x: (x * m).sum() / msum                                   # noqa: E731
+        # ---- change gates on the sparse regression heads -------------------------------------------------
+        # A zero-init regression head STARTS at persistence but nothing keeps it there: trained with L1 over
+        # frames that are 95-99.97% zero it learns to emit small wrong values everywhere, and in a 1800-step
+        # rollout that is how wm_v3 ended up worse than doing nothing. The gate supervises the value head only
+        # where the field changed and, at rollout time, zeroes the delta where the gate says nothing happened.
+        gl = ol[:, -len(GATE_L):] if a.gate else None
+        ga = oa[..., -len(GATE_A):] if a.gate else None
+        def gated(name, err, tgt, idx, row=False):
+            """err: per-element |pred-target| (already mean-reduced over the field's width). tgt: the target,
+            used only to decide what CHANGED. Returns the value loss; records the gate's BCE in GB."""
+            if not a.gate:
+                return mrow(err) if row else err.mean()
+            lg = (ga[..., idx] if row else gl[:, idx])
+            chg = (tgt.abs().amax(-1) if tgt.dim() > (2 if row else 1) else tgt.abs()) > 1e-6
+            b = F.binary_cross_entropy_with_logits(lg, chg.float(), reduction="none")
+            GB.append(mrow(b) if row else b.mean())
+            w = chg.float()
+            den = ((w * m).sum() if row else w.sum()).clamp(min=1)
+            return (((err * w) * m).sum() if row else (err * w).sum()) / den
+        GB = []
         L = {"l_dcell": F.cross_entropy(dcl, dcell_i, weight=CW_DC),
              "l_doff": F.l1_loss(dof, doff_t),
              "l_y": F.l1_loss(dyv.squeeze(-1), L_nxt[:, L_RELY] - L_now[:, L_RELY]),
-             "l_yaw": F.l1_loss(dyw, L_nxt[:, L_YAW] - L_now[:, L_YAW]),
+             "l_yaw": gated("l_yaw", (dyw - (L_nxt[:, L_YAW] - L_now[:, L_YAW])).abs().mean(-1),
+                             L_nxt[:, L_YAW] - L_now[:, L_YAW], 0),
              "l_hp": F.cross_entropy(hpd, hpd_t, weight=CW_HPD),
              "l_bits": F.binary_cross_entropy_with_logits(bits, L_nxt[:, 16:16 + nb_]),
              "l_scene": F.cross_entropy(scn, yg("scene_nxt", j)),
@@ -880,17 +933,22 @@ def main():
              "l_bg": F.binary_cross_entropy_with_logits(bg, L_nxt[:, 16 + nb_:]),
              "a_dcell": mrow(F.cross_entropy(rdcl.reshape(-1, DC), rdc_i.reshape(-1),
                                              reduction="none").reshape(m.shape)),
-             "a_doff": mrow((rdof - rdoff_t).abs().mean(-1)),
+             "a_doff": gated("a_doff", (rdof - rdoff_t).abs().mean(-1), rdoff_t, 0, row=True),
              "a_hp": mrow(F.cross_entropy(rhpd.reshape(-1, AHPD_N), ahp_t.reshape(-1), weight=CW_RHPD,
                                           reduction="none").reshape(m.shape)),
              "a_pres": F.binary_cross_entropy_with_logits(rpr.squeeze(-1), yg("pres_nxt", j)),
              "a_state": mrow(F.cross_entropy(rst.reshape(-1, N_STATES), yg("st_nxt", j).reshape(-1),
                                              reduction="none").reshape(m.shape)),
              "a_rely": mrow((a_drely.squeeze(-1) - (A_nxt[:, :, A_RELY] - A_now[:, :, A_RELY])).abs()),
-             "a_yaw": mrow((a_dyaw - (A_nxt[:, :, A_YAW] - A_now[:, :, A_YAW])).abs().mean(-1)),
-             "a_shape": mrow((a_dshape - (A_nxt[:, :, A_SHAPE] - A_now[:, :, A_SHAPE])).abs().mean(-1)),
-             "a_timer": mrow((a_dtimer.squeeze(-1) - (A_nxt[:, :, A_TIMER] - A_now[:, :, A_TIMER])).abs()),
+             "a_yaw": gated("a_yaw", (a_dyaw - (A_nxt[:, :, A_YAW] - A_now[:, :, A_YAW])).abs().mean(-1),
+                             A_nxt[:, :, A_YAW] - A_now[:, :, A_YAW], 1, row=True),
+             "a_shape": gated("a_shape", (a_dshape - (A_nxt[:, :, A_SHAPE] - A_now[:, :, A_SHAPE])).abs().mean(-1),
+                               A_nxt[:, :, A_SHAPE] - A_now[:, :, A_SHAPE], 2, row=True),
+             "a_timer": gated("a_timer", (a_dtimer.squeeze(-1) - (A_nxt[:, :, A_TIMER] - A_now[:, :, A_TIMER])).abs(),
+                               A_nxt[:, :, A_TIMER] - A_now[:, :, A_TIMER], 3, row=True),
              "a_vel": mrow((a_dvel - (A_nxt[:, :, A_VEL] - A_now[:, :, A_VEL])).abs().mean(-1))}
+        if a.gate and GB:
+            L["gate_bce"] = GATE_W * sum(GB) / len(GB)   # x0.2: the yes/no loss crowds out the value heads
         return L, ((dcl, dof), hpd)
 
     def loss_fn(i):
@@ -969,7 +1027,8 @@ def main():
         nonlocal net, opt
         torch.manual_seed(a.seed)
         net = TokenWM(NA, a.dim, a.heads, n_rows=a.rows, attn=a.attn, layers=a.layers,
-                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid).to(dev)
+                  hist=a.hist, env_p=int(ENV_OFF.shape[0]), hp_bins=a.hp_bins, grid_n=a.grid,
+                  gate=a.gate).to(dev)
         opt = torch.optim.Adam(net.parameters(), lr=lr)
         r = {}
         for ep in range(n_epochs):
@@ -1256,6 +1315,71 @@ def main():
     torch.save({"model": best.pop("state", net.state_dict()), "last_model": net.state_dict(),
                 "best": {k: v for k, v in best.items() if k != "state"}, "scales": sc, "split": split, "n_actions": NA,
                 "config": vars(a), "history": hist}, a.out)
+    # ---- PER-FIELD EVAL, IDENTICAL IN BOTH ARMS -------------------------------------------------------
+    # The training losses of gated heads are averaged over CHANGED elements only, so they are not comparable
+    # across a --gate and a no-gate run. This scores the eight gated fields the same way either way: MAE of the
+    # predicted delta against the true delta, with the gate APPLIED exactly as it would be at deployment, next
+    # to a do-nothing control (predict zero). Reported over all frames and over changed frames separately,
+    # because a gate is supposed to win on the first and could lose on the second.
+    @torch.no_grad()
+    def eval_heads(sel, chunk=2048):
+        net.eval()
+        FL = [("l_y", 1), ("l_yaw", 2), ("l_floor", 1)]
+        FA = [("a_doff", 2), ("a_yaw", 2), ("a_shape", 2), ("a_timer", 1), ("a_vel", 3)]
+        acc = {n: np.zeros(4) for n, _ in FL + FA}      # err_all, pers_all, err_chg, n_chg  (+ n_all in [4])
+        nall = {n: 0.0 for n, _ in FL + FA}
+        for st in range(0, len(sel), chunk):
+            i = torch.from_numpy(np.asarray(sel[st:st + chunk])).to(dev)
+            if len(i) < 8:
+                continue
+            T = gt(i)
+            ol, oa = net(T, ag(i))
+            (dcl, dof), dyv, dyw, hpd, bits, scn, dvel, dcam, dfl, bg = split_link(ol, i, None)
+            (rdcl, rdof), rhpd, rpr, rst, ardy, adyw, adsh, adti, advl = split_actor(oa, i, None)
+            if a.gate:
+                gl = (ol[:, -len(GATE_L):] > 0).float(); gaa = (oa[..., -len(GATE_A):] > 0).float()
+                dyw = dyw * gl[:, 0:1]
+                rdof, adyw = rdof * gaa[..., 0:1], adyw * gaa[..., 1:2]
+                adsh, adti = adsh * gaa[..., 2:3], adti * gaa[..., 3:4]
+            j, jn = i, (i + 1).clamp(max=N - 1)
+            Ln, Lx = tt["link"][j].float(), tt["link"][jn].float()
+            An, Ax = tt["actors"][j].float(), tt["actors"][jn].float()
+            m = yg("pres_now", j)
+            aoff_t = tt["actor_off"][jn].float() - tt["actor_off"][j].float()
+            pred = {"l_y": dyv.squeeze(-1)[:, None], "l_yaw": dyw, "l_floor": dfl.squeeze(-1)[:, None],
+                    "a_doff": rdof, "a_yaw": adyw, "a_shape": adsh,
+                    "a_timer": adti, "a_vel": advl}
+            tgt = {"l_y": (Lx[:, L_RELY] - Ln[:, L_RELY])[:, None], "l_yaw": Lx[:, L_YAW] - Ln[:, L_YAW],
+                   "l_floor": (Lx[:, L_FLOOR] - Ln[:, L_FLOOR])[:, None], "a_doff": aoff_t,
+                   "a_yaw": Ax[:, :, A_YAW] - An[:, :, A_YAW], "a_shape": Ax[:, :, A_SHAPE] - An[:, :, A_SHAPE],
+                   "a_timer": (Ax[:, :, A_TIMER] - An[:, :, A_TIMER])[..., None],
+                   "a_vel": Ax[:, :, A_VEL] - An[:, :, A_VEL]}
+            for n, _ in FL + FA:
+                pr, tg = pred[n], tgt[n]
+                if tg.dim() == 3:                        # actor field: mask absent rows, as training does
+                    e = (pr - tg).abs().mean(-1) * m; p0 = tg.abs().mean(-1) * m
+                    ch = (tg.abs().amax(-1) > 1e-6).float() * m
+                    cnt = m.sum()
+                else:
+                    e = (pr - tg).abs().mean(-1); p0 = tg.abs().mean(-1)
+                    ch = (tg.abs().amax(-1) > 1e-6).float(); cnt = torch.tensor(float(len(i)), device=dev)
+                acc[n] += np.array([float(e.sum()), float(p0.sum()), float((e * ch).sum()), float(ch.sum())])
+                nall[n] += float(cnt)
+        net.train()
+        print(f"\nPER-FIELD EVAL (identical metric in both arms, gate {'ON' if a.gate else 'off'}), "
+              f"{len(sel):,} held-out frames")
+        print(f"  {'field':<10}{'changes':>9}{'MAE all':>10}{'do-nothing':>12}{'skill':>8}{'MAE|changed':>13}")
+        rows = {}
+        for n, _ in FL + FA:
+            ea, pa, ec, nc = acc[n]; na = max(nall[n], 1)
+            sk = 1 - (ea / max(pa, 1e-12))
+            rows[n] = dict(chg=nc / na, mae=ea / na, pers=pa / na, skill=sk, mae_chg=ec / max(nc, 1))
+            print(f"  {n:<10}{nc/na*100:>8.2f}%{ea/na:>10.5f}{pa/na:>12.5f}{sk:>+8.3f}{ec/max(nc,1):>13.5f}")
+        print("  GATED-FIELD MEAN SKILL: " f"{np.mean([r['skill'] for r in rows.values()]):+.4f}")
+        return rows
+
+    eval_heads(tu[:16384])
+
     print(f"\nper-head final losses: " + json.dumps({k: round(hist[-1][k], 5) for k in
           ("l_dcell", "l_doff", "l_y", "l_yaw", "l_hp", "l_bits", "l_scene", "a_dcell", "a_doff", "a_hp",
            "a_pres", "a_state")}))

@@ -411,3 +411,85 @@ non-zero this step" at **×0.2 weight** (MOBA down-weight, and the probe used it
 over changed elements, and in the rollout the predicted delta multiplied by `gate > 0.5` so an ungated field
 advances by exactly zero instead of by noise. The last part is what makes it matter for the autoregressive
 rollout, where 1,800 steps of small wrong deltas is how `wm_v3` ended up worse than doing nothing.
+
+---
+
+# The gate, properly measured (2026-09-26). The metric was the bug, and the rule is a threshold.
+
+## The measurement error first
+
+The 4-arm grid×gate ablation said the gate hurt: grid 96 went +0.068 → +0.023 **on position skill**. That was
+the wrong metric to judge it by, and the mistake is mine: `l_doff` is movement and is deliberately NOT gated, so
+the gate touches only non-position heads. Position skill cannot see what the change targets — all it registers
+is the gate's BCE competing for capacity. This is "the objective was not the metric" inverted: the *metric*
+was not the target.
+
+`train_wm_tokens.py --gate` now ends every run with a **per-field eval that is identical in both arms**: MAE of
+the predicted delta against the true delta, with the gate applied exactly as it would be at deployment, beside a
+do-nothing control, over all frames and over changed frames separately. The training losses of gated heads are
+averaged over changed elements only and are NOT comparable across arms; this is.
+
+## What it showed: the ungated model is far worse than doing nothing on every sparse field
+
+grid 96, 11,276 held-out frames, no gate:
+
+| field | changes on | skill vs do-nothing |
+|---|---|---|
+| `a_yaw` | 0.02% | **−6.05** |
+| `a_shape` | 1.65% | −1.69 |
+| `a_timer` | 3.69% | −0.40 |
+| `a_doff` | 3.68% | −0.22 |
+| `l_y` | 23.1% | −0.09 |
+| `l_floor` | 14.5% | −0.02 |
+| `l_yaw` | 19.9% | −0.01 |
+| `a_vel` | 33.2% | **+0.17** |
+| | | **mean −1.04** |
+
+Seven of eight regression heads are worse than emitting zero, and `a_yaw` — whose target moves on 2 frames in
+10,000 — is 6× worse. None of this was visible in any number we had been tracking.
+
+## The rule is a change-rate threshold near 4%, not "everything except movement"
+
+Gating all eight took the mean from −1.04 to −0.23, but the per-field split is the finding:
+
+| field | changes | no gate | gated | |
+|---|---|---|---|---|
+| `a_yaw` | 0.02% | −6.05 | **+0.00** | fixed |
+| `a_shape` | 1.65% | −1.69 | **+0.00** | fixed |
+| `a_timer` | 3.69% | −0.40 | **+0.01** | fixed |
+| `a_doff` | 3.68% | −0.22 | −0.02 | nearly fixed |
+| `l_yaw` | 19.9% | −0.01 | +0.00 | marginal |
+| `a_vel` | 33.2% | +0.17 | +0.14 | **hurt** (was already fine) |
+| `l_y` | 23.1% | −0.09 | **−1.01** | **badly hurt** |
+| `l_floor` | 14.5% | −0.02 | **−0.96** | **badly hurt** |
+
+Above ~14% the gate misfires often, and the value head — trained only on changed frames — emits a LARGE delta
+on every misfire, so each false positive costs far more than the small wrong delta it replaced. MOBA's "every
+delta field except movement" is too coarse for this state; the rule here is **gate below ~4%, leave alone above
+~14%**.
+
+**And my change-rate table had the wrong source.** It measured raw `state` columns; `a_vel` reads 0.03% there
+but its TOKEN target changes on 33.2% of frames, because the token field is scaled and partly derived. So I
+gated a field that was already the best of the eight. Change rates must be measured on the targets the heads
+actually see, which is what the per-field eval now reports in its `changes` column.
+
+Corrected set: `GATE_L = ("l_yaw",)`, `GATE_A = ("a_doff", "a_yaw", "a_shape", "a_timer")`. Result:
+**gated-field mean skill +0.017**, and no field catastrophically negative.
+
+## The remaining trade-off, stated honestly
+
+| arm | position skill | gated-field mean |
+|---|---|---|
+| grid 96, no gate | **+0.068** | **−1.04** |
+| grid 96, all 8 gated | +0.023 | −0.23 |
+| grid 96, corrected gate | −0.002 | **+0.017** |
+
+The gate fixes the sparse fields and costs position. That is capacity competition, and it is the failure MOBA
+documented and named: "the gate's yes/no losses crowd out movement. Down-weighting them ×0.2 took walking from
+−4 to +6." We already run ×0.2 (`GATE_W`). At dim 128 on 60k frames it is still too much.
+
+So this is where laptop scale stops being informative. The two levers left are a lower `GATE_W` and more
+capacity, and the second is the whole point of the H100: **dim 384 against dim 128 is 9× the head capacity**,
+where a small auxiliary BCE should stop competing with the position head. The full-scale arms to run are
+grid 96 alone, and grid 96 + corrected gate, judged on BOTH metrics — position skill and gated-field mean —
+because this session has now proved that either one alone is misleading.
