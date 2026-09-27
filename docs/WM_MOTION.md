@@ -493,3 +493,69 @@ capacity, and the second is the whole point of the H100: **dim 384 against dim 1
 where a small auxiliary BCE should stop competing with the position head. The full-scale arms to run are
 grid 96 alone, and grid 96 + corrected gate, judged on BOTH metrics — position skill and gated-field mean —
 because this session has now proved that either one alone is misleading.
+
+
+---
+
+# RETRACTION: the grid cell size (2026-09-27)
+
+**The 32x32 cell is 28.8 x 57.1 world units, not 142 x 66.** Every appearance of 142 x 66 in this document,
+in the `--grid` help text and in the commit messages of `b6fda03` and `e1cd754` is wrong, and the estimate it
+replaced was right.
+
+The error: I measured with `NavGrid.fit()` re-fitted on `datasets/transitions/v5` episodes, which span several
+rooms and a far wider x range than the data the world-model checkpoints were trained on. The grid the models
+actually use is stored in the checkpoint (`ck["grid"]`: lo [-389.96, -911.47], hi [531.36, 917.12], n 32) and
+gives a 28.8 x 57.1 cell. So I "corrected" a correct ~29 x 57 estimate into a wrong number by measuring a
+different grid, then built an argument on it and wrote it into the docs and the CLI.
+
+Corrected table, on the checkpoint's own grid, 250,589 transitions:
+
+| | cell size | same-cell, all steps | same-cell, MOVING | quantisation error |
+|---|---|---|---|---|
+| **checkpoint grid, n=32** | **28.8 x 57.1** | 84.3% | **71.6%** | **17.5** |
+| my refit on v5 (WRONG grid) | 142.3 x 65.9 | 92.7% | 86.8% | 44.7 |
+
+What survives: the grid is still coarse relative to motion -- 17.5 units of quantisation against a 5.5-unit mean
+step -- so a perfect cell prediction still lands ~3 steps away. What does NOT survive: "coarse by an order of
+magnitude", "87% of moving steps never leave their cell", and the grid-96 result being a fix for that. 28% of
+moving steps DO change cell, so `dcell` has real signal, and the grid-96 arms were chasing an inflated problem.
+
+The viewer's own numbers are consistent with the corrected figure and were the thing that exposed it: a dreamed
+Link 14.91 cells adrift on x is 14.91 x 28.8 = 429 world units, which matches the reported wx difference of
+-429.2 exactly.
+
+# RETRACTION: the "change-rate threshold" rule (2026-09-27)
+
+The rule "gate below ~4%, leave alone above ~14%" was derived from arms where the gated value loss was averaged
+over CHANGED entries only. MOBA's adopted recipe specifies `--gate-value-norm all` -- averaged over ALL
+supervised entries -- and they measured the changed-only variant at walking +6 against +15 for the correct one.
+So the blowups I attributed to a threshold (`l_y` -1.01, `l_floor` -0.96, `l_yaw` -1.98) are consistent with my
+normalisation bug, and the threshold may be an artefact of it. Fixed in code; the rule is withdrawn pending a
+rerun.
+
+# What MOBA actually does for EGO MOTION, which is none of the above
+
+Their own words: **"The architecture can learn walking; the full loss buries it."** A walking-only loss scores
++45 on the same architecture that scores +15 under the full multi-head loss, so routing and representation were
+never the problem -- loss competition was. The fix is to weight the ego position terms:
+
+| | baseline | walking x5 | **walking x10** |
+|---|---|---|---|
+| walking | +15 / +44 | +31 / +85 | **+35 / +96** |
+| every other head | unchanged | unchanged | unchanged |
+
+"Walking more than doubles, and no other row pays for it." And movement is the one field they deliberately
+**never** gate.
+
+Their adopted baseline v2, against what this repo had:
+
+| MOBA baseline v2 | ours before | now |
+|---|---|---|
+| change gate on every delta field except movement | partly (wrong set) | yes |
+| gate yes/no loss x0.2 | yes | yes |
+| **gated value loss averaged over ALL supervised entries** | **NO -- changed-only** | **fixed** |
+| **ego x/y loss terms x10** | **MISSING** | **`--walk-weight`** |
+| **actions added to the hero token** | **MISSING -- concatenated AFTER the attention blocks** | **`--act-in-token`** |
+
+Three of the five were wrong or absent here.

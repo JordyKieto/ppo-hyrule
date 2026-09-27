@@ -494,3 +494,59 @@ should shift toward slots 3/5/8.
 The three `ceiling_wait` states were replaced in place, not dropped: `NACE01.s01`, `s02` and `s10` now hold
 engaged states derived from slot 9 (`ceiling_move`, 5 HP, 3 larvae), verified by decoding the files. No slot in
 the set holds `ceiling_wait` any more. "Slot-9-derived slots 1/2/10" means those rebuilt files.
+
+---
+
+# v13: the ladder worked, and it exposed a DISTANCE wall (2026-09-27)
+
+Three curricula, same reward, same policy lineage, each resumed from the last. 5 of 20 ranks sampled.
+
+| | v11 (finisher-heavy) | v12 (inverted) | **v13 (graded ladder)** |
+|---|---|---|---|
+| start mix | 75% at 5 HP, 15% full | 20% at 5 HP, 60% full | **30% / 30% / 40% by HP tier** |
+| return trend | +0.700/update | +0.098/update | +0.130/update |
+| defeat rate, peak | 6.95% | 2.01% | **7.26%** (updates 41-50) |
+| **full-HP defeat rate** | **0.03%** (1/3,023) | 0.20% (4/2,008) | **0.64%** (21/3,258) |
+| death rate | 70.8 -> 62.2% | 57.8 -> 61.7% (rising) | 59.0 -> 56.1% |
+
+**The ladder is the right shape.** v12's cliff -- jumping straight to 60% full-HP starts -- stalled at +0.098/update
+because a full kill needs about four stun-and-hit cycles chained without dying and the policy could do one.
+v13's 30/30/40 by HP tier keeps the finisher rung sharp while the 6-8 HP rungs convert, and full-HP kills went
+**21x v11's rate**. Nothing else in the project has moved that number.
+
+**But v13 plateaued at update ~50 of 73.** Peak was updates 41-50 (7.26%, +27.1 return) and the last three
+blocks drift down (6.65, 6.29, 6.08%). Death is stuck at ~56% for 40 updates; Gohma HP taken stuck at ~2.7 of 10.
+
+## The wall is DISTANCE, not HP
+
+Last 15 updates, per slot:
+
+| slot | Gohma HP | start distance | win rate | died |
+|---|---|---|---|---|
+| 7 | 5, stunned | **38** | **19.0%** | 62% |
+| 6 | 6 | 357 | 3.4% | **29%** |
+| 5 | 10 | 472 | 1.8% | 68% |
+| 4 | 8 | 541 | 0.9% | **80%** |
+| 3 | 10 | 188 | 0.5% | 71% |
+| **8** | **10, stunned** | **448** | **0.0%** | **20%** |
+
+Two different failures, and only one of them is what the HP ladder grades:
+
+* Slots 3, 4, 5, 7 **die** (62-80%): they engage and lose.
+* **Slot 8 neither dies nor wins** -- 20% death, **0 wins in 225 episodes**. It survives by not fighting. Slot 8
+  starts with Gohma ALREADY STUNNED, which is a free damage window, and the policy never crosses 448 units to
+  cash it in. Slot 6 at 357 units converts at 3.4% with a 29% death rate; slot 8 at 448 converts at zero.
+
+So the curriculum grades HP and has **no rung between 38 units and 448 units**. The same signature killed the
+rebuilt slots 1/2/10 (473/368/490 units, 0.4% defeat, dropped from the mix): whenever Link starts beyond ~400
+units he does not close, and a stun he cannot reach is worth nothing.
+
+**The next curriculum should grade by DISTANCE, not by HP** -- intermediate-range starts built from slot 8 by
+walking Link partway in, exactly how slots 1/2/10 were made (`scripts/make_walk_state.py`). That attacks the
+measured wall rather than the assumed one.
+
+## Kept
+
+`runs/gohma_v13/v13_r12_latest.pt` -- rank 12, the best of the five sampled by late-update defeat rate (7.36%),
+verified loadable with optimizer state. Plus `v13_r{0,1,3,7,12}.jsonl`, the per-episode records behind every
+number above. The fleet was terminated after this.
