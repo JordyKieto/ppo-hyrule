@@ -18,11 +18,12 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R6 | Reward simplification + action-space fix + engaged starts doubled Gohma's defeat rate | **M** | v10 3.29% → v11 7.0%, `results/1qk7isl2/` vs `results/p20rbwq9/` |
 | R7 | Two of the actions the task needs did not exist in the action space | **M** | `("L","R")` Z+Shield and `("L","CL")` Z+Nut absent until 2026-09-26; shield registered on 17.4% of presses |
 | R8 | A graded HP curriculum beats both a finisher-heavy and an inverted one | **M** | v11 +0.700/update but 1 full-HP win in 3,023; v12 +0.098; v13 0.64% full-HP, 21× v11 |
-| R9 | The residual blocker is engagement DISTANCE, not boss HP | **I** | slot 8 (already stunned, 448 units) 0 wins / 225 eps at 20% death vs slot 6 (357 units) 3.4%. One run |
+| R9 | The residual blocker is engagement DISTANCE, not boss HP | **M** | 10-slot suite, 80 eps, v14 u20: 18.75% (<200u, n=16) -> 4.17% (200-400u, n=24) -> 2.50% (>400u, n=40). `results/eval/v14_full_q_rank{0,1}.jsonl`. Earlier **I** was slot 8 alone |
 | R10 | The spacing reward improved survival | **U → withdrawn** | `close_attack_steps` never left ~21%; the death-rate fall is not attributable to it |
 | R11 | A KL anchor to the best known policy keeps a PPO fleet from drifting off it | **U** | `gohma-kl-v14`, `klA` steady at 0.012 over updates 15-24: the penalty is active and small. Says nothing yet about outcome |
 | R12 | The KL anchor (or dropping the death penalty) improves Gohma's defeat rate | **U** | flat so far: fleet mean succ 8.4 +/- 1.5% against the v13 init's 7.4%. Two variables changed at once, so a positive result would not separate them |
 | R13 | A per-episode (not per-round) start-slot assignment is required for a hold-out rate to mean anything | **M** | the round version sent 48/48 episodes of the first v13 hold-out to slot 1 and ran 0 episodes on slots 9-10 of the v14 full suite; both numbers withdrawn, PROVENANCE 3.2 |
+| R14 | v14 generalises to unseen start states | **U -> cannot be measured on this curriculum** | held-out is by construction [1,2,9,10] = all 5 HP, all >=368u, so collinear with 'far'; trained slots at the same distance score the same. 0/32 is not a generalisation gap |
 
 ## WM track
 

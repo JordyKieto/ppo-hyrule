@@ -169,6 +169,30 @@ Fixed by replacing the round structure with a per-env work queue, which also rem
 idled eleven emulators behind one 300 s episode: 40 episodes now complete in ~2 min instead of ~7. Rows from
 the fixed evaluator are written to a **separate file** (`v14_full_q.jsonl`) so the two are never pooled.
 
+**The v14 hold-out rate is confounded, and the confound is structural.** The first 10-slot suite from the
+fixed evaluator (published update 20, 80 episodes over the 2 eval pods, `results/eval/v14_full_q_rank{0,1}.jsonl`):
+
+| | n | defeat | mean boss HP taken |
+|---|---|---|---|
+| held out `[1,2,9,10]` | 32 | **0** | 1.44 |
+| trained `[3,4,5,6,7,8]` | 48 | 10.42% | 2.23 |
+| full HP (10) | 24 | 4.17% | 2.08 |
+| **near** < 200u | 16 | **18.75%** | — |
+| **mid** 200–400u | 24 | 4.17% | — |
+| **far** > 400u | 40 | 2.50% | — |
+
+The held-out set is defined as the slots the run did not train on, and v13's ladder trains `[3,4,5,6,7,8]` —
+so held-out is *necessarily* `[1,2,9,10]`, which is **all 5 HP and all 368–490 units out**. "Held out" is
+collinear with "far", and trained slots at the same distance score the same (slot 5 at 472u: 0/8; slot 8 at
+448u: 0/8). No trained slot is both far and 5 HP, so **no matched comparison exists on this curriculum** and
+the 0/32 is not evidence of a generalisation gap. `scripts/eval_fleet.py` now prints a `CONFOUNDED` line and
+sets `holdout_confounded` on every such row.
+
+The useful number from the same 80 episodes is the **distance gradient: 18.75% → 4.17% → 2.50%**, a 7.5× fall
+from <200u to >400u. This moves claim **R9** (distance, not boss HP, is the residual wall) from **I** to **M**:
+it was inferred from slot 8 alone and is now measured across three bands of a ten-slot suite. Full HP is
+1/24 here, which at n=24 is *not* distinguishable from v13's 0.64% — the interval covers both.
+
 **Observation evolution** (each is a widening, function-preserving at load via `zelda_rl/transfer.py`):
 v4 483 → **v5 552** (+Gohma/larva/item blocks, actions 63 → 90) → **v6 675** (+raw aim pitch/yaw, camera and
 body frames) → **v7 1033** (+3 larva slots, velocities, facing, shape, seed impacts). Actions 90 → **108** on
