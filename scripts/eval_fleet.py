@@ -93,8 +93,45 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
     mk = lambda i: make_env(cfg, root / f"i{i}", slots=slots, slots_dir=slots_dir, video_backend="Null",
                             unlimited_speed=True, idx=i)[0]                            # noqa: E731
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(envs_n) as pool:
-        envs = list(pool.map(mk, range(envs_n)))
+
+    def build_all():
+        """Build every env, and on ANY failure close the ones that DID come up before re-raising.
+
+        Construction sat outside the try/finally, so one Dolphin failing to expose its RAM ("N64 RAM not
+        found in pid N after 60s") orphaned the other eleven: they stayed alive, owned by nobody, and the
+        next checkpoint started twelve more. Observed live -- 12 orphans, all the same age, on a pod whose
+        evaluator was idle and polling.
+        """
+        made = {}
+        err = None
+        with ThreadPoolExecutor(envs_n) as pool:
+            futs = {pool.submit(mk, i): i for i in range(envs_n)}
+            for fu, i in futs.items():
+                try:
+                    made[i] = fu.result()
+                except Exception as e:                                          # noqa: BLE001
+                    err = err or e
+        if err is not None:
+            for e in made.values():
+                try:
+                    e.close()
+                except Exception:                                               # noqa: BLE001
+                    pass
+            raise err
+        return [made[i] for i in range(envs_n)]
+
+    # A Dolphin that has not finished booting is a transient error, and the documented response to a
+    # transient error here is to re-run it, not to redesign around it (AGENTS 14). One retry, then give up
+    # and let the watcher move to the next checkpoint.
+    for attempt in (1, 2):
+        try:
+            envs = build_all()
+            break
+        except Exception as e:                                                  # noqa: BLE001
+            print(f"  env build failed, attempt {attempt}/2: {str(e)[:100]}", flush=True)
+            if attempt == 2:
+                raise
+            time.sleep(15)
 
     # Interleaved, so partial results already cover every slot, and exact because k % len(slots) visits each
     # slot equally often when episodes is a multiple of len(slots) -- which the caller guarantees by
@@ -191,7 +228,10 @@ def score(eps):
 
 
 def run_one(ckpt, a):
-    model_cfg = load_policy(ckpt)[1]
+    # `update` lives at the TOP level of the checkpoint, not inside ck["config"], so every row written so far
+    # has `"update": null`. The published_update field carried the real number; this makes the row agree.
+    _, model_cfg, _ck = load_policy(ckpt)
+    ckpt_update = _ck.get("update")
     ho, trained = held_out(model_cfg)
     if a.slots:
         slots = [int(x) for x in a.slots.split(",")]
@@ -208,7 +248,7 @@ def run_one(ckpt, a):
         mine = slots[:1]
     eps_total = a.episodes_per_slot * len(mine)
     print(f"  run {model_cfg.get('run_name')} (group {model_cfg.get('wandb_group')}), its update "
-          f"{model_cfg.get('update')}")
+          f"{ckpt_update}")
     print(f"  trained on {trained or 'unknown'} | suite: {label}")
     print(f"  rank {a.fleet_rank}/{a.fleet_world_size} evaluating slots {mine} "
           f"x {a.episodes_per_slot} = {eps_total} episodes")
@@ -225,7 +265,7 @@ def run_one(ckpt, a):
     # different policies with the same name, and pooling them in one jsonl would be unrecoverable later.
     # The checkpoint carries run_name and wandb_group, so the row records them and is self-describing.
     s.update(run_name=model_cfg.get("run_name"), wandb_group=model_cfg.get("wandb_group"))
-    s.update(checkpoint=str(ckpt), update=model_cfg.get("update"), slots=mine, trained_slots=trained,
+    s.update(checkpoint=str(ckpt), update=ckpt_update, slots=mine, trained_slots=trained,
              suite=a.suite, rank=a.fleet_rank, world_size=a.fleet_world_size,
              held_out_slots=hos, ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
     fh = s["full_hp_defeat_rate"]
