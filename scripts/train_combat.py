@@ -54,6 +54,19 @@ def parse_args():
     ap.add_argument("--total-updates", type=int, default=200)
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--start-slots", default="1,2,3,4,5,6,7,8,9,10")
+    ap.add_argument("--kl-anchor", default=None,
+                    help="path to a KNOWN-GOOD checkpoint. Adds a KL penalty from the training policy toward "
+                         "it, bounding the DISTANCE TRAVELLED rather than the step size. --target-kl only "
+                         "early-stops the epoch loop and in v13 never fired (measured KL 0.005-0.007 vs a "
+                         "0.03 threshold) while the defeat rate drifted 7.26%% -> 6.08%% over ~23 updates. "
+                         "From puffertank E39, where this was the only arm that stopped the equivalent decline.")
+    ap.add_argument("--kl-coef", type=float, default=0.3,
+                    help="weight on the anchor KL. E39 measured coef 1.0 holding the policy AT the anchor "
+                         "without improving it, and 0.3 letting it improve, so 0.3 is the default.")
+    ap.add_argument("--death-scale", type=float, default=1.0,
+                    help="multiply the death penalty by this. 0 removes it. E39's ablation: removing the death "
+                         "penalty delayed an equivalent collapse by ~10 updates. Our own slot-8 data has the "
+                         "same signature -- 20%% death, 0 wins in 225 episodes, surviving by not engaging.")
     ap.add_argument("--reward", choices=["full", "simple"], default="full",
                     help="gohma only. `simple` applies combat.GOHMA_SIMPLE: drops the entrance-era slingshot "
                          "shaping cluster and the distraction terms, and pays seed/nut stun credit only when "
@@ -113,6 +126,11 @@ def main():
     if args.profile == "gohma" and args.episode_seconds == 180.0:     # boss fight: 5-minute episodes unless overridden
         args.episode_seconds = 300.0
     profile_defaults = GOHMA_DEFAULTS if args.profile == "gohma" else {}
+    if args.death_scale != 1.0:
+        base = GOHMA_DEFAULTS.get("g_death_penalty", 30.0) if args.profile == "gohma" else 20.0
+        key = "g_death_penalty" if args.profile == "gohma" else "death_penalty"
+        profile_defaults = {**profile_defaults, key: base * args.death_scale}
+        LOGGER.info("death penalty scaled x%.2f -> %.2f", args.death_scale, base * args.death_scale)
     if args.profile == "gohma" and args.reward == "simple":
         from zelda_rl.combat import GOHMA_SIMPLE
         profile_defaults = {**profile_defaults, **GOHMA_SIMPLE}
@@ -197,13 +215,29 @@ def main():
                         args.transfer_action_margin)
 
     rec = bool(getattr(model, "recurrent", False))
+    # ---- KL anchor: a frozen known-good policy. Its log-probs are recorded DURING the rollout so its GRU
+    # carries its own hidden state; reusing the trainee's state would be a different network's memory.
+    anchor = None
+    if args.kl_anchor:
+        from zelda_rl.policy_io import load_policy
+        anchor, a_cfg, _ = load_policy(Path(args.kl_anchor))
+        if a_cfg.get("n_actions") != n_actions or a_cfg.get("obs_dim") != obs_dim:
+            raise SystemExit(f"--kl-anchor spec mismatch: anchor is obs {a_cfg.get('obs_dim')} / "
+                             f"{a_cfg.get('n_actions')} actions, this run is {obs_dim} / {n_actions}. "
+                             f"Widen the anchor first (zelda_rl/transfer.py) or pick a matching checkpoint.")
+        for q in anchor.parameters():
+            q.requires_grad_(False)
+        anchor.eval()
+        LOGGER.info("KL anchor %s (coef %.3f) -- penalising drift from this policy", args.kl_anchor, args.kl_coef)
+    anc_buf = np.zeros((T, N, n_actions), np.float32) if anchor is not None else None
     h_buf = np.zeros((T, N, args.gru), np.float32)
     first_buf = np.zeros((T, N), np.float32)
     obs_buf = np.zeros((T, N, obs_dim), np.float32)
     act_buf = np.zeros((T, N), np.int64)
     logp_buf, val_buf, rew_buf, done_buf = (np.zeros((T, N), np.float32) for _ in range(4))
     hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5} {'kill%':>6} {'death':>6} {'left':>5} {'hpLost':>6} {'dmg':>5} "
-           f"{'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} {'ent':>5} {'sps':>5}")
+           f"{'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} {'ent':>5} {'sps':>5}"
+           + (" klA" if args.kl_anchor else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -220,6 +254,7 @@ def main():
 
                     obs = np.stack([begin(i) for i in range(N)])
                     h = model.init_hidden(N) if rec else None
+                    h_a = anchor.init_hidden(N) if (anchor is not None and rec) else None
                     first = torch.ones(N)
                     model.eval()
                     for t in range(T):
@@ -230,6 +265,11 @@ def main():
                                 a, logp, _, v, h = model.act(torch.as_tensor(obs), h, first)
                             else:
                                 a, logp, _, v = model.act(torch.as_tensor(obs))
+                        if anchor is not None:
+                            with torch.no_grad():
+                                x = torch.as_tensor(obs)
+                                lg, _, h_a = anchor.step(x, h_a, first) if rec else (anchor.actor(x), None, None)
+                                anc_buf[t] = torch.log_softmax(lg, -1).numpy()
                         first = torch.zeros(N)
                         a = a.numpy()
                         act_buf[t], logp_buf[t], val_buf[t] = a, logp.numpy(), v.numpy()
@@ -256,6 +296,8 @@ def main():
                                 if (term or trunc) and t < T - 1:
                                     o = begin(i)
                                     first[i] = 1.0                # new episode: zero this env's memory next step
+                                    if h_a is not None:
+                                        h_a[i] = 0.0              # and the anchor's, on the same boundary
                             obs[i] = o
                     rollout_s = time.perf_counter() - t_roll
                     break
@@ -278,11 +320,14 @@ def main():
             if rec:
                 rbatch = {"obs": obs_buf, "act": act_buf, "logp": logp_buf, "adv": adv.astype(np.float32),
                           "ret": ret.astype(np.float32), "val": val_buf, "first": first_buf, "h": h_buf}
+                if anc_buf is not None:
+                    rbatch["anchor_logp"] = anc_buf
                 n_chunks = N * (T // args.chunk)
                 stats = ppo_update_recurrent(model, opt, rbatch, chunk=args.chunk, epochs=args.epochs,
                                              chunks_per_mb=max(1, n_chunks // args.minibatches), clip=args.clip,
                                              ent_coef=args.ent_coef, vf_coef=args.vf_coef,
-                                             max_grad_norm=args.max_grad_norm, target_kl=args.target_kl)
+                                             max_grad_norm=args.max_grad_norm, target_kl=args.target_kl,
+                                             kl_coef=(args.kl_coef if anchor is not None else 0.0))
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -375,7 +420,10 @@ def main():
                         f"{metrics['combat/hp_lost_hearts']:>6.2f} {metrics['combat/damage_dealt']:>5.2f} {metrics['combat/lockons']:>5.2f} "
                         f"{metrics['combat/blocks']:>4.1f} {metrics['episode/return']:>7.2f} "
                         f"({metrics['episode/r_outcome']:>5.1f}/{metrics['episode/r_shaping']:>5.1f}) {stats['approx_kl']:>6.3f} "
-                        f"{stats['entropy']:>5.2f} {metrics['perf/env_steps_per_sec']:>5.0f}  top: {top}"
+                        f"{stats['entropy']:>5.2f} {metrics['perf/env_steps_per_sec']:>5.0f}"
+                        + (f" klA {stats['kl_anchor']:>6.3f}" if stats.get("kl_anchor") == stats.get("kl_anchor")
+                           and "kl_anchor" in stats else "")
+                        + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:
                 ck = {"model": model.state_dict(), "optimizer": opt.state_dict(), "update": update, "global_step": global_step,

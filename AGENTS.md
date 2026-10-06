@@ -428,3 +428,26 @@ inputs with:
 .venv/bin/python scripts/export_wandb.py --history    # results/<run_id>/ for every W&B group
 .venv/bin/python scripts/make_samples.py             # samples/ + artifacts/MANIFEST.json
 ```
+
+## 28. On a machine running emulators, pin torch to ONE thread or it starves them
+
+`torch.set_num_threads` is set in **27 scripts in this repo** and the pattern is not decoration. This Mac has 8
+logical / **4 performance** cores; each Dolphin instance needs about 2 threads (emulation + the Null GPU
+thread); torch defaults to taking **all 4 performance cores** for a forward pass. So every policy step steals
+the cores the emulator needs, the VI counter stops advancing, and after the Null backend's 10-second
+`stall_timeout` the env raises `emulation stalled (VI stuck at N)`.
+
+**The incident.** Three scripts added in one session (`eval_fleet.py`, `measure_shield.py`, `wm_replay.py`) all
+omitted it. The symptom looked like flaky hardware, so it was "fixed" twice by lowering the env count — 8 envs
+to 4, then 4 to 3 — and once by adding stall-recovery that rebuilt the dead env and dropped its episodes. Three
+runs were spent blaming the device for a one-line omission, and the recovery code was written to survive a bug
+rather than to fix it.
+
+```python
+torch.set_num_threads(1)          # before building any env
+```
+
+`train_combat.py` exposes it as `--torch-threads`; the collectors hardcode 1. **Any new script that opens a
+Dolphin sets it.** And when an emulator "stalls", check thread contention before you touch the env count:
+`torch.get_num_threads()` against the core count is a five-second test, and lowering the env count hides the
+problem while halving throughput.

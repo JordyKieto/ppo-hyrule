@@ -54,6 +54,9 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 
 ## Non-obvious environment facts that have each cost a session
 
+- **torch takes all 4 performance cores by default and starves Dolphin's emulation thread** -> `VI stuck`.
+  Every script that opens an env calls `torch.set_num_threads(1)` first (`AGENTS.md` §28).
+
 - **Live RAM attach needs the signed interpreter on macOS**: `.venv/bin/python-dbg`, not `.venv/bin/python`.
   Plain `python` fails with `N64 RAM not found in Dolphin process`. On Linux pods it is `linuxmem` + `/dev/shm`
   and needs nothing special.

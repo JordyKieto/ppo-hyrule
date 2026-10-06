@@ -38,6 +38,16 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+# ONE THREAD. Dolphin needs ~2 threads per instance (emulation + the Null GPU thread) and this Mac has 4
+# performance cores; torch defaults to taking all 4 for a forward pass, which starves the emulation thread past
+# the 10 s Null-backend stall timeout and raises "emulation stalled (VI stuck)". 27 scripts in this repo
+# already set this -- the three I added did not, and I spent three runs blaming the hardware. AGENTS.md 28.
+torch.set_num_threads(1)
+try:
+    torch.set_num_interop_threads(1)
+except RuntimeError:
+    pass            # already initialised in this process; the intra-op setting is the one that matters
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.train_wm_tokens import (AHPD_K, AHPD_N, CENTRE, DC, DW, HPD_K, HPD_N, HPD_STEP,  # noqa: E402

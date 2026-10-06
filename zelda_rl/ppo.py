@@ -163,9 +163,23 @@ class RecurrentEntityActorCritic(nn.Module):
 
 
 def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, clip, ent_coef, vf_coef, max_grad_norm,
-                         target_kl=None):
+                         target_kl=None, kl_coef=0.0):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
-    batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step)."""
+    batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
+
+    `kl_coef` > 0 adds a KL PENALTY toward an anchor policy, using `batch["anchor_logp"]` (T, N, A): the
+    anchor's full log-probabilities, recorded during the rollout so the anchor's GRU carries its OWN hidden
+    state rather than the trainee's.
+
+    This is a different instrument from `target_kl`, which early-stops the epoch loop on the KL between the
+    policy before and after THIS update. That bounds each step and says nothing about cumulative drift: in
+    gohma-band-v13 the measured per-update KL was 0.005-0.007 against a 0.03 threshold, so it never fired
+    once, while the defeat rate drifted from 7.26% down to 6.08% over ~23 updates that were each individually
+    fine. A penalty toward a known-good policy bounds the distance travelled, not the step size. Adopted from
+    puffertank E39, where it was the only arm that stopped an equivalent decline (the arms are in
+    ../puffertank/docs/moba/experiments/E39-continuous-dyna.md); there coef 1.0 held the policy at the anchor
+    without improving it and 0.3 let it improve, so 0.3 is the default worth trying first.
+    """
     T, N = batch["act"].shape
     starts = [(s, i) for i in range(N) for s in range(0, T - chunk + 1, chunk)]
     tt = {k: torch.as_tensor(v) for k, v in batch.items()}
@@ -180,18 +194,28 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             g = lambda k: tt[k][idx_t, idx_n]
             obs, act, logp_old, adv, ret, first = g("obs"), g("act"), g("logp"), g("adv"), g("ret"), g("first")
             h = tt["h"][idx_t[:, 0], idx_n[:, 0]]
-            logps, ents, vals = [], [], []
+            anc = g("anchor_logp") if (kl_coef > 0 and "anchor_logp" in tt) else None
+            logps, ents, vals, kls = [], [], [], []
             for k in range(chunk):
                 logits, v, h = model.step(obs[:, k], h, first[:, k])
                 dist = Categorical(logits=logits)
                 logps.append(dist.log_prob(act[:, k])); ents.append(dist.entropy()); vals.append(v)
+                if anc is not None:
+                    lp = torch.log_softmax(logits, -1)
+                    # KL(current || anchor), summed over actions: mode-seeking, so it penalises the policy
+                    # putting mass where the anchor puts none.
+                    kls.append((lp.exp() * (lp - anc[:, k])).sum(-1))
             logp, ent, v = torch.stack(logps, 1), torch.stack(ents, 1), torch.stack(vals, 1)
+            kl_anchor = torch.stack(kls, 1).mean() if kls else None
             log_ratio = (logp - logp_old).clamp(-20.0, 20.0)
             ratio = log_ratio.exp()
             a = (adv - adv.mean()) / (adv.std() + 1e-8)
             pg = torch.max(-a * ratio, -a * ratio.clamp(1 - clip, 1 + clip)).mean()
             vl = 0.5 * ((v - ret) ** 2).mean()
             loss = pg - ent_coef * ent.mean() + vf_coef * vl
+            if kl_anchor is not None:
+                loss = loss + kl_coef * kl_anchor
+                stats.setdefault("kl_anchor", []).append(float(kl_anchor.detach()))
             if not torch.isfinite(loss):
                 skipped += 1
                 continue
