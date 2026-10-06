@@ -25,6 +25,13 @@ ARTIFACTS = [
      "Gohma v10 rank 13 update 50; best of 18 ranks by late defeat rate (8.43%). The v11 starting point."),
     ("rl/gohma_v13_r12_u70", "runs/gohma_v13/v13_r12_latest.pt",
      "BEST Gohma policy to date: v13 rank 12 update 70, 7.4% defeat, 0.64% at full HP. Optimizer state intact."),
+    ("rl/gohma_v14_r3_u40", "checkpoints/kept/gohma-kl_r3_u00040.pt",
+     "v14 (KL anchor to v13, no death penalty) rank 3 update 40, as published. Weights only, no optimizer: "
+     "this is the published-policy format the eval fleet consumes."),
+    ("rl/gohma_v15_r4_u40", "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
+     "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer "
+     "state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is "
+     "the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2)."),
     ("wm/token_v2_ck0080", "runs/wm_v2/ck_0080.pt",
      "Token WM, teacher-forced. Best one-step skill +0.188."),
     ("wm/token_v3_ck0085", "runs/wm_v3/ck_0085.pt",

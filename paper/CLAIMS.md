@@ -25,7 +25,7 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R13 | A per-episode (not per-round) start-slot assignment is required for a hold-out rate to mean anything | **M** | the round version sent 48/48 episodes of the first v13 hold-out to slot 1 and ran 0 episodes on slots 9-10 of the v14 full suite; both numbers withdrawn, PROVENANCE 3.2 |
 | R14 | v14 generalises to unseen start states | **U -> cannot be measured on this curriculum** | held-out is by construction [1,2,9,10] = all 5 HP, all >=368u, so collinear with 'far'; trained slots at the same distance score the same. 0/32 is not a generalisation gap |
 | R15 | Gohma was never given an approach reward in v1-v14 | **A** | `GohmaTracker.step` replaces `CombatTracker.step` with no `super()` call, so `w_approach` never fired; `approach_stunned` is gated on `GOHMA_STUNNED`. Read both implementations |
-| R16 | An approach reward raises the defeat rate from distant starts | **U** | `gohma-kl-v15` launched 2026-10-05 from v14 u33, one variable changed. Judged on the by_distance bands of the held-out evaluator |
+| R16 | An approach reward raises the defeat rate from distant starts | **U -- tested, NOT shown** | `gohma-kl-v15`, stopped at update 40. 9/160 vs v14's 18/559, one-sided Fisher p=0.122; every band overlaps. Direction consistent in all 4 bands and the near band moved least, which is the predicted asymmetry. ~400 far-band episodes needed for p~0.04; 72 collected |
 | R17 | A net-progress shaping term is not farmable by oscillation | **M** | `tests/test_gohma_approach.py`: 12 in/out round trips pay the single net gain, not 12x it; wandering after the best pays nothing more |
 
 ## WM track

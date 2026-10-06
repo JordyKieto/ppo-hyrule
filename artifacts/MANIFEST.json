@@ -26,6 +26,22 @@
       "description": "BEST Gohma policy to date: v13 rank 12 update 70, 7.4% defeat, 0.64% at full HP. Optimizer state intact."
     },
     {
+      "name": "rl/gohma_v14_r3_u40",
+      "path": "checkpoints/kept/gohma-kl_r3_u00040.pt",
+      "present": true,
+      "bytes": 2735530,
+      "md5": "8f2640cb3e87b08f4b2144863bac2afc",
+      "description": "v14 (KL anchor to v13, no death penalty) rank 3 update 40, as published. Weights only, no optimizer: this is the published-policy format the eval fleet consumes."
+    },
+    {
+      "name": "rl/gohma_v15_r4_u40",
+      "path": "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
+      "present": true,
+      "bytes": 8184685,
+      "md5": "397e27b2beb688b9b14d6a260ec07a22",
+      "description": "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2)."
+    },
+    {
       "name": "wm/token_v2_ck0080",
       "path": "runs/wm_v2/ck_0080.pt",
       "present": true,

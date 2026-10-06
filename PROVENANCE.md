@@ -148,7 +148,7 @@ exported. Session boundaries are where the reward or the start set changed.
 | `gohma-band-v12` | 3 | curriculum **inverted**: 60% full-HP starts | stalled, trend **+0.098/update**; full-HP wins 4/2,008 | **`results/1czvz74p/`** (31 rows) |
 | `gohma-band-v13` | 3 | **graded ladder** 30% at 5 HP / 30% at 6–8 HP / 40% full | peak 7.26% defeat; **full-HP rate 0.64%, 21× v11**; plateaued ~update 50 | **`results/kj9ypr7w/`** (74 rows) |
 | `gohma-kl-v14` | **4 (10-05)** | **KL anchor to v13** (`--kl-anchor v13_r12_latest.pt --kl-coef 0.3`, init from the same file) + **death penalty removed** (`--death-scale 0`); v13's ladder unchanged; a 2-pod CPU **held-out evaluator** alongside | running; updates 15–24 fleet mean **succ 8.4 ± 1.5%**, death ~52%, `klA` 0.012 — **flat against its own v13 init (7.4%)** | pending |
-| `gohma-kl-v15` | 4 (10-05) | **`g_approach`**: 0.5 per 100 units of NET horizontal progress toward Gohma, cap 3.0, silent during her attack frames. Everything else identical to v14 (same anchor, `--kl-coef 0.3`, `--death-scale 0`, same ladder), resumed per-rank from `runs/gohma-kl-v14-r{rank}/checkpoints/latest.pt` at v14 update ~33 | running | pending |
+| `gohma-kl-v15` | 4 (10-05) | **`g_approach`**: 0.5 per 100 units of NET horizontal progress toward Gohma, cap 3.0, silent during her attack frames. Everything else identical to v14 (same anchor, `--kl-coef 0.3`, `--death-scale 0`, same ladder), resumed per-rank from v14 update ~33 | **stopped at update 40** (960k steps/rank, 834 eps/rank). Train succ 7.8-12.4%, `klA` 0.0146->0.0167. Eval: **9/160 = 5.6%** vs v14's 18/559 = 3.2%, **p 0.122, not significant** | `checkpoints/kept/gohma-kl-v15-r4_latest.pt` |
 
 **v14 is two changes at once** (anchor + no death penalty), so a positive result will not say which did
 it. That was accepted deliberately to get one run instead of two; it is recorded here so no paper claims the
@@ -221,7 +221,46 @@ Validated against the three recorded human fights (`runs/manual/boss_*.jsonl`) t
 (1.2%)**, so it is a positioning nudge and cannot dominate an episode. It pays the same +3.00 on the human
 **death**, which is expected — it is shaping, and the outcome terms are what separate win from loss. **M**.
 
-**Step-axis discontinuity:** v15 resumes by `--init-from`, not `--resume`, so its `update` counter restarts
+**v15's result, in full, as of the fleet being stopped at update 40.** 160 evaluation episodes over 4
+full-suite runs (its updates 25–35), against v14's 559-episode baseline. One-sided Fisher exact, Wilson
+intervals:
+
+| band | v15 | 95% CI | v14 | 95% CI | p |
+|---|---|---|---|---|---|
+| near < 200u | 5/48 | 4.5–22.2% | 11/128 | 4.9–14.7% | 0.453 |
+| mid 200–400u | 2/40 | 1.4–16.5% | 4/159 | 1.0–6.3% | 0.347 |
+| far > 400u | 2/72 | 0.8–9.6% | 3/272 | 0.4–3.2% | 0.281 |
+| full HP (10) | 2/56 | 1.0–12.1% | 3/176 | 0.6–4.9% | 0.349 |
+| **overall** | **9/160** | 3.0–10.3% | 18/559 | 2.0–5.0% | **0.122** |
+
+**The verdict is UNPROVEN, class U, and must not be cited as an improvement.** Every interval overlaps v14's
+and nothing approaches p<0.05. What is true and worth keeping is the *shape*: all four bands point the same
+way, and the **near** band — the one that was never broken — moved least (5/48 vs 11/128), which is the
+asymmetry an approach reward predicts and that noise has no reason to produce. The power calculation says
+~400 far-band episodes would be needed for p≈0.04 at the observed 3.57%; 72 were collected.
+
+`reward/approach` was confirmed firing in live episodes at **mean +0.609/episode across 18 ranks** (range
+0.257–0.982), i.e. ~120 units of net horizontal progress per episode against start distances of 188–541. The
+cap is 3.0 and the human win banks the full 3.0, so **the term was active and the behaviour it pays for was
+only ~20% realised** — if the trend is real but weak, raising the coefficient is the untested next step.
+
+**Three instrument bugs were found and fixed during this run, each of which had been corrupting the
+measurement silently:**
+
+1. **The publish pointer dropped every checkpoint from the resumed run.** `FleetLink._publish_policy`
+   guarded on `update > cur["update"]`, and v15's counter restarted at 0 against v14's stale pointer at 40 —
+   so v15's publishes at 5/10/15/20 were all discarded and the eval fleet re-scored a 57-minute-old v14
+   checkpoint while logging that it was watching the live experiment. It would have unblocked itself once
+   v15 passed update 40. Guard is now per-launch.
+2. **A Dolphin failing to boot orphaned the other eleven.** Env construction sat outside the `try/finally`,
+   so one `N64 RAM not found` left 12 processes alive owned by nobody, and the next checkpoint would have
+   started twelve more. Observed live. Partial failures now close what came up, plus one retry.
+3. **The eval shard balanced by slot COUNT across slots that differ 6x in cost.** Slots 6 (210 s) and 8
+   (251 s) both landed on one pod (7.4 min/suite vs 3.0), and slots 4/8/10 — three of the four starts beyond
+   400 units — were all on the slow pod, throttling the exact band the result depended on. Now greedy
+   longest-processing-time: 479 s vs 458 s.
+
+**Step-axis discontinuity:** v15 resumes by `--init-from`**Step-axis discontinuity:** v15 resumes by `--init-from`, not `--resume`, so its `update` counter restarts
 at 0 while the weights continue from v14 update ~33. **Reproducing v11–v14 under the `simple` preset now
 requires `--combat-json '{"g_approach": 0}'`**, because the preset turns the term on.
 
