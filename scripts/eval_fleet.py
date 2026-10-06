@@ -64,6 +64,31 @@ TIERS = {"full_hp_10": [3, 5, 8], "mid_hp_6_8": [4, 6], "half_hp_5": [1, 2, 7, 9
 # carries the band breakdown and the collinearity warning so that confound cannot be read past.
 BANDS = {"near_lt200": lambda d: d < 200, "mid_200_400": lambda d: 200 <= d <= 400, "far_gt400": lambda d: d > 400}
 
+# Measured mean episode length per slot, over 519 evaluation episodes on disk. Slots differ by 6x: slot 8
+# runs to the 300 s cap 75% of the time (251 s mean) while slot 9 dies in 41 s. Sharding by `slots[rank::N]`
+# put slots 6 (210 s) and 8 (251 s) on the SAME pod, so one suite took 7.4 min there and 3.0 min on the
+# other -- and slots 4/8/10, three of the four starts beyond 400 units, were all on the slow pod. The far
+# band is the band the approach-reward result depends on, so the imbalance was throttling exactly the
+# measurement being waited on.
+SLOT_SECS = {8: 251.0, 6: 210.0, 4: 81.0, 10: 76.0, 3: 70.0, 5: 60.0, 7: 55.0, 2: 51.0, 1: 42.0, 9: 41.0}
+
+
+def shard_slots(slots, rank, world):
+    """Split slots across eval ranks by measured COST, not by count (longest-processing-time first).
+
+    Greedy LPT: hand each slot, heaviest first, to whichever rank has the least work so far. On the ten
+    slots this balances 479 s against 458 s (1.05x) where round-robin gave 2.5x.
+    """
+    if world <= 1:
+        return list(slots)
+    bins = [[] for _ in range(world)]
+    load = [0.0] * world
+    for sl in sorted(slots, key=lambda x: -SLOT_SECS.get(x, 100.0)):
+        i = min(range(world), key=lambda j: load[j])
+        bins[i].append(sl)
+        load[i] += SLOT_SECS.get(sl, 100.0)
+    return sorted(bins[rank])
+
 
 def held_out(cfg) -> list[int]:
     """Slots this checkpoint's own run did NOT train on."""
@@ -243,7 +268,7 @@ def run_one(ckpt, a):
     # Shard the SLOTS across eval ranks, not the checkpoints. Sharding checkpoints makes each pod wait a full
     # suite before the next policy is scored; sharding slots makes every pod work on the SAME policy and cuts
     # the latency per checkpoint, which is what decides whether the signal arrives before the next publish.
-    mine = slots[a.fleet_rank::a.fleet_world_size] if a.fleet_world_size > 1 else slots
+    mine = shard_slots(slots, a.fleet_rank, a.fleet_world_size)
     if not mine:
         mine = slots[:1]
     eps_total = a.episodes_per_slot * len(mine)
