@@ -212,10 +212,15 @@ def run_one(ckpt, a):
           f"x {a.episodes_per_slot} = {eps_total} episodes")
     eps, _ = evaluate(ckpt, mine, eps_total, a.envs, a.slots_dir, a.episode_seconds, a.deterministic)
     s = score(eps)
+    hos = [x for x in mine if x not in set(trained)]
+    # The HELD-OUT-ONLY sub-score. Selection used to read `s["defeat_rate"]` while printing "on held-out
+    # slots", which under --suite full is the rate pooled over all ten starts, TRAINED ONES INCLUDED. The
+    # label was wrong, not the arithmetic, and a mislabelled selection metric silently chooses the wrong
+    # checkpoint. `s["holdout"]` is now computed from the held-out episodes alone and is what `best` reads.
+    s["holdout"] = score([e for e in eps if e["slot"] in set(hos)]) if hos else None
     s.update(checkpoint=str(ckpt), update=model_cfg.get("update"), slots=mine, trained_slots=trained,
              suite=a.suite, rank=a.fleet_rank, world_size=a.fleet_world_size,
-             held_out_slots=[x for x in mine if x not in set(trained)],
-             ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
+             held_out_slots=hos, ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
     fh = s["full_hp_defeat_rate"]
     print(f"  ALL   defeat {s['defeat_rate']*100:5.2f}%  death {s['death_rate']*100:5.1f}%  "
           f"timeout {s['timeout_rate']*100:5.1f}%  bossHP {s['boss_hp_taken']:4.2f}  "
@@ -246,6 +251,34 @@ def run_one(ckpt, a):
               f"death {v['death_rate']*100:5.0f}%  n={v['n']}")
     return s
 
+
+
+
+def wb_payload(s):
+    """Flatten a row for W&B. The held-out sub-score is a nested dict, and the previous comprehension kept
+    only top-level scalars -- so the one metric the eval fleet exists to produce never reached W&B at all."""
+    out = {f"eval/{k}": v for k, v in s.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    for k, v in (s.get("holdout") or {}).items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[f"holdout/{k}"] = v
+    for grp in ("by_tier", "by_distance"):
+        for name, d in (s.get(grp) or {}).items():
+            out[f"{grp}/{name}/defeat_rate"] = d["defeat_rate"]
+            out[f"{grp}/{name}/boss_hp_taken"] = d["boss_hp_taken"]
+    return out
+
+def sel_key(s):
+    """What `best` is ranked on: the HELD-OUT defeat rate, with held-out boss HP taken as the tiebreak.
+
+    The user's criterion is "keep the policy that is best on unseen starts". Taken literally it has no
+    resolution here: every v14 checkpoint scores 0/32 on the held-out slots, so a strict `>` never fires and
+    the first checkpoint seen stays `best` forever -- the selector was choosing by arrival order while
+    printing a percentage. Boss HP taken is the same quantity measured with resolution (it ranges 1.0-4.7
+    across these rows), so it breaks the ties without changing the criterion. It is a TIEBREAK only: a
+    checkpoint that defeats her more often on unseen starts always wins.
+    """
+    h = s.get("holdout") or s
+    return (h["defeat_rate"], h["boss_hp_taken"])
 
 def main():
     p = argparse.ArgumentParser()
@@ -351,12 +384,12 @@ def main():
                         s_["published_update"] = ptr["update"]
                         emit(s_)
                         if wb is not None:
-                            wb.log({f"holdout/{k}": v for k, v in s_.items()
-                                    if isinstance(v, (int, float)) and not isinstance(v, bool)},
-                                   step=ptr["update"])
-                        if best is None or s_["defeat_rate"] > best["defeat_rate"]:
+                            wb.log(wb_payload(s_), step=ptr["update"])
+                        if best is None or sel_key(s_) > sel_key(best):
                             best = s_
-                            print(f"  >>> NEW BEST on held-out slots: {s_['defeat_rate']*100:.2f}% "
+                            hh = s_.get("holdout") or s_
+                            print(f"  >>> NEW BEST on held-out slots {s_['held_out_slots']}: "
+                                  f"{hh['defeat_rate']*100:.2f}% defeat, bossHP {hh['boss_hp_taken']:.2f} "
                                   f"(published update {ptr['update']}) -- the KL anchor candidate")
                             if a.out:
                                 Path(a.out).with_suffix(".best.json").write_text(json.dumps(best, indent=2))
@@ -382,12 +415,13 @@ def main():
             emit(s)
             if wb is not None:
                 upd = s.get("update") or 0
-                wb.log({f"holdout/{k}": v for k, v in s.items()
-                        if isinstance(v, (int, float)) and not isinstance(v, bool)}, step=upd)
-            if best is None or s["defeat_rate"] > best["defeat_rate"]:
+                wb.log(wb_payload(s), step=upd)
+            if best is None or sel_key(s) > sel_key(best):
                 best = s
                 # THE POINT: `best` is by HELD-OUT defeat rate, not by the last checkpoint written.
-                print(f"  >>> NEW BEST on held-out slots: {s['defeat_rate']*100:.2f}% "
+                hh = s.get("holdout") or s
+                print(f"  >>> NEW BEST on held-out slots {s['held_out_slots']}: "
+                      f"{hh['defeat_rate']*100:.2f}% defeat, bossHP {hh['boss_hp_taken']:.2f} "
                       f"({f.name}) -- this is the KL anchor candidate")
                 if a.out:
                     Path(a.out).with_suffix(".best.json").write_text(json.dumps(best, indent=2))
