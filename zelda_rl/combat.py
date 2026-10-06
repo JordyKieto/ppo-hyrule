@@ -349,6 +349,26 @@ class CombatConfig:
     #   expressible until ("L", "R") was added to the action space: the policy could lock on OR shield, never
     #   both. Gated on GOHMA_ATTACK so it pays for defence rather than for standing still. Default 0.0 keeps
     #   the `full` baseline reproducible; the `simple` preset turns it on.
+    g_approach: float = 0.0            # per 100 units of NET progress toward Gohma, outside her attack frames.
+    g_approach_cap: float = 3.0        #   The gap the 10-slot eval exposed: GohmaTracker.step fully replaces
+    #   CombatTracker.step and never calls super(), so the generic `approach` term (w_approach, paid in
+    #   CombatTracker) has NEVER fired on Gohma. The only distance term that ran was `approach_stunned`, gated
+    #   on GOHMA_STUNNED -- it pays for closing the last few units AFTER she is already down, and pays nothing
+    #   for crossing the room to reach her. Measured on 80 episodes at v14 update 20: 18.75% defeat from under
+    #   200 units, 4.17% at 200-400, 2.50% beyond 400. The policy can fight her and cannot reach her.
+    #
+    #   Paid on NET progress (closer than the closest it has been this episode), not on the per-step delta.
+    #   A signed per-step delta is farmable by oscillating in and out, and `_capped` ignores negative values
+    #   so the retreat half would have been free -- the exact shape of the g_sling_ready and g_spacing farming
+    #   this project has already paid for twice. Net progress is monotone: the total is bounded by the start
+    #   distance regardless of the path, so there is nothing to farm.
+    #
+    #   NOT paid during GOHMA_ATTACK, where g_spacing pays for holding the 150-600 band. The two terms would
+    #   otherwise bid against each other on the same step. Phase separation is the existing design intent
+    #   ("close when she is not swinging, hold off when she is"), not a new idea.
+    #
+    #   Scale: the furthest slot starts 490 units out, so closing to sword range is ~4 units of progress =
+    #   +2.0 at 0.5, against boss_defeat's +60. Default 0.0 keeps every earlier run reproducible.
     g_stun_on_convert: bool = False    # pay seed_stun / nut_stun only when that stun is CONVERTED into damage.
     #   Default False keeps the measured baseline reproducible; the `simple` preset turns it on. Paying at the
     #   stun TRANSITION rewards the stun itself, so a policy can farm stuns it never cashes in: measured
@@ -607,6 +627,8 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
     "g_guard": 0.0,
     "g_spacing": 0.02,
+    # the approach channel, new in v15. See g_approach in CombatConfig for why it was absent until now.
+    "g_approach": 0.5,
 }
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),

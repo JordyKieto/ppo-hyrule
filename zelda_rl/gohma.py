@@ -93,6 +93,14 @@ def larva_state(e: Enemy) -> str:
     return LARVA_STATE.get(e.fn_rel, "other")
 
 
+def hdist(a, b) -> float:
+    """Horizontal (x/z) distance. g_approach uses this, not math.dist: Gohma spends most of the fight on the
+    CEILING and then descends, so a 3D gap shrinks by ~her ceiling height when SHE comes down and Link has not
+    moved. Measured on the recorded human win, the 3D form paid its entire cap and a third of that was her
+    descent. The quantity the reward means is the floor distance Link has to cross."""
+    return math.hypot(a[0] - b[0], a[2] - b[2])
+
+
 def find_gohma(s: CombatState) -> Enemy | None:
     return next((e for e in s.enemies.values() if kind(e) == "gohma"), None)
 
@@ -142,6 +150,9 @@ class GohmaTracker(CombatTracker):
                        stun_hits=0, boss_attacks=0, boss_blocks=0, vulnerable_steps=0, vulnerable_lock_steps=0,
                        sling_aim_steps=0, sling_ready_steps=0, elevated_seeds=0, seed_misses=0,
                        nut_misses=0, larva_kills_sling=0, grass_cut=0, seeds_picked=0, nuts_picked=0, dropped_red_eye_shots=0, unfired_red_eye_windows=0, time_to_defeat_s=None, boss_hp_end=g.hp if g else 0)
+        # Closest Link has been to Gohma this episode, seeded from the START distance. Seeding it to infinity
+        # made the first step bank the whole cap with Link standing still -- caught by tests/test_gohma_approach.py.
+        self._d_best = hdist(g.pos, s.pos) if g else math.inf
         self._r = {}                              # running totals of capped shaping terms
         self.pending_shots: list[dict] = []
         self.window = None
@@ -413,7 +424,7 @@ class GohmaTracker(CombatTracker):
             vulnerable = gs in GOHMA_VULNERABLE
             sling = cur.held_item == HELD_SLINGSHOT
             if gs in GOHMA_ATTACK:
-                d_now = math.dist(g.pos, cur.pos)
+                d_now = hdist(g.pos, cur.pos)
                 if c.g_spacing_range < d_now <= c.g_spacing_far:
                     ep["spacing_steps"] = ep.get("spacing_steps", 0) + 1
                     self._capped(pay, "spacing", c.g_spacing, c.g_spacing_cap)
@@ -450,6 +461,16 @@ class GohmaTracker(CombatTracker):
                     if self.window is not None and not self.window["ready_paid"]:      # once per red-eye window
                         self.window["ready_paid"] = True
                         self._capped(pay, "sling_ready", c.g_sling_ready, c.g_sling_ready_cap)
+            # ---- g_approach: NET progress toward her, outside her attack frames. Paid on the best distance
+            # achieved this episode, so oscillating in and out cannot farm it; see g_approach in CombatConfig.
+            d_now = math.dist(g.pos, cur.pos)
+            if math.isfinite(d_now):
+                if (gs not in GOHMA_ATTACK and c.g_approach > 0
+                        and math.isfinite(self._d_best) and d_now < self._d_best):
+                    self._capped(pay, "approach", c.g_approach * (self._d_best - d_now) / 100.0, c.g_approach_cap)
+                # Updated on EVERY step, including her attack frames: ground covered while g_spacing owns the
+                # step is absorbed rather than paid twice.
+                self._d_best = d_now if not math.isfinite(self._d_best) else min(self._d_best, d_now)
             if gs in GOHMA_STUNNED:                                # close the distance for the sword window
                 d0, d1 = math.dist(g_prev.pos, prev.pos) if g_prev else math.nan, math.dist(g.pos, cur.pos)
                 if math.isfinite(d0) and math.isfinite(d1) and d1 > c.g_sword_range:
