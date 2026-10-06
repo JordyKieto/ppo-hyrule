@@ -148,6 +148,7 @@ exported. Session boundaries are where the reward or the start set changed.
 | `gohma-band-v12` | 3 | curriculum **inverted**: 60% full-HP starts | stalled, trend **+0.098/update**; full-HP wins 4/2,008 | **`results/1czvz74p/`** (31 rows) |
 | `gohma-band-v13` | 3 | **graded ladder** 30% at 5 HP / 30% at 6–8 HP / 40% full | peak 7.26% defeat; **full-HP rate 0.64%, 21× v11**; plateaued ~update 50 | **`results/kj9ypr7w/`** (74 rows) |
 | `gohma-kl-v14` | **4 (10-05)** | **KL anchor to v13** (`--kl-anchor v13_r12_latest.pt --kl-coef 0.3`, init from the same file) + **death penalty removed** (`--death-scale 0`); v13's ladder unchanged; a 2-pod CPU **held-out evaluator** alongside | running; updates 15–24 fleet mean **succ 8.4 ± 1.5%**, death ~52%, `klA` 0.012 — **flat against its own v13 init (7.4%)** | pending |
+| `gohma-kl-v15` | 4 (10-05) | **`g_approach`**: 0.5 per 100 units of NET horizontal progress toward Gohma, cap 3.0, silent during her attack frames. Everything else identical to v14 (same anchor, `--kl-coef 0.3`, `--death-scale 0`, same ladder), resumed per-rank from `runs/gohma-kl-v14-r{rank}/checkpoints/latest.pt` at v14 update ~33 | running | pending |
 
 **v14 is two changes at once** (anchor + no death penalty), so a positive result will not say which did
 it. That was accepted deliberately to get one run instead of two; it is recorded here so no paper claims the
@@ -192,6 +193,37 @@ The useful number from the same 80 episodes is the **distance gradient: 18.75% �
 from <200u to >400u. This moves claim **R9** (distance, not boss HP, is the residual wall) from **I** to **M**:
 it was inferred from slot 8 alone and is now measured across three bands of a ten-slot suite. Full HP is
 1/24 here, which at n=24 is *not* distinguishable from v13's 0.64% — the interval covers both.
+
+**Why v15 exists: Gohma had never had an approach reward at all.** `GohmaTracker.step` fully replaces
+`CombatTracker.step` and never calls `super()`, so the generic `approach` term (`w_approach`,
+`zelda_rl/combat.py`) **never fired in any of v1–v14**. The only distance term that ran was
+`approach_stunned`, gated on `GOHMA_STUNNED` — it pays for closing the last few units *after* she is already
+knocked down, and pays nothing for crossing the room to reach her. The 18.75% → 2.50% distance gradient above
+is a reward gap, not a capacity limit: nothing ever asked the policy to approach. **A**, confirmed by reading
+both `step` implementations.
+
+`g_approach` is paid on **net** progress (closer than the closest Link has been this episode), not the
+per-step delta: a signed delta is farmable by oscillating, and `_capped` ignores negative values, so the
+retreat half would have been free — the same shape as the `g_sling_ready` and `g_spacing` farming already
+recorded above. It is silent during `GOHMA_ATTACK`, where `g_spacing` pays for holding the 150–600 band.
+
+Two bugs were caught by `tests/test_gohma_approach.py` **before** any compute went into them, and both are
+the kind that would have produced a confident wrong conclusion:
+
+1. `_d_best` seeded to infinity made the **first step bank the entire 3.0 cap with Link standing still**.
+   Seeded from the start distance instead.
+2. `math.dist` is 3D and Gohma spends the fight on the **ceiling** before descending, so the gap shrank by
+   roughly her ceiling height when *she* came down and Link had not moved. On the recorded human win a third
+   of the payment was her descent. `hdist` is horizontal (x/z) — the floor distance Link must cross.
+
+Validated against the three recorded human fights (`runs/manual/boss_*.jsonl`) through
+`scripts/replay_gohma_trace.py`'s loader: the human **win** pays `approach` **+3.00 of a +247.17 return
+(1.2%)**, so it is a positioning nudge and cannot dominate an episode. It pays the same +3.00 on the human
+**death**, which is expected — it is shaping, and the outcome terms are what separate win from loss. **M**.
+
+**Step-axis discontinuity:** v15 resumes by `--init-from`, not `--resume`, so its `update` counter restarts
+at 0 while the weights continue from v14 update ~33. **Reproducing v11–v14 under the `simple` preset now
+requires `--combat-json '{"g_approach": 0}'`**, because the preset turns the term on.
 
 **Observation evolution** (each is a widening, function-preserving at load via `zelda_rl/transfer.py`):
 v4 483 → **v5 552** (+Gohma/larva/item blocks, actions 63 → 90) → **v6 675** (+raw aim pitch/yaw, camera and
