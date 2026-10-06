@@ -1,0 +1,214 @@
+{
+  "n": 40,
+  "defeat_rate": 0.025,
+  "death_rate": 0.7,
+  "timeout_rate": 0.275,
+  "boss_hp_taken": 1.775,
+  "return": 24.77121490611568,
+  "length_s": 139.495,
+  "episodes": 40,
+  "by_slot": {
+    "2": {
+      "n": 8,
+      "defeat_rate": 0.125,
+      "death_rate": 0.875,
+      "timeout_rate": 0.0,
+      "boss_hp_taken": 2.25,
+      "return": 58.26995456632276,
+      "length_s": 66.9375,
+      "hp": 5,
+      "dist": 368
+    },
+    "4": {
+      "n": 8,
+      "defeat_rate": 0.0,
+      "death_rate": 1.0,
+      "timeout_rate": 0.0,
+      "boss_hp_taken": 2.375,
+      "return": 24.86055655505451,
+      "length_s": 78.0625,
+      "hp": 8,
+      "dist": 541
+    },
+    "6": {
+      "n": 8,
+      "defeat_rate": 0.0,
+      "death_rate": 0.5,
+      "timeout_rate": 0.5,
+      "boss_hp_taken": 0.875,
+      "return": 3.3906197899973023,
+      "length_s": 184.2,
+      "hp": 6,
+      "dist": 357
+    },
+    "8": {
+      "n": 8,
+      "defeat_rate": 0.0,
+      "death_rate": 0.125,
+      "timeout_rate": 0.875,
+      "boss_hp_taken": 0.25,
+      "return": -10.181192376355588,
+      "length_s": 273.15,
+      "hp": 10,
+      "dist": 448
+    },
+    "10": {
+      "n": 8,
+      "defeat_rate": 0.0,
+      "death_rate": 1.0,
+      "timeout_rate": 0.0,
+      "boss_hp_taken": 3.125,
+      "return": 47.51613599555942,
+      "length_s": 95.125,
+      "hp": 5,
+      "dist": 490
+    }
+  },
+  "by_tier": {
+    "full_hp_10": {
+      "n": 8,
+      "defeat_rate": 0.0,
+      "death_rate": 0.125,
+      "timeout_rate": 0.875,
+      "boss_hp_taken": 0.25,
+      "return": -10.181192376355588,
+      "length_s": 273.15
+    },
+    "mid_hp_6_8": {
+      "n": 16,
+      "defeat_rate": 0.0,
+      "death_rate": 0.75,
+      "timeout_rate": 0.25,
+      "boss_hp_taken": 1.625,
+      "return": 14.125588172525907,
+      "length_s": 131.13125
+    },
+    "half_hp_5": {
+      "n": 16,
+      "defeat_rate": 0.0625,
+      "death_rate": 0.9375,
+      "timeout_rate": 0.0,
+      "boss_hp_taken": 2.6875,
+      "return": 52.89304528094109,
+      "length_s": 81.03125
+    }
+  },
+  "by_distance": {
+    "mid_200_400": {
+      "n": 16,
+      "defeat_rate": 0.0625,
+      "death_rate": 0.6875,
+      "timeout_rate": 0.25,
+      "boss_hp_taken": 1.5625,
+      "return": 30.83028717816003,
+      "length_s": 125.56875
+    },
+    "far_gt400": {
+      "n": 24,
+      "defeat_rate": 0.0,
+      "death_rate": 0.7083333333333334,
+      "timeout_rate": 0.2916666666666667,
+      "boss_hp_taken": 1.9166666666666667,
+      "return": 20.731833391419446,
+      "length_s": 148.77916666666667
+    }
+  },
+  "full_hp_episodes": 8,
+  "full_hp_defeats": 0,
+  "full_hp_defeat_rate": 0.0,
+  "holdout": {
+    "n": 16,
+    "defeat_rate": 0.0625,
+    "death_rate": 0.9375,
+    "timeout_rate": 0.0,
+    "boss_hp_taken": 2.6875,
+    "return": 52.89304528094109,
+    "length_s": 81.03125,
+    "episodes": 16,
+    "by_slot": {
+      "2": {
+        "n": 8,
+        "defeat_rate": 0.125,
+        "death_rate": 0.875,
+        "timeout_rate": 0.0,
+        "boss_hp_taken": 2.25,
+        "return": 58.26995456632276,
+        "length_s": 66.9375,
+        "hp": 5,
+        "dist": 368
+      },
+      "10": {
+        "n": 8,
+        "defeat_rate": 0.0,
+        "death_rate": 1.0,
+        "timeout_rate": 0.0,
+        "boss_hp_taken": 3.125,
+        "return": 47.51613599555942,
+        "length_s": 95.125,
+        "hp": 5,
+        "dist": 490
+      }
+    },
+    "by_tier": {
+      "half_hp_5": {
+        "n": 16,
+        "defeat_rate": 0.0625,
+        "death_rate": 0.9375,
+        "timeout_rate": 0.0,
+        "boss_hp_taken": 2.6875,
+        "return": 52.89304528094109,
+        "length_s": 81.03125
+      }
+    },
+    "by_distance": {
+      "mid_200_400": {
+        "n": 8,
+        "defeat_rate": 0.125,
+        "death_rate": 0.875,
+        "timeout_rate": 0.0,
+        "boss_hp_taken": 2.25,
+        "return": 58.26995456632276,
+        "length_s": 66.9375
+      },
+      "far_gt400": {
+        "n": 8,
+        "defeat_rate": 0.0,
+        "death_rate": 1.0,
+        "timeout_rate": 0.0,
+        "boss_hp_taken": 3.125,
+        "return": 47.51613599555942,
+        "length_s": 95.125
+      }
+    },
+    "full_hp_episodes": 0,
+    "full_hp_defeats": 0,
+    "full_hp_defeat_rate": NaN
+  },
+  "checkpoint": "/workspace/zelda-RL/checkpoints/eval_inbox/gohma-kl_r9_u00040.pt",
+  "update": null,
+  "slots": [
+    2,
+    4,
+    6,
+    8,
+    10
+  ],
+  "trained_slots": [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "suite": "full",
+  "rank": 1,
+  "world_size": 2,
+  "held_out_slots": [
+    2,
+    10
+  ],
+  "ts": "2026-10-06T03:09:46",
+  "holdout_confounded": true,
+  "published_update": 40
+}

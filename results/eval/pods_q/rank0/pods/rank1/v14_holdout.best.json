@@ -1,0 +1,46 @@
+{
+  "episodes": 40,
+  "defeat_rate": 0.1,
+  "death_rate": 0.9,
+  "boss_hp_taken": 1.95,
+  "return": 42.071156872923495,
+  "full_hp_episodes": 0,
+  "full_hp_defeats": 0,
+  "by_slot": {
+    "1": {
+      "n": 16,
+      "defeats": 2
+    },
+    "2": {
+      "n": 8,
+      "defeats": 0
+    },
+    "9": {
+      "n": 8,
+      "defeats": 1
+    },
+    "10": {
+      "n": 8,
+      "defeats": 1
+    }
+  },
+  "checkpoint": "/workspace/zelda-RL/checkpoints/eval_inbox/gohma-kl_r0_u00010.pt",
+  "update": null,
+  "slots": [
+    1,
+    2,
+    9,
+    10
+  ],
+  "trained_slots": [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "held_out": true,
+  "ts": "2026-10-06T02:07:20",
+  "published_update": 10
+}

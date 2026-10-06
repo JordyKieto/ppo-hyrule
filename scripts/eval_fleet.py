@@ -207,6 +207,8 @@ def run_one(ckpt, a):
     if not mine:
         mine = slots[:1]
     eps_total = a.episodes_per_slot * len(mine)
+    print(f"  run {model_cfg.get('run_name')} (group {model_cfg.get('wandb_group')}), its update "
+          f"{model_cfg.get('update')}")
     print(f"  trained on {trained or 'unknown'} | suite: {label}")
     print(f"  rank {a.fleet_rank}/{a.fleet_world_size} evaluating slots {mine} "
           f"x {a.episodes_per_slot} = {eps_total} episodes")
@@ -218,6 +220,11 @@ def run_one(ckpt, a):
     # label was wrong, not the arithmetic, and a mislabelled selection metric silently chooses the wrong
     # checkpoint. `s["holdout"]` is now computed from the held-out episodes alone and is what `best` reads.
     s["holdout"] = score([e for e in eps if e["slot"] in set(hos)]) if hos else None
+    # WHICH RUN produced this checkpoint. v15 resumes with --init-from, so its `update` counter restarts at
+    # 0 while the published filename stays gohma-kl_r{rank}_u{update}.pt -- v14 u00005 and v15 u00005 are
+    # different policies with the same name, and pooling them in one jsonl would be unrecoverable later.
+    # The checkpoint carries run_name and wandb_group, so the row records them and is self-describing.
+    s.update(run_name=model_cfg.get("run_name"), wandb_group=model_cfg.get("wandb_group"))
     s.update(checkpoint=str(ckpt), update=model_cfg.get("update"), slots=mine, trained_slots=trained,
              suite=a.suite, rank=a.fleet_rank, world_size=a.fleet_world_size,
              held_out_slots=hos, ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
