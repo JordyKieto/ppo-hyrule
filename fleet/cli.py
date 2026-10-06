@@ -851,6 +851,65 @@ def cmd_metrics(a) -> None:
     print("(mean across ranks; each pod trains its own shard and weights are averaged every epoch)")
 
 
+def cmd_ppo(a) -> None:
+    """Fleet-wide PPO curve, straight from each rank's train log. The answer to "is it improving".
+
+    `fleet metrics` reads the world-model trainer's metrics.jsonl and says "no metrics yet" for a PPO run,
+    so every "status?" during a Gohma fleet became a hand-written ssh fan-out -- which is the thing AGENTS
+    17 and 21 exist to stop. One rank's succ column swings 0%-18% between consecutive updates on ~20
+    episodes, so the per-rank rows are printed for liveness and the FLEET MEAN at a shared update is the
+    only number to read.
+    """
+    st = load_state(a.experiment)
+    PROBE = (
+        "import glob,sys;"
+        "fs=sorted(glob.glob('/workspace/zelda-RL/logs/*.log'),key=lambda f:__import__('os').path.getmtime(f));"
+        "out=[]\n"
+        "for l in (open(fs[-1]) if fs else []):\n"
+        "    p=l.split()\n"
+        "    if len(p)>8 and p[1]=='INFO' and p[2].isdigit() and p[5].endswith('%'):\n"
+        "        k=l.split('klA')[1].split()[0] if 'klA' in l else '-'\n"
+        "        out.append(','.join([p[2],p[3].replace(',',''),p[5].rstrip('%'),p[7].rstrip('%'),k]))\n"
+        "print('|'.join(out[-int(sys.argv[1]):]))"
+    )
+
+    def one(pod):
+        try:
+            return (pod["rank"], run(pod, f"python3 -c {shlex.quote(PROBE)} {a.last} 2>/dev/null || echo ''",
+                                     capture=True).strip())
+        except Exception:                                                               # noqa: BLE001
+            return (pod["rank"], "")
+
+    res = sorted(for_pods(select(st, a.ranks), one, workers=24))
+    per_upd: dict[int, list[tuple[float, float, float]]] = {}
+    print(f"{'rank':>4} {'upd':>5} {'steps':>10} {'succ':>6} {'death':>6} {'klA':>7}")
+    quiet = []
+    for rank, out in res:
+        recs = [r.split(",") for r in out.split("|") if r.count(",") == 4]
+        if not recs:
+            quiet.append(rank)
+            continue
+        for u, s, sc, de, kl in recs:
+            try:
+                per_upd.setdefault(int(u), []).append((float(sc), float(de),
+                                                       float(kl) if kl not in ("-", "") else float("nan")))
+            except ValueError:
+                pass
+        u, s, sc, de, kl = recs[-1]
+        print(f"{rank:>4} {u:>5} {int(s):>10,} {sc + '%':>6} {de + '%':>6} {kl:>7}")
+    if quiet:
+        print(f"  no update lines yet on ranks {quiet} -- still in the first rollout, or not training")
+    if per_upd:
+        print("\nFLEET MEAN (succ and death averaged over the ranks that reached that update)")
+        for u in sorted(per_upd)[-a.last:]:
+            v = per_upd[u]
+            sc = sum(x[0] for x in v) / len(v)
+            de = sum(x[1] for x in v) / len(v)
+            kl = [x[2] for x in v if x[2] == x[2]]
+            klt = f"  klA {sum(kl)/len(kl):.4f}" if kl else ""
+            print(f"  upd {u:>4}  succ {sc:5.1f}%  death {de:5.1f}%{klt}   [{len(v)} ranks]")
+
+
 def cmd_ssh(a) -> None:
     st = load_state(a.experiment)
     pod = select(st, str(a.rank))[0]
@@ -999,6 +1058,8 @@ def main() -> None:
     p = add("metrics", cmd_metrics)
     p.add_argument("--dir", default="runs/wm-fleet", help="--ckpt-dir used at launch")
     p.add_argument("--last", type=int, default=12, help="show the last N epochs")
+    p = add("ppo", cmd_ppo)
+    p.add_argument("--last", type=int, default=8, help="show the last N updates")
     p = add("collected", cmd_collected)
     p.add_argument("--out", default="datasets/transitions/v4-collect", help="the collector's --out path")
     p.add_argument("--verbose", action="store_true", help="per-pod breakdown")

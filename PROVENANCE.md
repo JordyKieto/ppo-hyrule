@@ -147,6 +147,27 @@ exported. Session boundaries are where the reward or the start set changed.
 | `gohma-band-v11` | **3 (09-26)** | `--reward simple`: 19 shaping terms zeroed, **stun credit paid only on conversion**; pre-fight slots replaced; **Z+Shield and Z+Nut added to the action space**; spacing term | defeat **3.5% → 7.0%**, death 70.8% → 62.2%, return −1.2 → +21.1, trend **+0.700/update** | **`results/p20rbwq9/`** (38 rows) |
 | `gohma-band-v12` | 3 | curriculum **inverted**: 60% full-HP starts | stalled, trend **+0.098/update**; full-HP wins 4/2,008 | **`results/1czvz74p/`** (31 rows) |
 | `gohma-band-v13` | 3 | **graded ladder** 30% at 5 HP / 30% at 6–8 HP / 40% full | peak 7.26% defeat; **full-HP rate 0.64%, 21× v11**; plateaued ~update 50 | **`results/kj9ypr7w/`** (74 rows) |
+| `gohma-kl-v14` | **4 (10-05)** | **KL anchor to v13** (`--kl-anchor v13_r12_latest.pt --kl-coef 0.3`, init from the same file) + **death penalty removed** (`--death-scale 0`); v13's ladder unchanged; a 2-pod CPU **held-out evaluator** alongside | running; updates 15–24 fleet mean **succ 8.4 ± 1.5%**, death ~52%, `klA` 0.012 — **flat against its own v13 init (7.4%)** | pending |
+
+**v14 is two changes at once** (anchor + no death penalty), so a positive result will not say which did
+it. That was accepted deliberately to get one run instead of two; it is recorded here so no paper claims the
+KL anchor alone from this run. **U**.
+
+**Instrument error in the v14 evaluator, found and fixed 2026-10-05 — two reported holdout numbers are
+withdrawn.** `scripts/eval_fleet.py` round-robined the start slot **per round** rather than per episode, and a
+round ran `--num-envs` episodes. So:
+
+- the first v13 hold-out figure was 48 episodes that all landed on **slot 1**, reported as a four-slot
+  hold-out rate. Withdrawn.
+- the first v14 full-suite rows (`results/eval/pods/rank{0,1}/v14_full.jsonl`, published update 15) ran 12
+  episodes each on 4 slots and **zero on slots 9 and 10**, while listing all five in the row's `slots` field.
+  The per-slot sub-rows in those files are real measurements of the slots they name; the aggregate and the
+  claim of ten-slot coverage are not. The full-HP figure from them (**0/36 defeats**) stands, since both
+  10 HP slots evaluated were among those actually run.
+
+Fixed by replacing the round structure with a per-env work queue, which also removed the round barrier that
+idled eleven emulators behind one 300 s episode: 40 episodes now complete in ~2 min instead of ~7. Rows from
+the fixed evaluator are written to a **separate file** (`v14_full_q.jsonl`) so the two are never pooled.
 
 **Observation evolution** (each is a widening, function-preserving at load via `zelda_rl/transfer.py`):
 v4 483 → **v5 552** (+Gohma/larva/item blocks, actions 63 → 90) → **v6 675** (+raw aim pitch/yaw, camera and

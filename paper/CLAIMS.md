@@ -20,6 +20,9 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R8 | A graded HP curriculum beats both a finisher-heavy and an inverted one | **M** | v11 +0.700/update but 1 full-HP win in 3,023; v12 +0.098; v13 0.64% full-HP, 21× v11 |
 | R9 | The residual blocker is engagement DISTANCE, not boss HP | **I** | slot 8 (already stunned, 448 units) 0 wins / 225 eps at 20% death vs slot 6 (357 units) 3.4%. One run |
 | R10 | The spacing reward improved survival | **U → withdrawn** | `close_attack_steps` never left ~21%; the death-rate fall is not attributable to it |
+| R11 | A KL anchor to the best known policy keeps a PPO fleet from drifting off it | **U** | `gohma-kl-v14`, `klA` steady at 0.012 over updates 15-24: the penalty is active and small. Says nothing yet about outcome |
+| R12 | The KL anchor (or dropping the death penalty) improves Gohma's defeat rate | **U** | flat so far: fleet mean succ 8.4 +/- 1.5% against the v13 init's 7.4%. Two variables changed at once, so a positive result would not separate them |
+| R13 | A per-episode (not per-round) start-slot assignment is required for a hold-out rate to mean anything | **M** | the round version sent 48/48 episodes of the first v13 hold-out to slot 1 and ran 0 episodes on slots 9-10 of the v14 full suite; both numbers withdrawn, PROVENANCE 3.2 |
 
 ## WM track
 

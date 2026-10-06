@@ -50,6 +50,12 @@ from zelda_rl.env import EnvError  # noqa: E402
 from zelda_rl.policy_io import DEFAULT_SLOTS_DIR, load_policy, make_env  # noqa: E402
 
 ALL_SLOTS = list(range(1, 11))
+# Gohma HP at each start, decoded from the savestates (PROVENANCE.md 3.2). The eval reports by TIER as well as
+# by slot, because "defeat rate" over a mixed suite hides which difficulty actually moved -- and the full-HP
+# tier is the task, the rest are rungs.
+SLOT_HP = {1: 5, 2: 5, 3: 10, 4: 8, 5: 10, 6: 6, 7: 5, 8: 10, 9: 5, 10: 5}
+SLOT_DIST = {1: 473, 2: 368, 3: 188, 4: 541, 5: 472, 6: 357, 7: 38, 8: 448, 9: 394, 10: 490}
+TIERS = {"full_hp_10": [3, 5, 8], "mid_hp_6_8": [4, 6], "half_hp_5": [1, 2, 7, 9, 10]}
 
 
 def held_out(cfg) -> list[int]:
@@ -62,63 +68,85 @@ def held_out(cfg) -> list[int]:
 
 @torch.no_grad()
 def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, deterministic=False):
+    """Run `episodes` episodes over `slots`, exactly episodes/len(slots) on each, on `envs_n` emulators.
+
+    Work-QUEUE, not rounds. Two bugs lived in the round version and neither was visible in the output. A
+    round fixed one slot for every env, so `--episodes-per-slot 8` on 12 envs actually ran 12 episodes on
+    slot 1, 12 on slot 3, 12 on slot 5 and 4 on slot 7 -- the per-slot table was real but its counts were
+    not the requested ones, and two slots were never evaluated. And a round ended only when the SLOWEST env
+    finished, so one episode running to the 300 s cap idled eleven emulators. Here every env carries its own
+    slot and pulls the next the instant it terminates: coverage is exact and the only idle time is the tail.
+    """
     model, cfg, _ = load_policy(ckpt)
     rec = bool(cfg.get("recurrent"))
     if seconds:
         cfg = {**cfg, "episode_seconds": seconds}
+    envs_n = max(1, min(envs_n, episodes))
     root = Path(os.environ.get("TMPDIR", "/tmp")) / f"evalf_{os.getpid()}"
-    envs = []
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(envs_n) as pool:
-        envs = list(pool.map(lambda i: make_env(cfg, root / f"i{i}", slots=slots, slots_dir=slots_dir,
-                                                video_backend="Null", unlimited_speed=True, idx=i)[0],
-                             range(envs_n)))
-    out = []
     mk = lambda i: make_env(cfg, root / f"i{i}", slots=slots, slots_dir=slots_dir, video_backend="Null",
                             unlimited_speed=True, idx=i)[0]                            # noqa: E731
-    stalls = 0
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(envs_n) as pool:
+        envs = list(pool.map(mk, range(envs_n)))
+
+    # Interleaved, so partial results already cover every slot, and exact because k % len(slots) visits each
+    # slot equally often when episodes is a multiple of len(slots) -- which the caller guarantees by
+    # computing episodes = episodes_per_slot * len(slots).
+    queue = [int(slots[k % len(slots)]) for k in range(episodes)]
+    cur = [queue.pop(0) for _ in range(envs_n)]
+    h = model.init_hidden(envs_n) if rec else None
+    first = torch.ones(envs_n)
+    obs = np.stack([e.reset(s) for e, s in zip(envs, cur)])
+    out, stalls, t0, nxt = [], 0, time.time(), time.time() + 60.0
+
+    def start(i):
+        """Hand env i the next slot off the queue, or retire it when the queue is empty."""
+        cur[i] = queue.pop(0) if queue else None
+        if cur[i] is not None:
+            obs[i] = envs[i].reset(cur[i])
+            first[i] = 1.0
+
     try:
-        while len(out) < episodes:
-            slot = int(slots[len(out) % len(slots)])          # round-robin, so every slot gets equal weight
+        while any(c is not None for c in cur):
+            live = [i for i in range(envs_n) if cur[i] is not None]
+            x = torch.as_tensor(obs, dtype=torch.float32)
+            if rec:
+                a, _, _, _, h = model.act(x, h, first, deterministic=deterministic)
+            else:
+                a, _, _, _ = model.act(x, deterministic=deterministic)
+            first = torch.zeros(envs_n)
             try:
-                obs = np.stack([e.reset(slot) for e in envs])
-                h = model.init_hidden(len(envs)) if rec else None
-                first = torch.ones(len(envs))
-                alive = [True] * len(envs)
-                while any(alive):
-                    x = torch.as_tensor(obs, dtype=torch.float32)
-                    if rec:
-                        a, _, _, _, h = model.act(x, h, first, deterministic=deterministic)
-                    else:
-                        a, _, _, _ = model.act(x, deterministic=deterministic)
-                    first = torch.zeros(len(envs))
-                    live = [i for i in range(len(envs)) if alive[i]]
-                    for i in live:
-                        envs[i].send_action(int(a[i]))
-                    for i in live:
-                        while not envs[i].ready():
-                            time.sleep(0.0005)
-                    for i in live:
-                        o, r, term, trunc, info = envs[i].observe()
-                        obs[i] = o
-                        if term or trunc:
-                            alive[i] = False
-                            out.append(dict(info["episode"], slot=slot))
+                for i in live:
+                    envs[i].send_action(int(a[i]))
+                for i in live:
+                    while not envs[i].ready():
+                        time.sleep(0.0005)
+                for i in live:
+                    o, r, term, trunc, info = envs[i].observe()
+                    obs[i] = o
+                    if term or trunc:
+                        out.append(dict(info["episode"], slot=cur[i]))
+                        start(i)                      # straight into the next episode, no round barrier
             except EnvError as err:
-                # This Mac stalls a Dolphin every so often (10 s Null-backend stall timeout). Rebuild just the
-                # bad env and drop this round's in-flight episodes rather than losing the whole evaluation --
-                # the same recovery train_combat.py does. Stalls are counted so a flaky run is visible.
+                # A stalled Dolphin (10 s Null-backend timeout) now costs exactly the one episode that env
+                # was running: rebuild it and give it fresh work instead of dropping every env's progress.
                 stalls += 1
-                i = err.idx if err.idx >= 0 else 0
-                print(f"  stall on env{i} ({stalls}) -> rebuilding, dropping this round")
+                i = err.idx if 0 <= err.idx < envs_n else live[0]
+                print(f"  stall on env{i} ({stalls}) -> rebuilt, lost 1 episode", flush=True)
                 try:
                     envs[i].close()
                 except Exception:
                     pass
                 envs[i] = mk(i)
+                start(i)
                 if stalls > 3 + episodes // 4:
-                    print("  too many stalls; reporting what completed")
+                    print("  too many stalls; reporting what completed", flush=True)
                     break
+            if time.time() > nxt:                     # AGENTS 24: no silent minutes
+                d = sum(1 for e in out if e.get("defeat"))
+                print(f"  {len(out)}/{episodes} done, {len(queue)} queued, {d} defeats, "
+                      f"{time.time()-t0:.0f}s", flush=True)
+                nxt = time.time() + 60.0
     finally:
         for e in envs:
             try:
@@ -127,42 +155,70 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
                 pass
     return out, cfg
 
-
 def score(eps):
     n = max(len(eps), 1)
+    def agg(sel):
+        m = max(len(sel), 1)
+        return {"n": len(sel),
+                "defeat_rate": sum(1 for e in sel if e.get("boss_defeated")) / m,
+                "death_rate": sum(1 for e in sel if e.get("died")) / m,
+                "timeout_rate": sum(1 for e in sel if e.get("end") == "timeout") / m,
+                "boss_hp_taken": sum(e.get("boss_damage", 0) for e in sel) / m,
+                "return": sum(e.get("return", 0) for e in sel) / m,
+                "length_s": sum(e.get("length", 0) for e in sel) / m / 10.0}
+    out = dict(agg(eps), episodes=len(eps))
+    out["by_slot"] = {str(sl): dict(agg([e for e in eps if e["slot"] == sl]), hp=SLOT_HP.get(sl),
+                                    dist=SLOT_DIST.get(sl))
+                      for sl in sorted({e["slot"] for e in eps})}
+    out["by_tier"] = {t: agg([e for e in eps if e["slot"] in sl]) for t, sl in TIERS.items()
+                      if any(e["slot"] in sl for e in eps)}
+    # THE HEADLINE. A full-HP kill is the task; everything else is a rung on the way to it, and a defeat rate
+    # pooled over a mixed suite can rise while this stays at zero -- which is exactly what v11->v13 did.
     full = [e for e in eps if e.get("boss_hp_start", 0) >= 10]
-    return {
-        "episodes": len(eps),
-        "defeat_rate": sum(1 for e in eps if e.get("boss_defeated")) / n,
-        "death_rate": sum(1 for e in eps if e.get("died")) / n,
-        "boss_hp_taken": sum(e.get("boss_damage", 0) for e in eps) / n,
-        "return": sum(e.get("return", 0) for e in eps) / n,
-        "full_hp_episodes": len(full),
-        "full_hp_defeats": sum(1 for e in full if e.get("boss_defeated")),
-        "by_slot": {str(s): {"n": sum(1 for e in eps if e["slot"] == s),
-                             "defeats": sum(1 for e in eps if e["slot"] == s and e.get("boss_defeated"))}
-                    for s in sorted({e["slot"] for e in eps})},
-    }
+    out["full_hp_episodes"] = len(full)
+    out["full_hp_defeats"] = sum(1 for e in full if e.get("boss_defeated"))
+    out["full_hp_defeat_rate"] = (out["full_hp_defeats"] / len(full)) if full else float("nan")
+    return out
 
 
 def run_one(ckpt, a):
-    slots = [int(s) for s in a.slots.split(",")] if a.slots else None
     model_cfg = load_policy(ckpt)[1]
     ho, trained = held_out(model_cfg)
-    if slots is None:
-        slots = ho or ALL_SLOTS
-        if not ho:
-            print("  !! this checkpoint trained on EVERY slot -- nothing is held out; using all 10 (class: "
-                  "in-distribution, NOT a holdout)")
-    print(f"  trained on {trained or 'unknown'} | evaluating on {slots}"
-          f"{' (HELD OUT of this run)' if set(slots).isdisjoint(trained) else ' (OVERLAPS training)'}")
-    eps, _ = evaluate(ckpt, slots, a.episodes, a.envs, a.slots_dir, a.episode_seconds, a.deterministic)
+    if a.slots:
+        slots = [int(x) for x in a.slots.split(",")]
+        label = "explicit"
+    elif a.suite == "holdout":
+        slots, label = (ho or ALL_SLOTS), ("held-out only" if ho else "NOTHING held out, falling back to all")
+    else:
+        slots, label = ALL_SLOTS, "FULL suite, all 10 starts"
+    # Shard the SLOTS across eval ranks, not the checkpoints. Sharding checkpoints makes each pod wait a full
+    # suite before the next policy is scored; sharding slots makes every pod work on the SAME policy and cuts
+    # the latency per checkpoint, which is what decides whether the signal arrives before the next publish.
+    mine = slots[a.fleet_rank::a.fleet_world_size] if a.fleet_world_size > 1 else slots
+    if not mine:
+        mine = slots[:1]
+    eps_total = a.episodes_per_slot * len(mine)
+    print(f"  trained on {trained or 'unknown'} | suite: {label}")
+    print(f"  rank {a.fleet_rank}/{a.fleet_world_size} evaluating slots {mine} "
+          f"x {a.episodes_per_slot} = {eps_total} episodes")
+    eps, _ = evaluate(ckpt, mine, eps_total, a.envs, a.slots_dir, a.episode_seconds, a.deterministic)
     s = score(eps)
-    s.update(checkpoint=str(ckpt), update=model_cfg.get("update"), slots=slots, trained_slots=trained,
-             held_out=bool(set(slots).isdisjoint(trained)), ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
-    print(f"  defeat {s['defeat_rate']*100:5.2f}%  death {s['death_rate']*100:5.1f}%  "
-          f"bossHP {s['boss_hp_taken']:4.2f}  return {s['return']:+7.1f}  "
-          f"fullHP {s['full_hp_defeats']}/{s['full_hp_episodes']}  ({s['episodes']} eps)")
+    s.update(checkpoint=str(ckpt), update=model_cfg.get("update"), slots=mine, trained_slots=trained,
+             suite=a.suite, rank=a.fleet_rank, world_size=a.fleet_world_size,
+             held_out_slots=[x for x in mine if x not in set(trained)],
+             ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    fh = s["full_hp_defeat_rate"]
+    print(f"  ALL   defeat {s['defeat_rate']*100:5.2f}%  death {s['death_rate']*100:5.1f}%  "
+          f"timeout {s['timeout_rate']*100:5.1f}%  bossHP {s['boss_hp_taken']:4.2f}  "
+          f"len {s['length_s']:3.0f}s  ({s['episodes']} eps)")
+    print(f"  FULL-HP (the task): {s['full_hp_defeats']}/{s['full_hp_episodes']}"
+          + (f" = {fh*100:.2f}%" if fh == fh else " -- none in this slice"))
+    for t, v in s["by_tier"].items():
+        print(f"    {t:<11} n={v['n']:<3} defeat {v['defeat_rate']*100:5.2f}%  death {v['death_rate']*100:5.1f}%"
+              f"  bossHP {v['boss_hp_taken']:4.2f}")
+    for sl, v in s["by_slot"].items():
+        print(f"      slot {sl:>2} ({v['hp']:>2} HP, {v['dist']:>3}u)  {v['defeat_rate']*100:5.1f}%  "
+              f"death {v['death_rate']*100:5.0f}%  n={v['n']}")
     return s
 
 
@@ -170,15 +226,56 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", default=None)
     p.add_argument("--watch", default=None, help="a checkpoints/ directory; evaluate every new .pt forever")
+    p.add_argument("--watch-published", default=None, metavar="EXPERIMENT",
+                   help="watch the FLEET's published policies for EXPERIMENT instead of a local directory. "
+                        "Checkpoints live on the training pod's own disk, so an evaluator on a different pod "
+                        "cannot see them; train_combat.py already publishes every --publish-every updates "
+                        "through zelda_rl.fleet_link, and this pulls from there. This is the mode to use on an "
+                        "eval fleet.")
     p.add_argument("--slots", default=None, help="default: whatever the checkpoint did NOT train on")
-    p.add_argument("--episodes", type=int, default=40)
-    p.add_argument("--envs", type=int, default=4)
+    p.add_argument("--suite", choices=["full", "holdout"], default="full",
+                   help="`full` evaluates ALL 10 starts -- the holistic view, and the only way to see full-HP "
+                        "games, which the 4 unseen slots cannot show (none of them start Gohma at 10 HP). "
+                        "`holdout` restricts to the slots this checkpoint did not train on.")
+    p.add_argument("--episodes-per-slot", type=int, default=8,
+                   help="episodes per slot, so coverage is explicit instead of a total that one slot can eat")
+    p.add_argument("--episodes", type=int, default=None, help="(legacy) total episodes; --episodes-per-slot wins")
+    p.add_argument("--envs", type=int, default=12,
+                   help="12 on a 16-vCPU pod: ~2 threads per Dolphin and 12 envs saturated a 16-vCPU pod in "
+                        "the measurements in docs/RUNPOD.md. Measured episode length is ~109s (only 6.3% hit "
+                        "the 300s cap), so 2 pods x 12 envs cover all 10 slots in ~6 min -- faster than the "
+                        "~15 min between published policies, which is what makes the signal usable.")
     p.add_argument("--episode-seconds", type=float, default=None)
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     p.add_argument("--out", default=None, help="append each result as JSON to this file")
     p.add_argument("--poll", type=float, default=60.0)
+    # ---- flags `fleet launch` passes to every script. Accepting them is what makes this launchable the same
+    # way training is, instead of needing a hand-written wrapper on the pod (which is not reproducible and was
+    # how I first ran it).
+    p.add_argument("--num-envs", type=int, default=None, help="alias for --envs; fleet launch passes this")
+    p.add_argument("--run-name", default=None, help="names the output file when --out is not given")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--fleet-rank", type=int, default=0)
+    p.add_argument("--fleet-world-size", type=int, default=1)
+    p.add_argument("--wandb-project", default=None, help="log the HELD-OUT metrics beside the training curve")
+    p.add_argument("--wandb-group", default=None)
+    p.add_argument("--video-backend", default="Null", help="accepted for fleet compatibility; always Null here")
+    p.add_argument("--fleet-experiment", default=None)
+    p.add_argument("--fleet-launch-id", default=None)
     a = p.parse_args()
+    if a.num_envs:
+        a.envs = a.num_envs
+    if a.episodes:                      # legacy --episodes: spread it over the suite
+        a.episodes_per_slot = max(1, a.episodes // 10)
+    if a.out is None and a.run_name:
+        a.out = f"results/eval/{a.run_name}.jsonl"
+    if a.watch is None and a.run_name:
+        # fleet launch gives every rank the same command, so derive the directory to watch from the run name:
+        # `gohma-kl-v14-r3` -> watch rank 0's checkpoints, since FedAvg keeps every rank on the same weights.
+        base = a.run_name.rsplit("-r", 1)[0]
+        a.watch = f"runs/{base}-r0/checkpoints"
+        print(f"derived --watch {a.watch} from --run-name {a.run_name}")
 
     def emit(s):
         if a.out:
@@ -192,14 +289,65 @@ def main():
     if not a.watch:
         raise SystemExit("pass --ckpt or --watch")
 
-    d = Path(a.watch)
+    if not a.watch and not a.watch_published:
+        raise SystemExit("pass --ckpt, --watch or --watch-published")
+    d = Path(a.watch) if a.watch else None
     seen, best = set(), None
-    print(f"watching {d} every {a.poll:.0f}s")
+    wb = None
+    if a.wandb_project:
+        try:
+            import wandb
+            wb = wandb.init(project=a.wandb_project, group=a.wandb_group,
+                            name=f"eval-{a.run_name or 'holdout'}", job_type="eval",
+                            config={"slots": a.slots, "episodes": a.episodes, "envs": a.envs,
+                                    "watch": str(d), "rank": a.fleet_rank})
+            print(f"wandb: {wb.url}")
+        except Exception as e:
+            print(f"wandb init failed ({str(e)[:60]}); continuing without it")
+    print(f"watching {d} every {a.poll:.0f}s"
+          + (f" | rank {a.fleet_rank}/{a.fleet_world_size}, taking every {a.fleet_world_size}th checkpoint"
+             if a.fleet_world_size > 1 else ""))
+    inbox = ROOT / "checkpoints" / "eval_inbox"
     while True:
-        for f in sorted(d.glob("update_*.pt")):
+        if a.watch_published:
+            from zelda_rl.fleet_link import fetch_latest_policy
+            try:
+                got = fetch_latest_policy(a.watch_published, inbox)
+            except Exception as e:
+                print(f"  fetch failed ({str(e)[:70]}); retrying in {a.poll:.0f}s")
+                got = None
+            if got:
+                f, ptr = Path(got[0]), got[1]
+                if f.name not in seen:
+                    seen.add(f.name)
+                    print(f"\npublished update {ptr['update']} (rank {ptr['rank']}) -> {f.name}")
+                    try:
+                        s_ = run_one(f, a)
+                        s_["published_update"] = ptr["update"]
+                        emit(s_)
+                        if wb is not None:
+                            wb.log({f"holdout/{k}": v for k, v in s_.items()
+                                    if isinstance(v, (int, float)) and not isinstance(v, bool)},
+                                   step=ptr["update"])
+                        if best is None or s_["defeat_rate"] > best["defeat_rate"]:
+                            best = s_
+                            print(f"  >>> NEW BEST on held-out slots: {s_['defeat_rate']*100:.2f}% "
+                                  f"(published update {ptr['update']}) -- the KL anchor candidate")
+                            if a.out:
+                                Path(a.out).with_suffix(".best.json").write_text(json.dumps(best, indent=2))
+                    except Exception as e:
+                        print(f"  eval failed: {str(e)[:120]}")
+            time.sleep(a.poll)
+            continue
+        for n_ck, f in enumerate(sorted(d.glob("update_*.pt"))):
             if f.name in seen:
                 continue
             seen.add(f.name)
+            # Shard across eval ranks: each pod takes every world_size-th checkpoint, so N pods evaluate N
+            # times as many without duplicating work. Every rank still sees every file, so nothing is missed
+            # if one pod dies -- it just stops being evaluated twice as fast.
+            if a.fleet_world_size > 1 and (n_ck % a.fleet_world_size) != a.fleet_rank:
+                continue
             print(f"\n{f.name}")
             try:
                 s = run_one(f, a)
@@ -207,6 +355,10 @@ def main():
                 print(f"  eval failed: {str(e)[:120]}")
                 continue
             emit(s)
+            if wb is not None:
+                upd = s.get("update") or 0
+                wb.log({f"holdout/{k}": v for k, v in s.items()
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)}, step=upd)
             if best is None or s["defeat_rate"] > best["defeat_rate"]:
                 best = s
                 # THE POINT: `best` is by HELD-OUT defeat rate, not by the last checkpoint written.
