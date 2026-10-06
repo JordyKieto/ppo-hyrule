@@ -57,6 +57,13 @@ SLOT_HP = {1: 5, 2: 5, 3: 10, 4: 8, 5: 10, 6: 6, 7: 5, 8: 10, 9: 5, 10: 5}
 SLOT_DIST = {1: 473, 2: 368, 3: 188, 4: 541, 5: 472, 6: 357, 7: 38, 8: 448, 9: 394, 10: 490}
 TIERS = {"full_hp_10": [3, 5, 8], "mid_hp_6_8": [4, 6], "half_hp_5": [1, 2, 7, 9, 10]}
 
+# The engagement DISTANCE bands. v13 established distance as the real wall (PROVENANCE 3.2, claim R9), and
+# under v13's curriculum the held-out slots [1,2,9,10] are ALL 5 HP and ALL 368-490 units out -- perfectly
+# collinear with "far". So a held-out rate on this curriculum cannot separate generalisation from the
+# distance wall, and reading it as generalisation is exactly the free-signal error of AGENTS 1. Every row
+# carries the band breakdown and the collinearity warning so that confound cannot be read past.
+BANDS = {"near_lt200": lambda d: d < 200, "mid_200_400": lambda d: 200 <= d <= 400, "far_gt400": lambda d: d > 400}
+
 
 def held_out(cfg) -> list[int]:
     """Slots this checkpoint's own run did NOT train on."""
@@ -172,6 +179,8 @@ def score(eps):
                       for sl in sorted({e["slot"] for e in eps})}
     out["by_tier"] = {t: agg([e for e in eps if e["slot"] in sl]) for t, sl in TIERS.items()
                       if any(e["slot"] in sl for e in eps)}
+    out["by_distance"] = {b: agg([e for e in eps if f(SLOT_DIST.get(e["slot"], -1))])
+                          for b, f in BANDS.items() if any(f(SLOT_DIST.get(e["slot"], -1)) for e in eps)}
     # THE HEADLINE. A full-HP kill is the task; everything else is a rung on the way to it, and a defeat rate
     # pooled over a mixed suite can rise while this stays at zero -- which is exactly what v11->v13 did.
     full = [e for e in eps if e.get("boss_hp_start", 0) >= 10]
@@ -216,6 +225,22 @@ def run_one(ckpt, a):
     for t, v in s["by_tier"].items():
         print(f"    {t:<11} n={v['n']:<3} defeat {v['defeat_rate']*100:5.2f}%  death {v['death_rate']*100:5.1f}%"
               f"  bossHP {v['boss_hp_taken']:4.2f}")
+    for b, v in s["by_distance"].items():
+        print(f"    {b:<11} n={v['n']:<3} defeat {v['defeat_rate']*100:5.2f}%  death {v['death_rate']*100:5.1f}%"
+              f"  bossHP {v['boss_hp_taken']:4.2f}")
+    # The held-out rate is only a generalisation number if the held-out slots span the same difficulty as the
+    # trained ones. On v13's ladder they do not -- [1,2,9,10] are all 5 HP and all >=368 units -- so the
+    # warning fires rather than letting the number be read as generalisation (AGENTS 1, free-signal control).
+    hos = [x for x in mine if x not in set(trained)]
+    if hos and trained:
+        hd = [SLOT_DIST[x] for x in hos if x in SLOT_DIST]
+        td = [SLOT_DIST[x] for x in mine if x in set(trained) and x in SLOT_DIST]
+        hh, th = {SLOT_HP.get(x) for x in hos}, {SLOT_HP.get(x) for x in mine if x in set(trained)}
+        if hd and td and (min(hd) > min(td) + 100 or not (hh & th)):
+            print(f"  !! CONFOUNDED: held-out slots {hos} are {min(hd)}-{max(hd)}u / {sorted(hh)} HP against "
+                  f"trained {min(td)}-{max(td)}u / {sorted(th)} HP. This held-out rate measures DISTANCE and "
+                  f"HP as much as generalisation; do not cite it as a generalisation gap.")
+            s["holdout_confounded"] = True
     for sl, v in s["by_slot"].items():
         print(f"      slot {sl:>2} ({v['hp']:>2} HP, {v['dist']:>3}u)  {v['defeat_rate']*100:5.1f}%  "
               f"death {v['death_rate']*100:5.0f}%  n={v['n']}")
