@@ -137,12 +137,20 @@ class FleetLink:
                    "rank": self.rank, "best": metrics, "optimizer": None, "episode_count": metrics.get("episode_count", 0)}
         key = f"zrl:{self.exp}:policy:r{self.rank}:u{update}"
         cur = self.u.cmd("GET", f"zrl:{self.exp}:policy:latest")
-        if cur and json.loads(cur).get("update", -1) > update:  # a slow rank must not replace a newer policy
-            return
+        if cur:
+            c = json.loads(cur)
+            # The guard is per LAUNCH. Within one run a slow rank must not replace a newer policy; ACROSS
+            # runs the update counter restarts at 0 on a --init-from resume, so comparing raw update numbers
+            # silently drops every publish from the new run until it passes the old run's last update.
+            # Observed: v15 resumed from v14 update 33, and its publishes at 5/10/15/20 were all discarded
+            # against v14's stale pointer at 40 -- the eval fleet re-scored the same dead v14 checkpoint for
+            # 25 minutes while believing it was tracking the live run. A different launch always wins.
+            if c.get("launch") == self.launch and c.get("update", -1) > update:
+                return
         meta = self.u.put_blob(key, _state_bytes(payload))
         self.u.cmd("SET", f"zrl:{self.exp}:policy:latest",
-                   json.dumps({"key": key, "rank": self.rank, "update": update, "t": time.time(), **meta,
-                               "metrics": metrics}, default=float), "EX", BLOB_TTL)
+                   json.dumps({"key": key, "rank": self.rank, "update": update, "launch": self.launch,
+                               "t": time.time(), **meta, "metrics": metrics}, default=float), "EX", BLOB_TTL)
 
     def average_weights(self, model, update: int, timeout: float = 300.0, aggregator: int = 0,
                         straggler_wait: float = 30.0) -> dict:
