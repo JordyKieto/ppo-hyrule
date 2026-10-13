@@ -169,10 +169,50 @@ def cmd_create(a) -> None:
     log(f"{len(made)}/{a.count} pods ready | experiment total ${total:.2f}/hr | state: {state_path(a.experiment)}")
 
 
+def assets_in_s3() -> tuple[bool, float]:
+    """Are ALL bootstrap assets in S3? Cached, so 116 pods cause one set of HEADs.
+
+    This exists to make the fast path automatic. The slow path -- pushing the NAND and ten savestates from
+    the Mac, 446 MB per pod over a ~0.7 MB/s uplink -- is AGENTS 15, and it was taken AGAIN on 2026-10-13
+    while all 462 MB sat in S3: 25 minutes of a 19-pod fleet billing for an upload that was never needed.
+    AGENTS 21 says a rule that is not a check will be broken, and this one now has three strikes.
+    """
+    if not hasattr(assets_in_s3, "_v"):
+        try:
+            import boto3
+            s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+            mb = 0.0
+            for key in s3_asset_keys():
+                mb += s3.head_object(Bucket=S3_BUCKET, Key=key)["ContentLength"] / 1e6
+            assets_in_s3._v = (True, mb)
+        except Exception:                                                        # noqa: BLE001
+            assets_in_s3._v = (False, 0.0)
+    return assets_in_s3._v
+
+
 def cmd_bootstrap(a) -> None:
     st = load_state(a.experiment)
 
     seeds = [p for p in st["pods"] if a.via_seeds and p["rank"] in {int(x) for x in a.via_seeds.split(",")}]
+
+    # THE CHECK (AGENTS 15/21). If S3 holds every asset, use it -- do not make the operator remember a flag.
+    # Taking the Mac-push path with the assets already in S3 has now cost real money twice; the last time was
+    # 25 minutes of a 19-pod fleet, with --assets-s3 sitting in --help the whole time.
+    have_s3, s3_mb = assets_in_s3()
+    if have_s3 and not a.assets_s3 and not a.push_from_mac:
+        a.assets_s3 = True
+        log(f"S3 has all {s3_mb:.0f} MB of assets -> using presigned pulls (seconds per pod, parallel). "
+            f"--push-from-mac to override; --via-seeds is unnecessary and is ignored.")
+        seeds = []
+    elif not have_s3 and not a.push_from_mac and not a.via_seeds:
+        log(f"REFUSING to bootstrap: S3 is missing assets and no --via-seeds given, so every pod would pull "
+            f"~462 MB from this Mac at ~0.7 MB/s ({0.462 * len(select(st, a.ranks)) / 0.0007 / 60:.0f} min "
+            f"for {len(select(st, a.ranks))} pods, AGENTS 15).")
+        log("  fix it:  python -m fleet assets --experiment %s --upload    # once, then re-run bootstrap"
+            % a.experiment)
+        log("  or:      --via-seeds R1,R2  (pod->pod over the datacenter link, seeds on DIFFERENT public IPs)")
+        log("  or:      --push-from-mac    (deliberately accept the upload)")
+        raise SystemExit(2)
 
     def boot(pod):
         r = pod["rank"]
@@ -937,15 +977,28 @@ def cmd_ppo(a) -> None:
     only number to read.
     """
     st = load_state(a.experiment)
+    # Columns are read from the HEADER the trainer printed, not by fixed index. Adding the banded columns
+    # (bal/hard/near/mid/far/nz) shifted `death` from position 7 to 13, and this probe went on reporting
+    # position 7 -- so it printed `hard` under a `death` heading with nothing looking wrong. A log format is
+    # an interface; parse it by name.
     PROBE = (
-        "import glob,sys;"
-        "fs=sorted(glob.glob('/workspace/zelda-RL/logs/*.log'),key=lambda f:__import__('os').path.getmtime(f));"
-        "out=[]\n"
+        "import glob,sys,os\n"
+        "fs=sorted(glob.glob('/workspace/zelda-RL/logs/*.log'),key=os.path.getmtime)\n"
+        "cols=None; out=[]\n"
         "for l in (open(fs[-1]) if fs else []):\n"
         "    p=l.split()\n"
-        "    if len(p)>8 and p[1]=='INFO' and p[2].isdigit() and p[5].endswith('%'):\n"
-        "        k=l.split('klA')[1].split()[0] if 'klA' in l else '-'\n"
-        "        out.append(','.join([p[2],p[3].replace(',',''),p[5].rstrip('%'),p[7].rstrip('%'),k]))\n"
+        "    if len(p)>6 and p[1]=='INFO' and p[2]=='upd':\n"
+        "        cols={n:i for i,n in enumerate(p[2:])}\n"
+        "        continue\n"
+        "    if cols is None or len(p)<6 or p[1]!='INFO' or not p[2].isdigit():\n"
+        "        continue\n"
+        "    f=p[2:]\n"
+        "    def g(name):\n"
+        "        i=cols.get(name)\n"
+        "        return f[i].rstrip('%') if (i is not None and i<len(f)) else ''\n"
+        "    k=l.split('klA')[1].split()[0] if 'klA' in l else '-'\n"
+        "    out.append(','.join([g('upd'),g('steps').replace(',',''),g('succ'),g('death'),k,\n"
+        "                         g('bal'),g('hard'),g('far'),g('nz')]))\n"
         "print('|'.join(out[-int(sys.argv[1]):]))"
     )
 
@@ -957,33 +1010,52 @@ def cmd_ppo(a) -> None:
             return (pod["rank"], "")
 
     res = sorted(for_pods(select(st, a.ranks), one, workers=24))
-    per_upd: dict[int, list[tuple[float, float, float]]] = {}
-    print(f"{'rank':>4} {'upd':>5} {'steps':>10} {'succ':>6} {'death':>6} {'klA':>7}")
+    per_upd: dict[int, list[tuple[float, ...]]] = {}
+    print(f"{'rank':>4} {'upd':>5} {'steps':>10} {'succ':>6} {'bal':>6} {'hard':>6} {'far':>6} "
+          f"{'nz':>6} {'death':>6} {'klA':>7}")
     quiet = []
+
+    def num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return float("nan")
+
     for rank, out in res:
-        recs = [r.split(",") for r in out.split("|") if r.count(",") == 4]
+        recs = [r.split(",") for r in out.split("|") if r.count(",") == 8]
         if not recs:
             quiet.append(rank)
             continue
-        for u, s, sc, de, kl in recs:
+        for u, st_, sc, de, kl, bal, hard, far, nz in recs:
             try:
-                per_upd.setdefault(int(u), []).append((float(sc), float(de),
-                                                       float(kl) if kl not in ("-", "") else float("nan")))
+                per_upd.setdefault(int(u), []).append(
+                    (num(sc), num(de), num(kl) if kl not in ("-", "") else float("nan"),
+                     num(bal), num(hard), num(far)))
             except ValueError:
                 pass
-        u, s, sc, de, kl = recs[-1]
-        print(f"{rank:>4} {u:>5} {int(s):>10,} {sc + '%':>6} {de + '%':>6} {kl:>7}")
+        u, st_, sc, de, kl, bal, hard, far, nz = recs[-1]
+        print(f"{rank:>4} {u:>5} {int(st_ or 0):>10,} {sc + '%':>6} {(bal or '-') + '%':>6} "
+              f"{(hard or '-') + '%':>6} {(far or '-') + '%':>6} {nz or '-':>6} {de + '%':>6} {kl:>7}")
     if quiet:
         print(f"  no update lines yet on ranks {quiet} -- still in the first rollout, or not training")
     if per_upd:
-        print("\nFLEET MEAN (succ and death averaged over the ranks that reached that update)")
+        # `succ` is MIX-WEIGHTED and has misread three version decisions on this task (AGENTS 29). `bal` and
+        # `hard` are mix-invariant and are what a version-to-version claim cites.
+        print("\nFLEET MEAN -- cite `bal` / `hard`, not `succ`: succ moves with the curriculum mix (AGENTS 29)")
         for u in sorted(per_upd)[-a.last:]:
             v = per_upd[u]
-            sc = sum(x[0] for x in v) / len(v)
-            de = sum(x[1] for x in v) / len(v)
+
+            def mean(i):
+                xs = [x[i] for x in v if x[i] == x[i]]
+                return sum(xs) / len(xs) if xs else float("nan")
+
+            def fmt(i, label):
+                m = mean(i)
+                return f"  {label} {m:5.1f}%" if m == m else f"  {label}     -"
             kl = [x[2] for x in v if x[2] == x[2]]
             klt = f"  klA {sum(kl)/len(kl):.4f}" if kl else ""
-            print(f"  upd {u:>4}  succ {sc:5.1f}%  death {de:5.1f}%{klt}   [{len(v)} ranks]")
+            print(f"  upd {u:>4}  succ {mean(0):5.1f}%{fmt(3, 'bal')}{fmt(4, 'hard')}{fmt(5, 'far')}"
+                  f"  death {mean(1):5.1f}%{klt}   [{len(v)} ranks]")
 
 
 def cmd_ssh(a) -> None:
@@ -1116,6 +1188,8 @@ def main() -> None:
     p.add_argument("--via-seeds", default=None, help="comma-separated seed ranks that rsync assets to the others")
     p.add_argument("--assets-s3", action="store_true", help="pods download Dolphin + NAND + savestates from S3 "
                    "(presigned URLs; run `fleet assets --upload` once first) instead of pushes from the Mac")
+    p.add_argument("--push-from-mac", action="store_true",
+                   help="deliberately push assets from the Mac even though S3 has them. ~446 MB per pod at ~0.7 MB/s: AGENTS 15. Only for when S3 is stale")
     p.add_argument("--workers", type=int, default=8)
     p = add("assets", cmd_assets)
     p.add_argument("--upload", action="store_true", help="first upload the Mac's savestates + NAND + Dolphin build to S3")
