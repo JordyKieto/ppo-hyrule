@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.combat import band_metrics, COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
+from zelda_rl.combat import band_metrics, deficit_weights, COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
 from zelda_rl.env import N_COMBAT_ACTIONS, N_COMBAT_ACTIONS_V5, DolphinGoalEnv, EnvConfig, EnvError, action_name  # noqa: E402
 from zelda_rl.obs import (ACTOR_DIM_V2, ACTOR_FIELDS_V2, GLOBAL_DIM_V2, GLOBAL_FIELDS_V2, N_ACTORS,  # noqa: E402
                           read_state_file_v2)
@@ -72,6 +72,22 @@ def parse_args():
                          "shaping cluster and the distraction terms, and pays seed/nut stun credit only when "
                          "the stun is converted into damage. Every OUTCOME term is unchanged. See "
                          "docs/GOHMA_FOCUS.md for the measurements behind it.")
+    ap.add_argument("--slot-sampling", default="fixed", choices=["fixed", "deficit"],
+                    help="`deficit` reweights the start-slot distribution toward the slots the policy has NOT "
+                         "solved, from its own measured per-slot success. PPO optimises expected return UNDER "
+                         "the sampling distribution, so the curriculum weights ARE part of the objective: v16 "
+                         "spent 30%% of its episodes on the slot it already wins 28%% of the time and 13%% on "
+                         "the one it wins 0.5%% of. Fixed is the default so every earlier run reproduces.")
+    ap.add_argument("--slot-deficit-ratio", type=float, default=4.0,
+                    help="with --slot-sampling deficit: the least-solved slot gets exactly this many times "
+                         "the sampling weight of the most-solved, whatever the absolute rates are")
+    ap.add_argument("--slot-deficit-floor", type=float, default=0.06,
+                    help="minimum share of episodes per slot, so a solved slot keeps being practised. v12 is "
+                         "the warning: a hand-inverted curriculum starved what it had learned and stalled")
+    ap.add_argument("--slot-warmup", type=int, default=3,
+                    help="updates to run on --slot-weights before adapting, to measure the rates first")
+    ap.add_argument("--slot-ema", type=float, default=0.3,
+                    help="EMA weight on each update's per-slot success when tracking the deficit")
     ap.add_argument("--slot-weights", default="", help="curriculum: slot=weight,... (others 1), e.g. '4=2.33,5=2.33,6=2.33' "
                     "makes half of all episodes start from slots 4-6")
     ap.add_argument("--episode-seconds", type=float, default=180.0)
@@ -186,6 +202,11 @@ def main():
     slot_p = np.array([wmap.get(k, 1.0) for k in usable], np.float64)
     slot_p /= slot_p.sum()
     LOGGER.info("start-slot probabilities: %s", {k: round(float(p), 3) for k, p in zip(usable, slot_p)})
+    slot_ema: dict[int, float] = {}          # EMA of per-slot success, the signal --slot-sampling deficit uses
+    if args.slot_sampling == "deficit":
+        LOGGER.info("slot sampling: DEFICIT (ratio %.1f, floor %.2f, warmup %d updates, ema %.2f) -- the "
+                    "distribution will move toward the slots this policy does not win",
+                    args.slot_deficit_ratio, args.slot_deficit_floor, args.slot_warmup, args.slot_ema)
 
     torch.manual_seed(1234)
     model = build_model(config)
@@ -413,6 +434,25 @@ def main():
             # One implementation, shared with tests/test_band_metrics.py (AGENTS 25).
             if args.profile == "gohma" and eps:
                 metrics.update(band_metrics(eps))
+
+            # ---- adaptive start-slot distribution. Recomputed from the EMA of this policy's OWN per-slot
+            # success, so compute flows to the starts it cannot do. `success_balanced` is mix-invariant by
+            # construction, which is what makes a moving distribution measurable at all.
+            if args.slot_sampling == "deficit" and eps:
+                for k in usable:
+                    se = [e for e in eps if e["slot"] == k]
+                    if se:
+                        r = float(np.mean([bool(e["success"]) for e in se]))
+                        slot_ema[k] = r if k not in slot_ema else \
+                            (1 - args.slot_ema) * slot_ema[k] + args.slot_ema * r
+                if update >= start_update + args.slot_warmup and len(slot_ema) == len(usable):
+                    newp = deficit_weights(slot_ema, args.slot_deficit_ratio, args.slot_deficit_floor)
+                    slot_p = np.array([newp[k] for k in usable], np.float64)
+                    slot_p /= slot_p.sum()
+                for k, pk in zip(usable, slot_p):
+                    metrics[f"slot_p/s{k}"] = float(pk)
+                    if k in slot_ema:
+                        metrics[f"slot_ema/s{k}"] = slot_ema[k]
             log.update(metrics, global_step)
             if link is not None:
                 hb = {"update": update, "global_step": global_step, "run": args.run_name, "weight_hash": sync.get("weight_hash"),

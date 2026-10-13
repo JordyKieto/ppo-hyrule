@@ -350,7 +350,7 @@ class CombatConfig:
     #   both. Gated on GOHMA_ATTACK so it pays for defence rather than for standing still. Default 0.0 keeps
     #   the `full` baseline reproducible; the `simple` preset turns it on.
     g_approach: float = 0.0            # per 100 units of NET progress toward Gohma, outside her attack frames.
-    g_approach_cap: float = 7.0        #   The gap the 10-slot eval exposed: GohmaTracker.step fully replaces
+    g_approach_cap: float = 3.0        #   The gap the 10-slot eval exposed: GohmaTracker.step fully replaces
     #   CombatTracker.step and never calls super(), so the generic `approach` term (w_approach, paid in
     #   CombatTracker) has NEVER fired on Gohma. The only distance term that ran was `approach_stunned`, gated
     #   on GOHMA_STUNNED -- it pays for closing the last few units AFTER she is already down, and pays nothing
@@ -637,9 +637,11 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
     "g_guard": 0.0,
     "g_spacing": 0.02,
-    # the approach channel, new in v15 at 0.5 / cap 3.0, raised 3x for v16 after v15 realised only ~20% of
-    # what it pays for. See g_approach in CombatConfig for why it was absent until v15 at all.
-    "g_approach": 1.5,
+    # The approach channel, new in v15 at 0.5 / cap 3.0. v16 raised it 3x to 1.5 / cap 7.0 and the banded
+    # training metric says it bought nothing: 0/5 bands moved, and v16 started LEVEL with v15 despite
+    # resuming from v15's update 40. Reverted to v15's value for v17, where the experiment is the sampling
+    # distribution instead. See g_approach in CombatConfig for why the term was absent until v15 at all.
+    "g_approach": 0.5,
 }
 
 
@@ -690,6 +692,47 @@ def band_metrics(eps: list[dict]) -> dict[str, float]:
     out["combat/slots_nonzero"] = float(sum(1 for v in rate.values() if v > 0))
     out["combat/slots_seen"] = float(len(rate))
     return out
+
+
+def deficit_weights(rate: dict[int, float], ratio: float = 4.0, min_share: float = 0.04) -> dict[int, float]:
+    """Sampling probabilities over start slots, weighted toward the ones the policy has NOT solved.
+
+    PPO optimises expected return UNDER THE SAMPLING DISTRIBUTION, so the curriculum weights are part of the
+    objective, not a detail of it. v16 spends 30% of its episodes on slot 7, which it already wins 28% of the
+    time, and 13% on slot 8, which it wins 0.5% of the time -- so most of the gradient comes from the start
+    that is already solved. This reweights by the measured deficit instead.
+
+    w_i proportional to 1/(p_i + c), with c chosen so the best and worst slot differ by exactly `ratio`. That
+    makes the spread a stated quantity rather than an emergent one: at ratio=4 the least-solved slot gets 4x
+    the sampling weight of the most-solved, whatever the absolute rates happen to be. An unconditional
+    1/(p+const) would have swung from 1.4x to 50x over the course of a run as the rates moved.
+
+    `min_share` is an anti-forgetting floor. v12 is the warning: a hand-inverted curriculum that starved the
+    slots it had already learned and stalled at +0.098/update. Nothing here drops below min_share of the
+    episodes, so a solved slot keeps being practised.
+
+    Returns {slot: probability}, summing to 1.
+    """
+    ks = sorted(rate)
+    if not ks:
+        return {}
+    lo, hi = min(rate[k] for k in ks), max(rate[k] for k in ks)
+    if hi - lo < 1e-9 or ratio <= 1.0:
+        return {k: 1.0 / len(ks) for k in ks}
+    # Solve (lo + c) / (hi + c) = 1/ratio for c: the worst slot ends up exactly `ratio` times the best.
+    c = (hi - ratio * lo) / (ratio - 1.0)
+    c = max(c, 1e-4)
+    w = {k: 1.0 / (rate[k] + c) for k in ks}
+    tot = sum(w.values())
+    p = {k: v / tot for k, v in w.items()}
+    # Apply the floor, then renormalise what is left among the slots above it.
+    floor = min(min_share, 1.0 / len(ks))
+    short = {k for k, v in p.items() if v < floor}
+    if short:
+        free = 1.0 - floor * len(short)
+        rest = sum(p[k] for k in ks if k not in short) or 1.0
+        p = {k: (floor if k in short else p[k] / rest * free) for k in ks}
+    return p
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),
                  ("locked_on_target", 1), ("arrow_on_target", 1), ("shielding", 1), ("damaged", 1),
