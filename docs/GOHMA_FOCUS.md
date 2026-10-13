@@ -8,6 +8,154 @@ from combat-engaged start states.**
 `docs/WM_EXPERIMENT_REGIME.md` is the closing record of the world-model work; its checkpoints are in `runs/`
 and nothing there needs to be rerun to proceed here.
 
+---
+
+# WHERE WE LEFT OFF -- 2026-10-13, fleet killed, $0.00/hr
+
+**Read this first. It is the state of the task, not a log.**
+
+## The one-line state
+
+**v15 is the best policy we have** (`checkpoints/kept/gohma-kl-v15-r4_latest.pt`, md5 `397e27b2beb6`,
+optimizer intact). Boss damage **3.275 of 10** on the mix-invariant metric. Everything after it -- v16, v17,
+v18 -- is a regression, and all three were my changes. Nothing is running.
+
+## What actually happened, and the headline lesson
+
+**The project had been improving steadily for eight versions and we could not see it, because the metric was
+wrong.** `combat/success_rate` -- boss *defeated* -- is a binary at 1-10% with almost no power to show a
+trend. On **boss damage**, the HP actually taken off her out of 10, the same runs read:
+
+| version | `g_approach` | boss damage | slope/upd |
+|---|---|---|---|
+| v10 | -- | 0.38 -> 1.21 | **+0.003\*** |
+| v11 | -- | 1.72 -> 2.10 | **+0.015\*** |
+| v12 | -- | 2.06 -> 2.22 | **+0.008\*** |
+| v13 | -- | 2.41 -> 2.75 | **+0.007\*** |
+| **v14** | **0.0 (absent)** | **2.86 -> 3.22** | **+0.012\*** |
+| v15 | 0.5 | 3.17 -> 3.32 | +0.004\* |
+| v16 | 1.5 | 3.12 -> 2.85 | **-0.017\*** |
+| v17 | 0.5 + deficit sampling | 3.19 -> 2.86 | **-0.022\*** |
+| v18 | 0.0 (reverted), from v15 | 3.40 -> 2.94 | -0.021 (n.s. once the start transient is dropped) |
+
+`*` = |t| > 2. **0.38 -> 3.32 HP is an 8.7x improvement and it was reported as six consecutive plateaus.**
+
+**Two things this cost.** `g_approach` was invented to fix a plateau that did not exist, and it measurably
+hurt. And three versions of compute went into chasing a flat line that was only flat on the wrong axis.
+
+## The honest open question, which is NOT "which reward next"
+
+Read the damage column as a curve rather than a league table: **0.38, 1.72, 2.06, 2.41, 2.86, 3.17** --
+each version starts further along and climbs more slowly. **Damage saturates at 3.2-3.4 of 10 regardless of
+reward.** The per-run slope also correlates with the *starting* level, which means the `g_approach`
+dose-response is confounded too: runs starting near 2.6 climb, runs starting near 3.3 do not. I reported that
+dose-response to you as clean and it is not.
+
+So the live question is **why does damage saturate at ~1/3 of her health**, and the answer is probably not
+another reward term. Eight have been tried. Candidate next moves, in the order I would take them:
+
+1. **Watch episodes at the ceiling.** Load v15 and watch ten episodes on slots 3 and 5 where it takes 4+ HP.
+   What stops hit 4? Out of nuts? Out of seeds? Dies to the third larva wave? This is a 20-minute
+   qualitative question that no amount of reward tuning answers, and it has never been done at this level.
+2. **Check the ammunition.** `g_nut_scarcity 20.0` and `g_seed_scarcity 30.0` exist, which means scarcity was
+   anticipated. A stun needs a seed or a nut; ten stuns need ten. If the policy runs dry at hit 3-4 the
+   ceiling is a RESOURCE limit and no reward fixes it.
+3. **Episode length.** Episodes end at 300 s and mean 40-100 s by death. Ten stun-and-hit cycles may simply
+   not fit; a human win took 154 s.
+4. Only then, reward or architecture.
+
+## The fast-signal fork we stopped at
+
+`--reward damage` is **built, committed and untested** -- `GOHMA_DAMAGE` in `zelda_rl/combat.py`, 39 shaping
+terms zeroed, keeping only `boss_damage * dmg * (1 + 2.0 * fraction_of_her_HP_gone)` (4.80 for her first HP,
+12.00 for her last), `boss_defeat` 60, timeout, death x `--death-scale`, and `time_penalty` 0.001. Verified
+against the dataclass fields so a typo cannot silently do nothing, and asserted to leave no shaping behind.
+
+**The decision not made:** what to initialise it from. "From scratch" and "signal in minutes" conflict --
+v10 from scratch *with* shaping took 399 updates to reach 1.21 damage, so random init plus outcome-only
+reward is the hardest configuration attempted here and will take hours. The four options as they stood:
+
+| option | starting damage | signal | confound |
+|---|---|---|---|
+| **from `v13_r12`** | 2.75 | ~10 updates / 30 min | none -- v13 predates every change I made |
+| random init | 0 | 1-3 h | none, but slowest |
+| split fleet 10/9 | both | half throughput each | none |
+| from `v15-r4` | 3.275 | fastest | v15's weights were shaped by `g_approach` |
+
+## What to run, verbatim, when you come back
+
+```sh
+python -m fleet create    --experiment gohma-kl --count 20 --vcpu 16 --confirm
+python -m fleet bootstrap --experiment gohma-kl                 # S3 path is AUTOMATIC now, ~2 min/pod
+python -m fleet ckpt      --experiment gohma-kl --path checkpoints/inbox/v13_r12_latest.pt
+python -m fleet preflight --experiment gohma-kl
+python -m fleet launch    --experiment gohma-kl --script train_combat.py --run-tag v19 --num-envs 8 \
+  --wandb-project zelda-rl-gohma-ppo --train-args "--profile gohma --obs-version 7 --reward damage \
+  --episode-seconds 300 --start-slots 3,4,5,6,7,8 --slot-weights 4=1.125,6=1.125,7=2.25 \
+  --init-from checkpoints/inbox/v13_r12_latest.pt --death-scale 0 --fleet-aggregator 4 --total-updates 200"
+```
+
+No `--kl-anchor`: anchoring to v13 while initialising from v13 does nothing, and with a new reward the anchor
+would fight it. Then:
+
+```sh
+python -m fleet ppo       --experiment gohma-kl --last 8      # dmgB / dmgH lead; succ is last for a reason
+python scripts/train_compare.py --compare gohma-kl-v19 --trend          # slope +/- SE, RISING/flat/FALLING
+python scripts/train_compare.py --compare gohma-kl-v19 --exact gohma-kl # exact per-slot pool from the pods
+```
+
+**The number to beat is v14's +0.012 HP/update**, judged as a slope with a standard error. It refuses to fit
+under 5 updates, which is deliberate.
+
+## The tooling that now exists, and why each piece is there
+
+| command / file | what it is for |
+|---|---|
+| `fleet ppo --experiment E` | fleet-wide PPO curve. `dmgB`/`dmgH` lead, `succ` last. Parses the log BY HEADER NAME, after a column shift silently relabelled `death` as `hard` |
+| `scripts/train_compare.py --trend` | **the answer to "is it improving"**: slope +/- SE on boss damage, RISING/flat/FALLING at \|t\|>2 |
+| `scripts/train_compare.py --exact E` | exact per-episode per-slot counts from the live pods. 3,142 episodes in 14 updates vs the eval fleet's 40 |
+| `scripts/eval_compare.py` | the HELD-OUT question, with Fisher p and Wilson intervals. Rejects round-based rows by content, dedups on `(checkpoint, rank, ts)`, honours `.withdrawn` / `.run_label` markers |
+| `scripts/audit_gohma_slots.py` | reads Gohma's actor state per slot out of the emulator. Exits non-zero on a pre-fight slot. **All 10 slots are engaged; no `ceiling_wait` remains** |
+| `fleet ckpt --path ...` | an arbitrary `--init-from` / `--kl-anchor` checkpoint onto every pod by presigned S3 GET, verified by `stat`-ing what the trainer will open. 8.2 MB x 19 pods in 15 s |
+| `zelda_rl/combat.band_metrics()` | `boss_damage_balanced`, `boss_damage_hard`, `success_balanced`, `success_hard`, `slots_nonzero`, `by_band/*`. All MIX-INVARIANT |
+| `zelda_rl/combat.deficit_weights()` | adaptive start-slot sampling. **Negative result** (v17), kept with its 25 tests |
+| `tests/test_band_metrics.py` | asserts mix-invariance on v11's real skill profile |
+| `tests/test_deficit_weights.py` | exact-ratio, the anti-forgetting floor, scale-freeness, degenerate inputs |
+| `tests/test_gohma_approach.py` | the approach term's mechanics, and asserts it ships at **0.0** with the reason |
+
+`fleet bootstrap` now **takes the S3 path automatically** and refuses with exit 2 if S3 is stale -- that one
+cost ~$4 and 25 minutes of a 19-pod fleet because the flag was forgettable.
+
+## Corrections made this session that change earlier numbers
+
+1. **The start-slot distances were 3D.** Six of ten overstated, because Gohma sits ~320-340 units up on the
+   ceiling. Slot 2 is 140u not 368u (mid -> **near**), slot 5 is 347u not 472u (far -> **mid**). Rebanded, the
+   distance wall is **14x** near-to-far, not 7.5x, with the far band at **1 win in 208 episodes**. The table
+   now lives once in `zelda_rl/combat.GOHMA_SLOT_DIST`, measured by `audit_gohma_slots.py`; four copies
+   existed and three were wrong.
+2. **The held-out checkpoint selector was noise.** It ranked on 16-episode subsets at a 1.68% pooled rate,
+   where 6.25% is a 20.9% draw from the null. Selected 2/32 vs others 5/384, **p=0.094**. It needs ~256
+   episodes per checkpoint, 16x what it had. And `.best.json` is read by **nothing**.
+3. **v11's trend was one slot.** Its climb was slot 7 (38u) alone, 7.32% -> 14.00%, with nine slots at
+   exactly 0.00% for 37 updates. v12 was launched because of that number.
+4. **The v15-vs-v14 hold-out p was 0.122 against a 559-episode SUBSET** of an 880-episode baseline, in a pool
+   that also held 2,831 retracted episodes and counted duplicates. Corrected: **p=0.087**.
+
+Full detail with evidence classes: `PROVENANCE.md` 3.2. Methodology rules: `AGENTS.md` 29-34, where 34 is the
+metric failure above.
+
+## Checkpoints kept
+
+| file | md5 | what |
+|---|---|---|
+| `checkpoints/kept/gohma-kl-v15-r4_latest.pt` | `397e27b2beb6` | **THE BEST POLICY.** damage 3.275, optimizer intact |
+| `checkpoints/inbox/v13_r12_latest.pt` | `49cf19963f4f` | v13 u70, the last checkpoint predating any of this session's changes |
+| `checkpoints/kept/gohma-kl_r3_u00040.pt` | `8f2640cb3e87` | v14 u40 as published, weights only |
+| `checkpoints/kept/gohma-kl-v16-r4_latest.pt` | `0e11fcccb6f5` | v16 u20. Negative result |
+| `checkpoints/kept/gohma-kl-v18-r4_latest.pt` | `7bd6b58ed9cb` | v18 u10. Negative result |
+
+---
+
 ## Definition of done
 
 Deku Baba was called solved at 78% fleet success / 10-of-10 slots locally (`COMBAT_TASK.md`). Gohma needs a

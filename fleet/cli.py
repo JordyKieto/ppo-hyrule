@@ -998,7 +998,7 @@ def cmd_ppo(a) -> None:
         "        return f[i].rstrip('%') if (i is not None and i<len(f)) else ''\n"
         "    k=l.split('klA')[1].split()[0] if 'klA' in l else '-'\n"
         "    out.append(','.join([g('upd'),g('steps').replace(',',''),g('succ'),g('death'),k,\n"
-        "                         g('bal'),g('hard'),g('far'),g('nz')]))\n"
+        "                         g('bal'),g('hard'),g('far'),g('nz'),g('dmgB'),g('dmgH')]))\n"
         "print('|'.join(out[-int(sys.argv[1]):]))"
     )
 
@@ -1011,8 +1011,9 @@ def cmd_ppo(a) -> None:
 
     res = sorted(for_pods(select(st, a.ranks), one, workers=24))
     per_upd: dict[int, list[tuple[float, ...]]] = {}
-    print(f"{'rank':>4} {'upd':>5} {'steps':>10} {'succ':>6} {'bal':>6} {'hard':>6} {'far':>6} "
-          f"{'nz':>6} {'death':>6} {'klA':>7}")
+    # dmgB / dmgH first: boss damage is the headline (AGENTS 34). succ is last and is read last.
+    print(f"{'rank':>4} {'upd':>5} {'steps':>10} {'dmgB':>6} {'dmgH':>6} {'bal':>6} {'hard':>6} "
+          f"{'far':>6} {'nz':>6} {'death':>6} {'succ':>6} {'klA':>7}")
     quiet = []
 
     def num(x):
@@ -1022,26 +1023,28 @@ def cmd_ppo(a) -> None:
             return float("nan")
 
     for rank, out in res:
-        recs = [r.split(",") for r in out.split("|") if r.count(",") == 8]
+        recs = [r.split(",") for r in out.split("|") if r.count(",") == 10]
         if not recs:
             quiet.append(rank)
             continue
-        for u, st_, sc, de, kl, bal, hard, far, nz in recs:
+        for u, st_, sc, de, kl, bal, hard, far, nz, dmgb, dmgh in recs:
             try:
                 per_upd.setdefault(int(u), []).append(
                     (num(sc), num(de), num(kl) if kl not in ("-", "") else float("nan"),
-                     num(bal), num(hard), num(far)))
+                     num(bal), num(hard), num(far), num(dmgb), num(dmgh)))
             except ValueError:
                 pass
-        u, st_, sc, de, kl, bal, hard, far, nz = recs[-1]
-        print(f"{rank:>4} {u:>5} {int(st_ or 0):>10,} {sc + '%':>6} {(bal or '-') + '%':>6} "
-              f"{(hard or '-') + '%':>6} {(far or '-') + '%':>6} {nz or '-':>6} {de + '%':>6} {kl:>7}")
+        u, st_, sc, de, kl, bal, hard, far, nz, dmgb, dmgh = recs[-1]
+        print(f"{rank:>4} {u:>5} {int(st_ or 0):>10,} {dmgb or '-':>6} {dmgh or '-':>6} "
+              f"{(bal or '-') + '%':>6} {(hard or '-') + '%':>6} {(far or '-') + '%':>6} {nz or '-':>6} "
+              f"{de + '%':>6} {sc + '%':>6} {kl:>7}")
     if quiet:
         print(f"  no update lines yet on ranks {quiet} -- still in the first rollout, or not training")
     if per_upd:
         # `succ` is MIX-WEIGHTED and has misread three version decisions on this task (AGENTS 29). `bal` and
         # `hard` are mix-invariant and are what a version-to-version claim cites.
-        print("\nFLEET MEAN -- cite `bal` / `hard`, not `succ`: succ moves with the curriculum mix (AGENTS 29)")
+        print("\nFLEET MEAN -- read dmgB/dmgH FIRST: boss damage is the headline and the only signal with"
+              "\n              enough resolution to show a trend; succ is a 1-10% binary (AGENTS 34)")
         for u in sorted(per_upd)[-a.last:]:
             v = per_upd[u]
 
@@ -1054,8 +1057,10 @@ def cmd_ppo(a) -> None:
                 return f"  {label} {m:5.1f}%" if m == m else f"  {label}     -"
             kl = [x[2] for x in v if x[2] == x[2]]
             klt = f"  klA {sum(kl)/len(kl):.4f}" if kl else ""
-            print(f"  upd {u:>4}  succ {mean(0):5.1f}%{fmt(3, 'bal')}{fmt(4, 'hard')}{fmt(5, 'far')}"
-                  f"  death {mean(1):5.1f}%{klt}   [{len(v)} ranks]")
+            d1, d2 = mean(6), mean(7)
+            dt = (f"  dmgB {d1:5.2f}  dmgH {d2:5.2f}" if d1 == d1 else "  dmgB     -  dmgH     -")
+            print(f"  upd {u:>4}{dt}{fmt(3, 'bal')}{fmt(4, 'hard')}{fmt(5, 'far')}"
+                  f"  death {mean(1):5.1f}%  succ {mean(0):5.1f}%{klt}   [{len(v)} ranks]")
 
 
 def cmd_ssh(a) -> None:

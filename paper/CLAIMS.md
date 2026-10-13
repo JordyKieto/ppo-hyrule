@@ -32,11 +32,13 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R20 | v15 is the broadest policy to date | **M** | non-zero on 6/6 trained slots vs v11's 1/10; ~3.3% vs ~0.13% off the easy slot. It reads as the flattest run on pooled success |
 | R21 | More training time was never the missing ingredient | **M** | `gohma-v10` 399 updates -> 1.21%; `gohma-v8` 129 updates from scratch -> 0.1%. Version trend table, PROVENANCE 3.2 |
 | R22 | The held-out checkpoint selector could not distinguish checkpoints | **M** | ranked on 16-episode subsets at a 1.68% pooled rate, where 6.25% is a 20.9% draw from the null; selected 2/32 vs others 5/384, p=0.094. Needs ~256 episodes/checkpoint, 16x what it had |
-| R23 | The approach coefficient at 3x changes nothing | **M -> WRONG, it is HARMFUL** | boss damage slope v14 (no term) +0.012*, v15 (0.5) +0.004*, v16 (1.5) -0.017*: monotone dose-response. v16 and v17 are regressions on the mix-invariant form, t=-4.75 and t=-3.78 |
+| R23 | g_approach caused the plateau | **I -- CONFOUNDED** | the dose-response (v14 +0.012, v15 +0.004, v16 -0.017) cannot be separated from saturation: the slope tracks the STARTING level, and v18 ran v14's reward on v15's weights without recovering v14's slope. Not exonerated, not shown |
 | R24 | Deficit-weighted sampling improves the unsolved starts | **U -> NEGATIVE** | v17 boss damage slope -0.0236 (t=-3.78) on the mix-invariant per-slot form, so not a mix artefact. Stopped |
 | R25 | Gohma training improved steadily from v10 to v15 | **M** | boss damage 0.38 -> 3.32 of 10, every version's slope distinguishable from zero; return -12.6 -> +56.8. It was reported as six plateaus because the metric was a 1-10% binary. PROVENANCE 3.2 |
 | R26 | A sparse binary cannot steer this task | **M** | the defeat rate called v10-v15 flat while boss damage rose 8.7x with |t|>2 at every step; the term added on the strength of the binary (g_approach) measurably reversed the damage slope. AGENTS 34 |
 | R27 | v14's reward is the configuration that learns | **U** | `gohma-kl-v18`, v14's reward (no g_approach) on v15's weights. Judged on boss_damage_balanced slope against v14's +0.012 HP/update |
+| R28 | Gohma boss damage saturates at 3.2-3.4 of 10 | **M** | eight versions, five reward configurations, every run starting near 3.3 fails to climb while every run starting near 2.6 does. The last six HP are the open problem |
+| R29 | Outcome-only reward with the escalating damage multiplier | **U -- built, unrun** | `--reward damage` / `GOHMA_DAMAGE`, 39 shaping terms zeroed. Init not yet chosen; see GOHMA_FOCUS WHERE WE LEFT OFF |
 
 ## WM track
 

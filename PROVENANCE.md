@@ -151,6 +151,7 @@ exported. Session boundaries are where the reward or the start set changed.
 | `gohma-kl-v15` | 4 (10-05) | **`g_approach`**: 0.5 per 100 units of NET horizontal progress toward Gohma, cap 3.0, silent during her attack frames. Everything else identical to v14 (same anchor, `--kl-coef 0.3`, `--death-scale 0`, same ladder), resumed per-rank from v14 update ~33 | **stopped at update 40** (960k steps/rank, 834 eps/rank). Train succ 7.8-12.4%, `klA` 0.0146->0.0167. Eval: **9/160 = 5.6%** vs v14's 18/559 = 3.2%, **p 0.122, not significant** | `checkpoints/kept/gohma-kl-v15-r4_latest.pt` |
 | `gohma-kl-v16` | **5 (10-13)** | approach coefficient **0.5 -> 1.5**, cap 3.0 -> 7.0 (one variable vs v15); resumed from v15 update 40 | **stopped at update 20.** 0/5 bands moved vs v15 at matched updates; started LEVEL with v15 despite a 40-update head start; worst late slope of any version, **-0.210/update** | `checkpoints/kept/gohma-kl-v16-r4_latest.pt` md5 `0e11fcccb6f5` |
 | `gohma-kl-v17` | 5 (10-13) | coefficient **reverted to v15's 0.5** / cap 3.0, and **adaptive start-slot sampling** (`--slot-sampling deficit --slot-deficit-ratio 4.0 --slot-deficit-floor 0.06 --slot-warmup 3`); resumed from **v15** update 40, so one variable vs v15 | running | pending |
+| `gohma-kl-v18` | 5 (10-13) | **v14's reward** (`g_approach` off) on **v15's weights**; no deficit sampling; anchor/ladder/`--death-scale 0` unchanged | **stopped at update 13.** Damage 3.40 -> 2.94; slope -0.0370 (t=-3.49) on all 13 points but **-0.0194 (t=-0.95) dropping the first 5**, so the steepness was a start transient. Settled BELOW v15's 3.10-3.36 range and showed no sign of v14's +0.012 | `checkpoints/kept/gohma-kl-v18-r4_latest.pt` md5 `7bd6b58ed9cb` |
 
 **v14 is two changes at once** (anchor + no death penalty), so a positive result will not say which did
 it. That was accepted deliberately to get one run instead of two; it is recorded here so no paper claims the
@@ -302,6 +303,35 @@ mix-invariant per-slot form, so neither regression is a curriculum artefact:
 
 Both v16 and v17 are **my** changes: the 3× coefficient and the deficit sampling. Both are regressions against
 the policy they resumed from. Recorded in `paper/CLAIMS.md` as R23/R24 superseded, and as AGENTS 34.
+
+### The dose-response is CONFOUNDED by the starting level -- a retraction of this session's own finding
+
+`g_approach` was removed on the strength of a monotone dose-response (v14 +0.012, v15 +0.004, v16 -0.017).
+v18 then ran v14's reward on v15's weights and did **not** recover v14's slope. Reading the damage column as
+a curve rather than a league table explains why:
+
+| version | starts at | ends at | slope |
+|---|---|---|---|
+| v10 | 0.38 | 1.21 | +0.003 |
+| v11 | 1.72 | 2.10 | +0.015 |
+| v12 | 2.06 | 2.22 | +0.008 |
+| v13 | 2.41 | 2.75 | +0.007 |
+| v14 | 2.86 | 3.22 | +0.012 |
+| v15 | 3.17 | 3.32 | +0.004 |
+| v16 | 3.12 | 2.85 | -0.017 |
+| v18 | 3.40 | 2.94 | -0.021 (n.s.) |
+
+**Each version starts further along and climbs more slowly.** The slope correlates with the STARTING LEVEL,
+not only with the reward term, so the `g_approach` dose-response cannot be separated from saturation: runs
+beginning near 2.6 climb and runs beginning near 3.3 do not. **The claim that `g_approach` caused the
+plateau is downgraded to I, confounded.** It may still be harmful -- nothing here exonerates it -- but this
+data cannot show it.
+
+What the curve does support, at **M**: **boss damage saturates at 3.2-3.4 of 10 across eight versions and
+five reward configurations.** That is a statement about the task, and it means the next question is why the
+last six HP are unreachable, not which reward term to try ninth. `docs/GOHMA_FOCUS.md` **WHERE WE LEFT OFF**
+lists the four candidate investigations in order, the first of which is to watch ten episodes at the ceiling
+and find out what stops hit four -- never once done at this level.
 
 ### v18: v14's reward, v15's weights, boss damage as the headline
 
