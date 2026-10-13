@@ -486,6 +486,11 @@ def push_policies(pod) -> None:
 
 
 CODE_EXCLUDES = ["--exclude", ".venv/", "--exclude", "runs/", "--exclude", "assets/", "--exclude", "__pycache__/",
+                 # results/ holds the Mac's pulled evaluation rows, including WITHDRAWN ones. Pushing them to
+                 # every pod meant a later pull brought them home nested one level deeper, outside the
+                 # .withdrawn marker, where a pooling script counted them as real measurements. Pods WRITE
+                 # results; they never read the Mac's.
+                 "--exclude", "results/",
                  "--exclude", "recordings/", "--exclude", "*.mp4", "--exclude", "*.mov",
                  "--exclude", "checkpoints/", "--exclude", ".git/", "--exclude", "*.pt", "--exclude", ".DS_Store",
                  # datasets/ was NOT excluded, so 52 GB of collected episodes was pushed to every pod. Pods
