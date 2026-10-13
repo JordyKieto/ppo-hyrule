@@ -350,7 +350,7 @@ class CombatConfig:
     #   both. Gated on GOHMA_ATTACK so it pays for defence rather than for standing still. Default 0.0 keeps
     #   the `full` baseline reproducible; the `simple` preset turns it on.
     g_approach: float = 0.0            # per 100 units of NET progress toward Gohma, outside her attack frames.
-    g_approach_cap: float = 3.0        #   The gap the 10-slot eval exposed: GohmaTracker.step fully replaces
+    g_approach_cap: float = 7.0        #   The gap the 10-slot eval exposed: GohmaTracker.step fully replaces
     #   CombatTracker.step and never calls super(), so the generic `approach` term (w_approach, paid in
     #   CombatTracker) has NEVER fired on Gohma. The only distance term that ran was `approach_stunned`, gated
     #   on GOHMA_STUNNED -- it pays for closing the last few units AFTER she is already down, and pays nothing
@@ -367,8 +367,18 @@ class CombatConfig:
     #   otherwise bid against each other on the same step. Phase separation is the existing design intent
     #   ("close when she is not swinging, hold off when she is"), not a new idea.
     #
-    #   Scale: the furthest slot starts 490 units out, so closing to sword range is ~4 units of progress =
-    #   +2.0 at 0.5, against boss_defeat's +60. Default 0.0 keeps every earlier run reproducible.
+    #   Scale: the furthest slot starts 541 units out and sword range is 90, so the most useful net progress
+    #   any episode can bank is ~451 units. At 1.5 that is +6.77, just under the 7.0 cap -- deliberately, so
+    #   the gradient survives all the way to contact. Against boss_defeat's +60 and boss_damage's +4/HP.
+    #
+    #   v15 ran 0.5 / cap 3.0 and measured `reward/approach` at mean +0.609 per episode over 18 ranks, i.e.
+    #   the policy banked ~120 of those 451 units while the recorded human win banks the whole cap. The term
+    #   was active and the behaviour it pays for was ~20% realised, so v16 raises the coefficient 3x. The CAP
+    #   had to move with it: at 1.5 against a 3.0 cap the cap binds after 200 units, which would zero the
+    #   gradient over exactly the 200-450 unit range the term exists to reward. Coefficient and cap are one
+    #   knob -- the term's strength -- not two variables.
+    #
+    #   Default 0.0 keeps every earlier run reproducible.
     g_stun_on_convert: bool = False    # pay seed_stun / nut_stun only when that stun is CONVERTED into damage.
     #   Default False keeps the measured baseline reproducible; the `simple` preset turns it on. Paying at the
     #   stun TRANSITION rewards the stun itself, so a policy can farm stuns it never cashes in: measured
@@ -627,8 +637,9 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
     "g_guard": 0.0,
     "g_spacing": 0.02,
-    # the approach channel, new in v15. See g_approach in CombatConfig for why it was absent until now.
-    "g_approach": 0.5,
+    # the approach channel, new in v15 at 0.5 / cap 3.0, raised 3x for v16 after v15 realised only ~20% of
+    # what it pays for. See g_approach in CombatConfig for why it was absent until v15 at all.
+    "g_approach": 1.5,
 }
 
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),

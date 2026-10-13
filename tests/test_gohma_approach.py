@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.combat import CombatConfig, CombatState, Enemy      # noqa: E402
+from zelda_rl.combat import GOHMA_SIMPLE, CombatConfig, CombatState, Enemy      # noqa: E402
 from zelda_rl.gohma import GOHMA_STATE, GohmaTracker              # noqa: E402
 
 UPD = 0x801E75F8
@@ -66,14 +66,32 @@ def main():
     check("floor_prepare closing pays 0", run([490, 290, 90], state="floor_prepare"), 0.0)
     check("floor_walk closing pays", run([490, 290, 90], state="floor_walk"), 0.5 * 4.0)
 
-    print("\nthe cap, and reproducibility of every earlier run")
-    check("capped at g_approach_cap", run(list(range(1400, 0, -50))), CombatConfig().g_approach_cap)
+    # Tested at the SHIPPED coefficient, not the function default: the cap only means anything against the
+    # value the fleet actually trains with, and when v16 raised 0.5 -> 1.5 this assertion was the thing that
+    # noticed the cap no longer bound.
+    live = GOHMA_SIMPLE["g_approach"]
+    print(f"\nthe cap, at the coefficient the `simple` preset ships ({live})")
+    check("a 1350-unit walk hits the cap", run(list(range(1400, 0, -50)), g_approach=live),
+          CombatConfig().g_approach_cap)
+
+    # THE DESIGN PROPERTY: the cap must NOT bind on a real crossing, or the gradient dies partway across the
+    # room -- which is exactly what raising the coefficient alone would have done.
+    far = CombatConfig()
+    crossing = run([541, 450, 350, 250, 150, 90], g_approach=live)
+    ok = crossing < far.g_approach_cap
+    print(f"  {'PASS' if ok else 'FAIL'}  the longest real crossing (541 -> 90) stays UNDER the cap: "
+          f"{crossing:+.2f} < {far.g_approach_cap:+.2f}")
+    if not ok:
+        fails.append("crossing under cap")
+
+    print("\nreproducibility of every earlier run")
     check("g_approach=0 pays nothing (v11-v14 reproducible)", run([490, 290, 90], g_approach=0.0), 0.0)
 
     c = CombatConfig()
     print("\nscale, against the terms it competes with")
-    print(f"  a full 490 -> 90 crossing pays {run([490, 390, 290, 190, 90]):+.2f}  "
-          f"(cap {c.g_approach_cap:+.2f}, g_spacing_cap {c.g_spacing_cap:+.2f})")
+    print(f"  a full 490 -> 90 crossing pays {run([490, 390, 290, 190, 90], g_approach=live):+.2f} at the "
+          f"shipped {live}  (cap {c.g_approach_cap:+.2f}, g_spacing_cap {c.g_spacing_cap:+.2f}, "
+          f"boss_defeat {c.g_boss_defeat:+.0f})")
     print(f"\n{'ALL PASS' if not fails else str(len(fails)) + ' FAILED: ' + ', '.join(fails)}")
     return 1 if fails else 0
 
