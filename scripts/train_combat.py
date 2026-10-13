@@ -67,7 +67,7 @@ def parse_args():
                     help="multiply the death penalty by this. 0 removes it. E39's ablation: removing the death "
                          "penalty delayed an equivalent collapse by ~10 updates. Our own slot-8 data has the "
                          "same signature -- 20%% death, 0 wins in 225 episodes, surviving by not engaging.")
-    ap.add_argument("--reward", choices=["full", "simple"], default="full",
+    ap.add_argument("--reward", choices=["full", "simple", "damage"], default="full",
                     help="gohma only. `simple` applies combat.GOHMA_SIMPLE: drops the entrance-era slingshot "
                          "shaping cluster and the distraction terms, and pays seed/nut stun credit only when "
                          "the stun is converted into damage. Every OUTCOME term is unchanged. See "
@@ -147,7 +147,14 @@ def main():
         key = "g_death_penalty" if args.profile == "gohma" else "death_penalty"
         profile_defaults = {**profile_defaults, key: base * args.death_scale}
         LOGGER.info("death penalty scaled x%.2f -> %.2f", args.death_scale, base * args.death_scale)
-    if args.profile == "gohma" and args.reward == "simple":
+    if args.profile == "gohma" and args.reward == "damage":
+        from zelda_rl.combat import GOHMA_DAMAGE
+        profile_defaults = {**profile_defaults, **GOHMA_DAMAGE}
+        LOGGER.info("reward preset `damage`: outcomes only -- boss_damage x (1 + %.1f x fraction of her HP "
+                    "gone), boss_defeat, timeout, death x --death-scale. %d shaping terms zeroed.",
+                    CombatConfig().g_boss_hp_progress,
+                    sum(1 for v in GOHMA_DAMAGE.values() if v == 0.0))
+    elif args.profile == "gohma" and args.reward == "simple":
         from zelda_rl.combat import GOHMA_SIMPLE
         profile_defaults = {**profile_defaults, **GOHMA_SIMPLE}
         LOGGER.info("reward preset `simple`: %d terms zeroed, stun credit paid on conversion only",

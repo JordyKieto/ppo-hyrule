@@ -769,6 +769,46 @@ def deficit_weights(rate: dict[int, float], ratio: float = 4.0, min_share: float
         p = {k: (floor if k in short else p[k] / rest * free) for k in ks}
     return p
 
+
+# GOHMA_DAMAGE: the reward stripped to the ONE thing the task is about -- taking her HP down -- paid
+# multiplicatively so each hit is worth more as she nears zero.
+#
+#   boss_damage = g_boss_damage * dmg * (1 + g_boss_hp_progress * fraction_of_her_HP_gone)
+#
+# At the shipped 4.0 / 2.0 that is 4.80 for her first HP and 12.00 for her last: the gradient is steepest
+# exactly where every version so far has stopped. Damage has saturated at 3.2-3.4 of 10 across eight
+# versions, so the last six HP are the task and this is the term that pays for them.
+#
+# WHY A NEW PRESET RATHER THAN `simple`. `--reward simple` zeroes 21 terms and is still not simple: it leaves
+# g_seed_stun 15.0, g_nut_stun 2.0, g_stun_hit 2.0, w_approach 0.5 (as approach_stunned), g_sword_ready,
+# g_spacing and four larva terms live. Every shaping term this project has measured has been neutral at best
+# and `g_approach` was actively harmful, so this preset removes ALL of them and keeps only outcomes:
+#
+#   KEPT  boss_damage (x the progress multiplier), boss_defeat, the defeat speed bonus, the timeout penalty,
+#         the death penalty (scaled by --death-scale, currently 0), and time_penalty 0.001 against stalling.
+#   GONE  every stun credit, every slingshot and nut term, spacing, guard, approach, sword-ready, shield,
+#         block, dodge, lock-on, larva rewards, pickups, grass.
+#
+# This is a deliberately harsh test: if sparse outcome reward alone cannot learn the fight, that is a result
+# about the task and not another reward tuning cycle.
+GOHMA_DAMAGE: dict[str, float | bool] = {
+    # the slingshot / nut / stun channel: gone
+    "g_seed_stun": 0.0, "g_nut_stun": 0.0, "g_stun_hit": 0.0, "g_nut_miss": 0.0, "g_seed_miss": 0.0,
+    "g_red_eye_seed": 0.0, "g_red_eye_seed_cap": 0.0, "g_sling_red_eye": 0.0, "g_sling_red_eye_cap": 0.0,
+    "g_sling_ready": 0.0, "g_sling_ready_cap": 0.0, "g_unfired_red_eye": 0.0, "g_drop_red_eye_shot": 0.0,
+    "g_elevated_seed": 0.0, "g_elevated_seed_cap": 0.0, "g_lock_red_eye": 0.0, "g_lock_red_eye_cap": 0.0,
+    # positioning and defence: gone. g_approach measured a monotone dose-response AGAINST boss damage.
+    "g_approach": 0.0, "w_approach": 0.0, "g_spacing": 0.0, "g_guard": 0.0, "g_sword_ready": 0.0,
+    "w_shield_face": 0.0, "w_block": 0.0, "w_dodge": 0.0, "w_stun_hit": 0.0, "w_lockon": 0.0,
+    "w_lock_step": 0.0,
+    # larvae and scenery: not the boss
+    "g_larva_damage": 0.0, "g_larva_damage_sling": 0.0, "g_larva_kill_sling": 0.0, "g_larva_kill": 0.0,
+    "g_grass_cut": 0.0, "g_grass_cut_cap": 0.0, "g_seed_pickup": 0.0, "g_nut_pickup": 0.0,
+    "g_pickup_cap": 0.0, "g_link_heal": 0.0, "w_link_heal": 0.0,
+    # the stun-credit machinery is irrelevant with no stun reward, but pin it so the preset is explicit
+    "g_stun_on_convert": True,
+}
+
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),
                  ("locked_on_target", 1), ("arrow_on_target", 1), ("shielding", 1), ("damaged", 1),
                  ("nearest_target_rel_pos", 3), ("nearest_target_dist", 1), ("nearest_target_hp", 1),
