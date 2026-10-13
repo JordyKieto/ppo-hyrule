@@ -35,7 +35,10 @@ sys.path.insert(0, str(ROOT))
 # Kept next to the evaluator's own copy on purpose: this script must read rows written by an OLDER evaluator
 # that did not record hp/dist in by_slot, so it cannot depend on those fields being present.
 SLOT_HP = {1: 5, 2: 5, 3: 10, 4: 8, 5: 10, 6: 6, 7: 5, 8: 10, 9: 5, 10: 5}
-SLOT_DIST = {1: 473, 2: 368, 3: 188, 4: 541, 5: 472, 6: 357, 7: 38, 8: 448, 9: 394, 10: 490}
+# Imported, not copied: the horizontal distances live in zelda_rl/combat.py, measured by
+# scripts/audit_gohma_slots.py. Four separate copies of this table existed and the one here was 3D,
+# which put slot 2 in the wrong band (AGENTS 3).
+from zelda_rl.combat import GOHMA_SLOT_DIST as SLOT_DIST  # noqa: E402
 BANDS = (("near  <200u", 0, 200), ("mid 200-400u", 200, 400), ("far   >400u", 400, 10 ** 9))
 
 

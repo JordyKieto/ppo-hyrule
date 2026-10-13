@@ -77,12 +77,24 @@ def main() -> int:
     if not c["combat/success_hard"] > a["combat/success_hard"]:
         fails.append("v15 should beat v11 on success_hard")
 
-    print("\nbands are assigned by engagement distance")
-    bands = band_metrics(eps_for({7: 10, 3: 10, 6: 10, 5: 10}, {7: 1.0, 3: 0.0, 6: 0.0, 5: 0.0}))
-    check("near band = slots 7 and 3 (38u, 188u), half winning", bands["by_band/near/success_rate"], 0.5)
-    check("near band n = 20", bands["by_band/near/n"], 20.0)
-    check("mid band = slot 6 (357u)", bands["by_band/mid/n"], 10.0)
-    check("far band = slot 5 (472u)", bands["by_band/far/n"], 10.0)
+    # Which slot sits in which band is DERIVED from the distance table, never written in here. The first
+    # version of this test hardcoded "far band = slot 5 (472u)"; slot 5 is 346.7u horizontally and is MID,
+    # and the test failed the moment the 3D distances were corrected -- which is the test working, but it
+    # should not have been expressible in the first place.
+    print("\nbands are assigned by engagement distance (slots derived from GOHMA_SLOT_DIST)")
+    pick = {}
+    for name, lo, hi in (("near", 0, 200), ("mid", 200, 400), ("far", 400, 10 ** 9)):
+        pick[name] = sorted((s for s in SLOT_HP if lo <= GOHMA_SLOT_DIST[s] < hi),
+                            key=lambda s: GOHMA_SLOT_DIST[s])
+    print("  " + "  ".join(f"{k}={[f'{s}({GOHMA_SLOT_DIST[s]:.0f}u)' for s in v]}" for k, v in pick.items()))
+    one = {name: v[0] for name, v in pick.items() if v}
+    mix = {s: 10 for s in one.values()}
+    bands = band_metrics(eps_for(mix, {s: (1.0 if s == one["near"] else 0.0) for s in mix}))
+    for name in ("near", "mid", "far"):
+        check(f"{name} band n = 10 (slot {one[name]}, {GOHMA_SLOT_DIST[one[name]]:.0f}u)",
+              bands[f"by_band/{name}/n"], 10.0)
+    check("only the near slot wins", bands["by_band/near/success_rate"], 1.0)
+    check("the mid slot does not", bands["by_band/mid/success_rate"], 0.0)
 
     print("\nedge cases")
     check("empty rollout returns nothing", float(len(band_metrics([]))), 0.0)

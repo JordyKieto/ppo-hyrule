@@ -266,6 +266,57 @@ measurement silently:**
 at 0 while the weights continue from v14 update ~33. **Reproducing v11–v14 under the `simple` preset now
 requires `--combat-json '{"g_approach": 0}'`**, because the preset turns the term on.
 
+### CORRECTION: the start-slot distances were 3D, and six of ten were overstated
+
+Asked whether any start slot is still the PRE-FIGHT state (`ceiling_wait`, which needs the cutscene triggered
+by looking up), `scripts/audit_gohma_slots.py` was written to read Gohma's actor state out of the emulator on
+a pod rather than trust the audit table in `docs/GOHMA_FOCUS.md`. **M**, `runs/gohma_slot_audit.json`.
+
+**All ten slots are engaged combat states; no `ceiling_wait` remains.** The rebuild of slots 1/2/10 held and
+S3 carries the fixed states. But the measured horizontal distances disagree with the table this project has
+been banding on:
+
+| slot | state | table (3D) | measured horizontal |
+|---|---|---|---|
+| 3 | `stunned` | 188 | 188.5 ✓ |
+| 6 | `floor_eye_red` | 357 | 357.0 ✓ |
+| 7 | `stunned` | 38 | 37.9 ✓ |
+| 8 | `stunned` | 448 | 448.0 ✓ |
+| 2 | `ceiling_move` | 368 | **140.1** |
+| 9 | `ceiling_spawn` | 394 | **210.6** |
+| 5 | `ceiling_eye_red` | 472 | **346.7** |
+| 4 | `ceiling_spawn` | 541 | **436.0** |
+| 1 | `ceiling_move` | 473 | **424.2** |
+| 10 | `ceiling_move` | 490 | **424.9** |
+
+The four that agree are exactly the four **floor** states; every slot that disagreed is a **ceiling** state,
+and each discrepancy reconciles to ~320–340 units of ceiling height — slot 2 `sqrt(368² − 140²) = 340`, slot 9
+333, slot 5 320, slot 4 320. The old table was 3D distance, which includes a vertical component Link never
+crosses. `g_approach` had already been switched to horizontal (`hdist`) a week earlier for exactly this
+reason and these constants were never reconciled with it: **AGENTS 3**.
+
+**Band reassignment:** slot 2 mid → **near**, slot 5 far → **mid**. Rebanding v14's pooled 559 episodes:
+
+| band | as reported (3D) | corrected (horizontal) |
+|---|---|---|
+| near < 200u | 8.59% (n=128, slots 7,3) | **6.82%** (n=176, slots 7,2,3) |
+| mid 200–400u | 2.52% (n=159) | **2.86%** (n=175, slots 9,5,6) |
+| far > 400u | 1.10% (n=272) | **0.48%** (n=208, slots 1,10,4,8) |
+
+**Claim R9 survives and strengthens**: the fall from near to far is **14×**, not the 7.5× reported, with the
+far band at **one win in 208 episodes**. The numbers in the earlier R9 row are superseded by these.
+
+The constant now lives once, in `zelda_rl/combat.GOHMA_SLOT_DIST`, imported by `eval_fleet.py`,
+`eval_compare.py` and `train_compare.py`; four separate copies existed and the ones in the scripts were the
+3D values. `tests/test_band_metrics.py` derives which slot is in which band FROM the constant — it previously
+hardcoded "far band = slot 5 (472u)" and failed the moment the correction landed, which is the test working
+but should not have been expressible.
+
+**Scope of the error.** v17 is running with the old constant compiled into its `by_band/*` metrics, so its
+`mid`/`far` splits put slot 5 in `far`. Its headline `combat/success_hard` is **unaffected**: `hard` excludes
+the near band, which for the trained set (3–8) is slots 7 and 3 under both tables. The run was not restarted
+for this.
+
 ### The version trend table, and the metric that misread three decisions
 
 Fleet-mean `combat/success_rate` by third of each run, from the exported W&B history. **M**.

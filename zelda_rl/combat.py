@@ -645,8 +645,26 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
 }
 
 
-# Start-slot engagement distance, in world units, Link to Gohma at the savestate.
-GOHMA_SLOT_DIST = {1: 473, 2: 368, 3: 188, 4: 541, 5: 472, 6: 357, 7: 38, 8: 448, 9: 394, 10: 490}
+# Start-slot engagement distance: the HORIZONTAL (x/z) gap from Link to Gohma at the savestate, measured by
+# `scripts/audit_gohma_slots.py` on a pod on 2026-10-13 and recorded in `runs/gohma_slot_audit.json`. This is
+# the single source of truth; the eval and comparison scripts import it rather than keeping copies.
+#
+# THE PREVIOUS VALUES WERE 3D DISTANCES and overstated six of the ten slots. Gohma spends the fight on the
+# CEILING, ~320-340 units up, so a 3D gap includes a vertical component Link never has to cross. The four
+# slots that agree between the two tables (3, 6, 7, 8) are exactly the four FLOOR states; every slot that
+# disagreed is a ceiling state, and the discrepancy reconciles to the ceiling height:
+# slot 2 sqrt(368^2 - 140^2) = 340, slot 9 = 333, slot 5 = 320, slot 4 = 320.
+#
+# Consequences of the correction, which was only found by reading the emulator instead of the table:
+# slot 2 moves mid -> NEAR (368 -> 140) and slot 5 moves far -> MID (472 -> 347). Rebanding v14's pooled
+# 559-episode result makes the distance wall SHARPER, not weaker -- near 6.82% / mid 2.86% / far 0.48%,
+# a 14x fall rather than the 7.5x first reported, with the far band at one win in 208 episodes.
+#
+# AGENTS 3: a distance is derived from the definition and asserted, never carried over from an earlier
+# measurement whose definition differed. `g_approach` had already been switched to `hdist` for exactly this
+# reason a week earlier, and these constants were not reconciled with it.
+GOHMA_SLOT_DIST = {1: 424.2, 2: 140.1, 3: 188.5, 4: 436.0, 5: 346.7,
+                   6: 357.0, 7: 37.9, 8: 448.0, 9: 210.6, 10: 424.9}
 GOHMA_BANDS = (("near", 0, 200), ("mid", 200, 400), ("far", 400, 10 ** 9))
 
 
