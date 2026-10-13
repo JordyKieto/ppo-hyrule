@@ -451,3 +451,131 @@ torch.set_num_threads(1)          # before building any env
 Dolphin sets it.** And when an emulator "stalls", check thread contention before you touch the env count:
 `torch.get_num_threads()` against the core count is a five-second test, and lowering the env count hides the
 problem while halving throughput.
+
+## 29. A metric that moves with the sampling distribution cannot compare policies
+
+**The incident.** `combat/success_rate` is episode-weighted over the curriculum's start slots. `gohma-band-v11`
+showed the best trend of any version — `+0.175/update` overall, **`+0.270/update` over its final third** — and
+that apparent momentum is why it was stopped at update 37 to try the inverted curriculum of v12. The per-slot
+history says what was actually happening:
+
+| slot | distance | first third | last third | slope |
+|---|---|---|---|---|
+| **7** | **38 u** | 7.32% | **14.00%** | **+0.298** |
+| 3 | 188 u | 0.00% | 0.00% | 0 |
+| 6 | 357 u | 0.00% | 0.00% | 0 |
+| 2 | 368 u | 0.00% | 0.00% | 0 |
+| 8 | 448 u | 0.00% | 0.00% | 0 |
+| 5 | 472 u | 0.00% | 0.00% | 0 |
+| 1 | 473 u | 0.00% | 0.00% | 0 |
+| 4 | 541 u | 0.00% | 0.00% | 0 |
+
+v11 was not learning the boss. It was learning the one start where Link begins on top of her, and the
+aggregate climbed because that run weighted slot 7 at **50%**. Nine slots sat at exactly zero for 37 updates.
+
+The same instrument then lied in the other direction: v14 and v15 read **flat on pooled success** while being
+the first versions to win from *any* distance — v15 is non-zero on all six trained slots where v11 was
+non-zero on one, and off the easy slot v15 averages ~3.3% against v11's ~0.13%, about **25× broader**. Three
+version decisions were made from this number and all three were misread.
+
+**The rule.** Any headline that averages over a distribution you control must be reported next to a
+**mix-invariant** form of itself, and the mix-invariant form is what a version-to-version claim cites.
+`zelda_rl/combat.band_metrics()` emits `combat/success_balanced` (unweighted mean of the per-slot rates),
+`combat/success_hard` (the same with the easiest band dropped), `combat/slots_nonzero` (how many starts it
+wins from at all — v11 scored 1, v15 scores 6) and `by_band/*` by engagement distance. The trainer's log line
+carries `bal hard near mid far nz` beside `succ` so the misleading number never appears alone, and
+`tests/test_band_metrics.py` **asserts** the invariance on v11's real skill profile: identical per-slot skill
+under two mixes gives pooled rates 3.89 points apart and the same `success_balanced` to 1e-9.
+
+Corollary, and the reason this matters beyond reporting: **PPO optimises expected return under the sampling
+distribution, so the curriculum weights are part of the objective.** v16 spent 30% of its episodes on the slot
+it already won 28% of the time and 13% on the one it won 0.5% of. If the headline is mix-invariant, the mix
+itself becomes a free variable you can tune (`--slot-sampling deficit`).
+
+## 30. A selector is not a selector until its statistic is shown to have resolution
+
+**The incident.** The held-out evaluator ranked checkpoints to answer "which policy do we keep". It ranked on
+**16-episode** held-out subsets. Pooled held-out rate over every v14 evaluation was **7/416 = 1.68%**, at which
+a 16-episode subset reads 0.00% 76.2% of the time and **6.25% 20.9% of the time**. So the 6.25% that crowned
+`gohma-kl_r9_u00040.pt` was *one lucky win in sixteen* — an outcome any checkpoint produces one time in five,
+and across 26 evaluations several such rows were near-certain. Tested directly: the selected checkpoint's
+2/32 against every other checkpoint's 5/384 gives **p = 0.094, not distinguishable**. Separating even a
+genuinely 2× better checkpoint would need **~256 held-out episodes each**, 16× what it had.
+
+Worse, the symptom was *seen and worked around*. The log had already shown `>>> NEW BEST on held-out slots:
+0.00%` — every checkpoint scoring zero, so a strict `>` never fired and whichever arrived first stayed best
+forever. The response was to add a `boss_hp_taken` tiebreak, not to conclude the statistic was unusable. §1
+says run the control; the control ran, it failed, and a workaround shipped instead of a retraction.
+
+**The rules.**
+
+1. Before a statistic selects anything, compute **what it reads under the null**: the pooled rate, and the
+   probability of each value its n can produce. If the winning value is a likely draw from the null, there is
+   no selector — there is a lottery with a percentage printed on it.
+2. **State the n the selector needs** and compare it to the n it gets. If the gap is 16×, the design is wrong,
+   not under-powered.
+3. Prefer a **graded** statistic over a rate when the rate is sparse. `boss_hp_taken` ranges 0.5–4.7 on 32
+   episodes where the defeat rate cannot leave {0, 1/32, 2/32}.
+4. **Select the run, not the checkpoint,** when the per-checkpoint n is unreachable. Training logs gave 2,629
+   episodes in ten updates on six slots; the evaluator gave 32 held-out episodes per checkpoint.
+5. A selector whose output nothing reads is not a selector. `.best.json` was written by the evaluator and read
+   by **nothing** — not by the trainer, not by the relaunch, not by hand. Both resumes picked `latest.pt` by
+   recency while a "best" file sat beside it. Wire the loop or delete the half of it that implies it exists.
+
+## 31. Use the instrument you already have before you wait on a slower one
+
+**The incident.** Asked whether v16 was improving, the answer was "~40 more minutes" — the time for the eval
+fleet to produce enough 40-episode evaluations. Meanwhile the training run had already played **2,629
+episodes** across six slots and logged every one, 65× the evidence, available immediately. The eval fleet is
+the right instrument for a *held-out* claim and is slow by construction (40 episodes per checkpoint, one
+checkpoint per 5 updates). It is the wrong instrument for "is it learning".
+
+`scripts/train_compare.py` now answers the fast question from the training logs (`--exact`, straight from the
+pods) or from W&B at matched updates; `scripts/eval_compare.py` answers the held-out question. Ask which
+question is being asked before choosing which to wait for.
+
+## 32. Pooling evidence is a measurement, and it has its own failure modes
+
+Writing `scripts/eval_compare.py` — which only replaced inline analysis that had been retyped on every status
+request — exposed **three** errors in that hand-pooling, all of which had moved p-values toward significance:
+
+1. **Retracted rows were counted.** 2,831 episodes from the withdrawn round-based evaluator were in the pool.
+   Directory markers alone could not stop it: `results/` was never in `CODE_EXCLUDES`, so every launch rsynced
+   the Mac's withdrawn rows *onto* the pods, and pulling results back nested them one level deeper, outside
+   the marker. Rows are now rejected **by content** — unequal per-slot counts, or fewer slots measured than
+   the row lists, neither of which the fixed evaluator can produce.
+2. **Duplicates.** The same evaluation existed in a committed copy, a re-pull and the pod's own jsonl; v14
+   pooled to 1,551 episodes where it ran 880. Deduplicated on `(checkpoint, rank, ts)`.
+3. **A subset posing as the baseline.** The quoted v14 baseline was 559 episodes of an 880-episode run,
+   because the later evaluations lacked a `wandb_group` and fell into an unlabelled bucket. The corrected
+   comparison moved v15 from p=0.122 to **p=0.087** — the same v15 data against the whole baseline.
+
+**The rule.** The pooling step is code, with tests and markers, not something retyped per question. Mark
+retracted data so it cannot be re-admitted (`.withdrawn`), label rows that predate a provenance field
+(`.run_label`), deduplicate on an identity tuple, and print what was skipped and why on every run.
+
+## 33. The same three operational rules broke again, and what finally stopped them
+
+This session repeated §15 and §24 verbatim, hours after citing both to the user:
+
+- **§15.** `fleet bootstrap` without `--assets-s3` and without usable seeds falls to an `else` branch that
+  pushes the NAND and ten savestates **from the Mac** — 446 MB per pod at ~0.7 MB/s. All 462 MB were already
+  in S3, with the Dolphin tarball and a prebuilt venv. Cost: ~25 min of a 19-pod fleet, ~$4, for an upload
+  that was never needed. The flag was in `--help` the whole time.
+- **§24.** The same bootstrap was piped through `| tail -18`, which buffers until the command exits, so its
+  log was empty for 25 minutes while it ran.
+
+Prose did not stop either one. What did:
+
+- **`assets_in_s3()`** HEADs the asset keys once (cached) and `fleet bootstrap` now **takes the S3 path
+  automatically** when they are present — there is no flag left to forget. If S3 is missing assets and no
+  seeds are given it **refuses with exit 2**, printing the minutes the upload would cost and the three ways to
+  fix it. `--push-from-mac` is the deliberate override.
+- **`fleet ckpt`** puts an arbitrary training `--init-from` or `--kl-anchor` checkpoint on every pod by
+  presigned GET and **verifies by `stat`-ing the path the trainer will open** (8.2 MB × 19 pods in 15 s).
+- Long jobs write to a file with `-u` and are read with `grep`/`tail` afterwards. **Never pipe a long-running
+  command into `tail` and expect to watch it.**
+
+The pattern across §21 and this section is now unambiguous: **every rule in this file that is still prose will
+be broken again.** When a rule is cited in a message, the next question is whether it exists as a check, and
+if not, writing the check is part of the work.

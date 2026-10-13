@@ -149,6 +149,8 @@ exported. Session boundaries are where the reward or the start set changed.
 | `gohma-band-v13` | 3 | **graded ladder** 30% at 5 HP / 30% at 6–8 HP / 40% full | peak 7.26% defeat; **full-HP rate 0.64%, 21× v11**; plateaued ~update 50 | **`results/kj9ypr7w/`** (74 rows) |
 | `gohma-kl-v14` | **4 (10-05)** | **KL anchor to v13** (`--kl-anchor v13_r12_latest.pt --kl-coef 0.3`, init from the same file) + **death penalty removed** (`--death-scale 0`); v13's ladder unchanged; a 2-pod CPU **held-out evaluator** alongside | running; updates 15–24 fleet mean **succ 8.4 ± 1.5%**, death ~52%, `klA` 0.012 — **flat against its own v13 init (7.4%)** | pending |
 | `gohma-kl-v15` | 4 (10-05) | **`g_approach`**: 0.5 per 100 units of NET horizontal progress toward Gohma, cap 3.0, silent during her attack frames. Everything else identical to v14 (same anchor, `--kl-coef 0.3`, `--death-scale 0`, same ladder), resumed per-rank from v14 update ~33 | **stopped at update 40** (960k steps/rank, 834 eps/rank). Train succ 7.8-12.4%, `klA` 0.0146->0.0167. Eval: **9/160 = 5.6%** vs v14's 18/559 = 3.2%, **p 0.122, not significant** | `checkpoints/kept/gohma-kl-v15-r4_latest.pt` |
+| `gohma-kl-v16` | **5 (10-13)** | approach coefficient **0.5 -> 1.5**, cap 3.0 -> 7.0 (one variable vs v15); resumed from v15 update 40 | **stopped at update 20.** 0/5 bands moved vs v15 at matched updates; started LEVEL with v15 despite a 40-update head start; worst late slope of any version, **-0.210/update** | `checkpoints/kept/gohma-kl-v16-r4_latest.pt` md5 `0e11fcccb6f5` |
+| `gohma-kl-v17` | 5 (10-13) | coefficient **reverted to v15's 0.5** / cap 3.0, and **adaptive start-slot sampling** (`--slot-sampling deficit --slot-deficit-ratio 4.0 --slot-deficit-floor 0.06 --slot-warmup 3`); resumed from **v15** update 40, so one variable vs v15 | running | pending |
 
 **v14 is two changes at once** (anchor + no death penalty), so a positive result will not say which did
 it. That was accepted deliberately to get one run instead of two; it is recorded here so no paper claims the
@@ -263,6 +265,135 @@ measurement silently:**
 **Step-axis discontinuity:** v15 resumes by `--init-from`**Step-axis discontinuity:** v15 resumes by `--init-from`, not `--resume`, so its `update` counter restarts
 at 0 while the weights continue from v14 update ~33. **Reproducing v11–v14 under the `simple` preset now
 requires `--combat-json '{"g_approach": 0}'`**, because the preset turns the term on.
+
+### The version trend table, and the metric that misread three decisions
+
+Fleet-mean `combat/success_rate` by third of each run, from the exported W&B history. **M**.
+
+| version | updates | first 1/3 | mid 1/3 | last 1/3 | slope/upd | late slope |
+|---|---|---|---|---|---|---|
+| `gohma-v8` | 129 | 0.03% | 0.15% | 0.08% | +0.001 | +0.004 |
+| `gohma-v10` | **399** | 0.13% | 0.65% | 1.21% | +0.004 | +0.005 |
+| `gohma-band-v11` | 37 | 3.27% | 5.38% | **7.66%** | **+0.175** | **+0.270** |
+| `gohma-band-v12` | 30 | 1.88% | 2.14% | 1.65% | −0.013 | +0.098 |
+| `gohma-band-v13` | 73 | 5.56% | 6.81% | 6.86% | +0.033 | +0.048 |
+| `gohma-kl-v14` | 40 | 7.48% | 8.85% | 8.79% | +0.044 | −0.092 |
+| `gohma-kl-v15` | 47 | 9.52% | 10.69% | 9.82% | +0.011 | −0.195 |
+| `gohma-kl-v16` | 20 | 9.63% | 9.33% | 7.99% | −0.166 | −0.210 |
+
+**RETRACTION: v11's trend, and therefore the reasoning that produced v12, was an artefact of the curriculum
+mix.** v11 was stopped at update 37 because it looked like the fastest-improving version. Its per-slot
+history (**M**, W&B `by_slot/s*/success_rate`):
+
+| slot | distance | first 1/3 | last 1/3 | slope |
+|---|---|---|---|---|
+| **7** | **38 u** | 7.32% | **14.00%** | **+0.298** |
+| 3 | 188 u | 0.00% | 0.00% | 0 |
+| 6 | 357 u | 0.00% | 0.00% | 0 |
+| 2 | 368 u | 0.00% | 0.00% | 0 |
+| 8 | 448 u | 0.00% | 0.00% | 0 |
+| 5 | 472 u | 0.00% | 0.00% | 0 |
+| 1 | 473 u | 0.00% | 0.00% | 0 |
+| 4 | 541 u | 0.00% | 0.00% | 0 |
+
+v11 was learning the one start where Link begins on top of Gohma. Nine slots were at **exactly zero for 37
+updates**, and the aggregate climbed because that run weighted slot 7 at 50%. **No claim that v11 was
+improving on the task survives**, and claim R8's "v11 +0.700/update" is the same artefact.
+
+The instrument then misread in the other direction. v15's per-slot profile (**M**):
+
+| slot | 38 u | 188 u | 357 u | 448 u | 472 u | 541 u |
+|---|---|---|---|---|---|---|
+| v15 | 28.46% | 3.83% | 4.07% | 0.51% | 6.04% | 1.98% |
+| v11 | 14.00% | 0.00% | 0.00% | 0.00% | 0.00% | 0.00% |
+
+**v15 is the best policy this project has produced**, non-zero on all six trained slots where v11 was non-zero
+on one, and ~3.3% against ~0.13% off the easy slot — about **25× broader**. It reads as the flattest run in
+the table. Fixed in code by `zelda_rl/combat.band_metrics()`: see AGENTS 29.
+
+Also settled by the table: **more time was not the missing ingredient.** `gohma-v10` ran **399 updates** and
+ended at 1.21%; `gohma-v8` ran 129 from scratch and never left 0.1%.
+
+### RETRACTION: the held-out checkpoint selector had no resolution, and nothing read it anyway
+
+The eval fleet was built to answer "which policy do we keep" by held-out defeat rate. It ranked on
+**16-episode** held-out subsets (2 held-out slots × 8 episodes per eval rank). Pooled held-out rate over every
+v14 evaluation: **7/416 = 1.68%**. At that rate a 16-episode subset reads:
+
+| it shows | probability |
+|---|---|
+| 0.00% | 76.2% |
+| **6.25%** | **20.9%** |
+| 12.50% | 2.7% |
+
+So the 6.25% that selected `gohma-kl_r9_u00040.pt` is **one win in sixteen**, which any checkpoint produces
+one time in five. Tested directly: the selected checkpoint (2/32) against every other v14 checkpoint (5/384)
+gives **one-sided Fisher p = 0.094 — not distinguishable**, CIs 1.7–20.1% against 0.6–3.0%. Separating a
+genuinely 2× better checkpoint needs **~256 held-out episodes each**, 16× what it had. **M**.
+
+And the loop was never closed: `.best.json` is written by the evaluator and **read by nothing**. Both resumes
+(v16 from v15, and the v14 checkpoint kept) used `latest.pt` chosen by recency while a "best" file sat beside
+it — v14's selected `r9_u00040` was never kept at all, and v15's `.best.json` was destroyed with its pods.
+That cost nothing *because* the selection was meaningless, which is luck rather than judgement. See AGENTS 30.
+
+### Corrected v15-vs-v14 hold-out comparison
+
+The figure reported during the session (p=0.122) was against a **559-episode subset** of an 880-episode v14
+baseline, and the pool also contained retracted rows and duplicates. With `scripts/eval_compare.py` (content
+rejection of round-based rows, dedup on `(checkpoint, rank, ts)`, `.withdrawn` / `.run_label` markers):
+
+| band | v15 | 95% CI | v14 | 95% CI | p |
+|---|---|---|---|---|---|
+| near < 200u | 5/48 | 4.5–22.2% | 16/176 | 5.7–14.3% | 0.482 |
+| mid 200–400u | 2/40 | 1.4–16.5% | 8/264 | 1.5–5.9% | 0.388 |
+| far > 400u | 2/72 | 0.8–9.6% | 3/440 | 0.2–2.0% | 0.147 |
+| full HP | 2/56 | 1.0–12.1% | 3/264 | 0.4–3.3% | 0.212 |
+| **overall** | **9/160** | 3.0–10.3% | 27/880 | 2.1–4.4% | **0.087** |
+
+Still **not significant**; 5/5 bands point the right way. **U**. The three pooling errors this corrected are
+recorded in AGENTS 32 because the correction is the reusable part.
+
+### v16: the approach coefficient tripled, and bought nothing
+
+`g_approach` 0.5 → 1.5, cap 3.0 → 7.0, one variable against v15, resumed from v15 update 40. The term was
+confirmed firing at `reward/approach` mean **+1.932** over 19 ranks (v15's identical behaviour would pay
++1.83, i.e. ~129 units of net progress against v15's ~120). Banded training comparison at matched updates
+1–10, same instrument both arms:
+
+| band | v16 | v15 | p |
+|---|---|---|---|
+| near < 200u | 13.64% | 14.25% | 0.665 |
+| mid 200–400u | 2.71% | 4.39% | 0.907 |
+| far > 400u | 2.46% | 2.58% | 0.569 |
+| full HP | 2.61% | 2.78% | 0.706 |
+| overall | 6.23% | 6.77% | 0.741 |
+
+**0/5 bands point the right way.** And because v16 *resumed from* v15's update 40, its update 1 should already
+have been above v15's update 1 if the approach reward accumulated anything over v15's 40 updates — it starts
+level or marginally below. That is evidence against the approach reward having delivered anything, independent
+of the coefficient. Stopped at update 20. **M**.
+
+### v17: the sampling distribution as the experiment
+
+PPO optimises expected return **under the sampling distribution**, so the curriculum weights are part of the
+objective. v16 spent 30% of its episodes on the slot it already won 28% of the time and 13% on the one it won
+0.51% of. `zelda_rl/combat.deficit_weights()` puts `w_i ∝ 1/(p_i + c)` with `c` solved so the least-solved slot
+gets *exactly* `--slot-deficit-ratio` times the most-solved, from an EMA of the policy's own per-slot success.
+On v15's measured rates at ratio 4:
+
+| slot | dist | v15 rate | old mix | v17 mix |
+|---|---|---|---|---|
+| 7 | 38 u | 28.46% | 30.0% | **6.0%** (floor) |
+| 3 | 188 u | 3.83% | 13.3% | 17.5% |
+| 6 | 357 u | 4.07% | 15.0% | 17.2% |
+| 8 | 448 u | 0.51% | 13.3% | **23.8%** |
+| 5 | 472 u | 6.04% | 13.3% | 14.9% |
+| 4 | 541 u | 1.98% | 15.0% | 20.6% |
+
+Episodes on the five unsolved slots: **69.9% → 94.0%**. The 6% floor is load-bearing — v12 is the warning, a
+hand-inverted curriculum that starved what it had learned and stalled at +0.098/update; at ratio 4 slot 7
+would get 5.95% unaided and the floor lifts it. This is measurable **only** because `success_balanced` is
+mix-invariant. 25 assertions in `tests/test_deficit_weights.py` and `tests/test_band_metrics.py`. **U**.
 
 **Observation evolution** (each is a widening, function-preserving at load via `zelda_rl/transfer.py`):
 v4 483 → **v5 552** (+Gohma/larva/item blocks, actions 63 → 90) → **v6 675** (+raw aim pitch/yaw, camera and

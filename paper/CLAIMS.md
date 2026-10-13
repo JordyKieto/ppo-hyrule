@@ -15,9 +15,9 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R3 | It cost $51 and 4 h 52 m on 20 CPU pods, ≈$1.3 per million env steps | **M** | wandb timestamps + fleet kill log, `PROVENANCE.md` §3.1 |
 | R4 | An entity-factored policy with a GRU beats a flat MLP here | **U** | never run head-to-head. `ActorCritic` exists but was not ablated at scale |
 | R5 | Queen Gohma is not solved | **M** | best full-HP defeat rate 0.64%, `results/kj9ypr7w/` |
-| R6 | Reward simplification + action-space fix + engaged starts doubled Gohma's defeat rate | **M** | v10 3.29% → v11 7.0%, `results/1qk7isl2/` vs `results/p20rbwq9/` |
+| R6 | Reward simplification + action-space fix + engaged starts doubled Gohma's defeat rate | **I -- CONFOUNDED** | v10 3.29% -> v11 7.0% is pooled success, and v11 changed the START MIX as well as the reward (50% weight on slot 7, the 38-unit start). Per-slot, v11 improved slot 7 only. The reward changes may still be right; this number does not show it. R18/R19 |
 | R7 | Two of the actions the task needs did not exist in the action space | **M** | `("L","R")` Z+Shield and `("L","CL")` Z+Nut absent until 2026-09-26; shield registered on 17.4% of presses |
-| R8 | A graded HP curriculum beats both a finisher-heavy and an inverted one | **M** | v11 +0.700/update but 1 full-HP win in 3,023; v12 +0.098; v13 0.64% full-HP, 21× v11 |
+| R8 | A graded HP curriculum beats both a finisher-heavy and an inverted one | **I -- v11 figure withdrawn** | the "v11 +0.700/update" half is a curriculum artefact: v11's climb was slot 7 alone (7.32->14.00%), nine slots at exactly 0.00% for 37 updates. v13's 0.64% full-HP stands. PROVENANCE 3.2 |
 | R9 | The residual blocker is engagement DISTANCE, not boss HP | **M** | 10-slot suite, 80 eps, v14 u20: 18.75% (<200u, n=16) -> 4.17% (200-400u, n=24) -> 2.50% (>400u, n=40). `results/eval/v14_full_q_rank{0,1}.jsonl`. Earlier **I** was slot 8 alone |
 | R10 | The spacing reward improved survival | **U → withdrawn** | `close_attack_steps` never left ~21%; the death-rate fall is not attributable to it |
 | R11 | A KL anchor to the best known policy keeps a PPO fleet from drifting off it | **U** | `gohma-kl-v14`, `klA` steady at 0.012 over updates 15-24: the penalty is active and small. Says nothing yet about outcome |
@@ -27,6 +27,13 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R15 | Gohma was never given an approach reward in v1-v14 | **A** | `GohmaTracker.step` replaces `CombatTracker.step` with no `super()` call, so `w_approach` never fired; `approach_stunned` is gated on `GOHMA_STUNNED`. Read both implementations |
 | R16 | An approach reward raises the defeat rate from distant starts | **U -- tested, NOT shown** | `gohma-kl-v15`, stopped at update 40. 9/160 vs v14's 18/559, one-sided Fisher p=0.122; every band overlaps. Direction consistent in all 4 bands and the near band moved least, which is the predicted asymmetry. ~400 far-band episodes needed for p~0.04; 72 collected |
 | R17 | A net-progress shaping term is not farmable by oscillation | **M** | `tests/test_gohma_approach.py`: 12 in/out round trips pay the single net gain, not 12x it; wandering after the best pays nothing more |
+| R18 | Pooled success rate cannot compare policies across curricula | **M** | identical per-slot skill under two mixes gives pooled rates 3.89 points apart and the same `success_balanced` to 1e-9; `tests/test_band_metrics.py`. Three version decisions were misread from it |
+| R19 | v11's apparent momentum was one start slot, not learning | **M** | slot 7 38u: 7.32->14.00%, slope +0.298; slots 3/6/2/8/5/1/4 at exactly 0.00% across all 37 updates. W&B `by_slot/s*/success_rate` |
+| R20 | v15 is the broadest policy to date | **M** | non-zero on 6/6 trained slots vs v11's 1/10; ~3.3% vs ~0.13% off the easy slot. It reads as the flattest run on pooled success |
+| R21 | More training time was never the missing ingredient | **M** | `gohma-v10` 399 updates -> 1.21%; `gohma-v8` 129 updates from scratch -> 0.1%. Version trend table, PROVENANCE 3.2 |
+| R22 | The held-out checkpoint selector could not distinguish checkpoints | **M** | ranked on 16-episode subsets at a 1.68% pooled rate, where 6.25% is a 20.9% draw from the null; selected 2/32 vs others 5/384, p=0.094. Needs ~256 episodes/checkpoint, 16x what it had |
+| R23 | The approach coefficient at 3x changes nothing | **M** | v16 vs v15, matched updates 1-10, banded: 0/5 bands improve; v16 starts level with v15 despite resuming from its update 40 |
+| R24 | Deficit-weighted start-slot sampling improves the unsolved starts | **U** | `gohma-kl-v17`, launched 2026-10-13 from v15 u40; 69.9%->94.0% of episodes on the five unsolved slots. Judged on `success_hard` |
 
 ## WM track
 

@@ -32,6 +32,10 @@ ARTIFACTS = [
      "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer "
      "state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is "
      "the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2)."),
+    ("rl/gohma_v16_r4_u20", "checkpoints/kept/gohma-kl-v16-r4_latest.pt",
+     "v16 (approach coefficient 1.5) rank 4 update 20, where it was stopped. Its result is NEGATIVE: 0/5 "
+     "bands improved over v15 at matched updates (PROVENANCE 3.2). Kept because a numbered attempt with a "
+     "result is recoverable evidence."),
     ("wm/token_v2_ck0080", "runs/wm_v2/ck_0080.pt",
      "Token WM, teacher-forced. Best one-step skill +0.188."),
     ("wm/token_v3_ck0085", "runs/wm_v3/ck_0085.pt",

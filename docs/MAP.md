@@ -23,6 +23,9 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 | **record a result you just produced** | `AGENTS.md` §27, then `PROVENANCE.md` | provenance is written AS IT HAPPENS or it is lost; reference template is `../neural-simulators/PROVENANCE.md` |
 | look at what a world model actually predicts | `WM_VIEWER.md` | `scripts/wm_replay.py --html out.html --open`: recorded episode beside the model's autoregressive dream, click any entity for every field |
 | **the Gohma task (current focus)** | `GOHMA_FOCUS.md` first, then `GOHMA_TASK.md` | FOCUS has the decision, the engaged-slots-only start set, the measured red-eye window and the next steps; TASK has the RAM signals, reward and run history |
+| **ask "is this version better?"** | `AGENTS.md` §29–§32, then `scripts/train_compare.py` / `scripts/eval_compare.py` | NEVER pooled success rate -- it moves with the curriculum mix and misread three version decisions. `train_compare.py --exact` reads thousands of episodes from the live pods in seconds; the eval fleet answers the HELD-OUT question and is 65x slower |
+| pick which checkpoint to keep | `AGENTS.md` §30 | the held-out selector had no resolution (16-episode subsets at a 1.68% rate) and `.best.json` is read by nothing. Do not trust it without reading §30 |
+| change the start-slot curriculum | `zelda_rl/combat.py::deficit_weights`, `AGENTS.md` §29 corollary | PPO optimises return UNDER the sampling distribution, so the weights are the objective; `--slot-sampling deficit` moves them toward what the policy cannot do |
 
 ## Code layout
 

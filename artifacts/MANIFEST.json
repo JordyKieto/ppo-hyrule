@@ -42,6 +42,14 @@
       "description": "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2)."
     },
     {
+      "name": "rl/gohma_v16_r4_u20",
+      "path": "checkpoints/kept/gohma-kl-v16-r4_latest.pt",
+      "present": true,
+      "bytes": 8184685,
+      "md5": "0e11fcccb6f5dc8d08e92e7f8c12d487",
+      "description": "v16 (approach coefficient 1.5) rank 4 update 20, where it was stopped. Its result is NEGATIVE: 0/5 bands improved over v15 at matched updates (PROVENANCE 3.2). Kept because a numbered attempt with a result is recoverable evidence."
+    },
+    {
       "name": "wm/token_v2_ck0080",
       "path": "runs/wm_v2/ck_0080.pt",
       "present": true,
