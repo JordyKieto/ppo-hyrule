@@ -642,6 +642,55 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     "g_approach": 1.5,
 }
 
+
+# Start-slot engagement distance, in world units, Link to Gohma at the savestate.
+GOHMA_SLOT_DIST = {1: 473, 2: 368, 3: 188, 4: 541, 5: 472, 6: 357, 7: 38, 8: 448, 9: 394, 10: 490}
+GOHMA_BANDS = (("near", 0, 200), ("mid", 200, 400), ("far", 400, 10 ** 9))
+
+
+def band_metrics(eps: list[dict]) -> dict[str, float]:
+    """Banded and MIX-FREE outcome metrics for a rollout's episodes.
+
+    `combat/success_rate` is episode-weighted, so it moves when the CURRICULUM moves and cannot be compared
+    across versions with different slot weights. That has misled every cross-version decision on this task:
+    v11's +0.270/update "momentum", which is why v12 was launched, was slot 7 alone (7.32% -> 14.00%)
+    amplified by that run's 50% weighting on slot 7, while all nine other slots sat at exactly 0.00% for the
+    whole run.
+
+    - `success_balanced` is the unweighted mean of the per-slot rates. Changing the mix cannot move it, so a
+      version-to-version claim belongs on this number. Asserted mix-invariant in tests/test_band_metrics.py.
+    - `success_hard` is the same with the near band dropped. The near band is slot 7 at 38 units, where Link
+      starts on top of her, and it has carried every apparent gain this project has reported.
+    - `slots_nonzero` is how many start slots the policy wins from AT ALL -- the measure on which v11 scored
+      1 of 10 and v15 scores 6 of 6.
+
+    One implementation, called by the trainer and by the test, so the two cannot drift (AGENTS 25).
+    """
+    import numpy as _np
+    out: dict[str, float] = {}
+    if not eps:
+        return out
+    slots = sorted({e["slot"] for e in eps})
+    rate = {k: float(_np.mean([bool(e.get("success")) for e in eps if e["slot"] == k])) for k in slots}
+    for name, lo, hi in GOHMA_BANDS:
+        bs = [e for e in eps if lo <= GOHMA_SLOT_DIST.get(e["slot"], -1) < hi]
+        if bs:
+            out[f"by_band/{name}/success_rate"] = float(_np.mean([bool(e.get("success")) for e in bs]))
+            out[f"by_band/{name}/death_rate"] = float(_np.mean([bool(e.get("died")) for e in bs]))
+            out[f"by_band/{name}/boss_damage"] = float(_np.mean([e.get("boss_damage", 0) for e in bs]))
+            out[f"by_band/{name}/n"] = float(len(bs))
+    full = [e for e in eps if e.get("boss_hp_start", 0) >= 10]
+    if full:
+        out["by_hp/full/success_rate"] = float(_np.mean([bool(e.get("success")) for e in full]))
+        out["by_hp/full/n"] = float(len(full))
+    out["combat/success_balanced"] = float(_np.mean(list(rate.values())))
+    hard = [v for k, v in rate.items() if GOHMA_SLOT_DIST.get(k, 0) >= 200]
+    if hard:
+        out["combat/success_hard"] = float(_np.mean(hard))
+    out["combat/slots_nonzero"] = float(sum(1 for v in rate.values() if v > 0))
+    out["combat/slots_seen"] = float(len(rate))
+    return out
+
 COMBAT_FIELDS = [("link_hp_frac", 1), ("link_hp_cap", 1), ("targets_alive_frac", 1), ("targets_start", 1),
                  ("locked_on_target", 1), ("arrow_on_target", 1), ("shielding", 1), ("damaged", 1),
                  ("nearest_target_rel_pos", 3), ("nearest_target_dist", 1), ("nearest_target_hp", 1),

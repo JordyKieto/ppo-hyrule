@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.combat import COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
+from zelda_rl.combat import band_metrics, COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
 from zelda_rl.env import N_COMBAT_ACTIONS, N_COMBAT_ACTIONS_V5, DolphinGoalEnv, EnvConfig, EnvError, action_name  # noqa: E402
 from zelda_rl.obs import (ACTOR_DIM_V2, ACTOR_FIELDS_V2, GLOBAL_DIM_V2, GLOBAL_FIELDS_V2, N_ACTORS,  # noqa: E402
                           read_state_file_v2)
@@ -235,9 +235,14 @@ def main():
     obs_buf = np.zeros((T, N, obs_dim), np.float32)
     act_buf = np.zeros((T, N), np.int64)
     logp_buf, val_buf, rew_buf, done_buf = (np.zeros((T, N), np.float32) for _ in range(4))
-    hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5} {'kill%':>6} {'death':>6} {'left':>5} {'hpLost':>6} {'dmg':>5} "
-           f"{'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} {'ent':>5} {'sps':>5}"
-           + (" klA" if args.kl_anchor else ""))
+    # `succ` is mix-weighted and has misled every cross-version decision on this task, so the banded columns
+    # sit right next to it: bal = unweighted mean over slots (mix-free), hard = the same excluding the near
+    # band, then near/mid/far by engagement distance, then nz = how many slots are non-zero at all.
+    band_hdr = (f" {'bal':>5} {'hard':>5} {'near':>5} {'mid':>5} {'far':>5} {'nz':>5}"
+                if args.profile == "gohma" else "")
+    hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
+           f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
+           f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -403,6 +408,11 @@ def main():
                     metrics[f"by_slot/s{k}/kills"] = m("defeated", se)
                     metrics[f"by_slot/s{k}/hp_lost_hearts"] = m("hp_lost", se) / 16
                     metrics[f"by_slot/s{k}/return"] = m("return", se)
+
+            # THE HEADLINE, banded by engagement distance, plus the two mix-free aggregates.
+            # One implementation, shared with tests/test_band_metrics.py (AGENTS 25).
+            if args.profile == "gohma" and eps:
+                metrics.update(band_metrics(eps))
             log.update(metrics, global_step)
             if link is not None:
                 hb = {"update": update, "global_step": global_step, "run": args.run_name, "weight_hash": sync.get("weight_hash"),
@@ -415,7 +425,16 @@ def main():
             top = ", ".join(f"{action_name(a, 'combat')}:{c / sum(acts.values()):.0%}" for a, c in acts.most_common(3))
             if update == start_update or update % 20 == 0:
                 LOGGER.info(hdr)
-            LOGGER.info(f"{update:>4} {global_step:>9,} {episode_count:>5} {metrics['combat/success_rate']:>5.0%} "
+            def _pc(key, w=5):
+                v = metrics.get(key)
+                return f"{v:>{w}.1%}" if isinstance(v, float) and v == v else f"{'-':>{w}}"
+            band_line = ("" if args.profile != "gohma" else
+                         f" {_pc('combat/success_balanced')} {_pc('combat/success_hard')} "
+                         f"{_pc('by_band/near/success_rate')} {_pc('by_band/mid/success_rate')} "
+                         f"{_pc('by_band/far/success_rate')} "
+                         f"{str(int(metrics.get('combat/slots_nonzero', 0))) + '/' + str(int(metrics.get('combat/slots_seen', 0))):>5}")
+            LOGGER.info(f"{update:>4} {global_step:>9,} {episode_count:>5} {metrics['combat/success_rate']:>5.0%}"
+                        f"{band_line} "
                         f"{metrics['combat/kill_frac']:>6.0%} {metrics['combat/death_rate']:>6.0%} {metrics['combat/left_room_rate']:>5.0%} "
                         f"{metrics['combat/hp_lost_hearts']:>6.2f} {metrics['combat/damage_dealt']:>5.2f} {metrics['combat/lockons']:>5.2f} "
                         f"{metrics['combat/blocks']:>4.1f} {metrics['episode/return']:>7.2f} "
