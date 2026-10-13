@@ -851,6 +851,77 @@ def cmd_metrics(a) -> None:
     print("(mean across ranks; each pod trains its own shard and weights are averaged every epoch)")
 
 
+def cmd_ckpt(a) -> None:
+    """Put one or more repo-relative checkpoints on every pod, via S3 presigned GETs.
+
+    `push_policies` already does this, but only for the checkpoints a COLLECTION mix names. A training
+    relaunch needs an arbitrary `--init-from` file on every pod, and CODE_EXCLUDES deliberately drops
+    checkpoints/ and *.pt from the code rsync, so the file is simply absent and every rank dies on
+    `FileNotFoundError: checkpoint not found` (AGENTS 16).
+
+    Why S3 and not rsync: 8 MB x 20 pods is 160 MB over the Mac's ~0.7 MB/s uplink, about four minutes of
+    serialised upload during which the launch looks like it is progressing. Over ~10 MB total this belongs in
+    S3 with presigned GETs -- AGENTS 20, which exists because `push_policies` violated AGENTS 15 the night 15
+    was written. Presigned URLs need no credentials on the pod.
+
+    Verifies the file landed at the path the trainer will read, with the right size, rather than trusting the
+    curl exit status (AGENTS 16: a success log line is not evidence).
+    """
+    import boto3
+    st = load_state(a.experiment)
+    rel = [r.strip() for r in a.path.split(",") if r.strip()]
+    for r in rel:
+        if not (REPO / r).exists():
+            log(f"not found on the Mac: {r}")
+            return
+    sizes = {r: (REPO / r).stat().st_size for r in rel}
+    total = sum(sizes.values()) / 1e6
+    s3 = boto3.Session(profile_name=S3_PROFILE, region_name=S3_REGION).client("s3")
+    keys = {r: f"fleet/ckpt/{r}" for r in rel}
+    for r, k in keys.items():
+        up = True
+        try:
+            up = s3.head_object(Bucket=S3_BUCKET, Key=k)["ContentLength"] != sizes[r]
+        except Exception:                                                       # noqa: BLE001
+            pass
+        if up:
+            log(f"upload {r} ({sizes[r]/1e6:.1f} MB) -> s3://{S3_BUCKET}/{k}")
+            s3.upload_file(str(REPO / r), S3_BUCKET, k)
+        else:
+            log(f"already in S3 at the right size: {k}")
+
+    urls = {r: s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": k}, ExpiresIn=6 * 3600)
+            for r, k in keys.items()}
+    dirs = sorted({str(Path(r).parent) for r in rel})
+
+    def one(pod):
+        lines = ["set -e"] + [f"mkdir -p {R_REPO}/{d}" for d in dirs]
+        for r in rel:
+            lines.append(f"curl -sfL --retry 5 -o {R_REPO}/{r} {shlex.quote(urls[r])} &")
+        lines.append("wait")
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
+            f.write("\n".join(lines) + "\n")
+            tf = f.name
+        try:
+            rsync(pod, [tf], "/workspace/ckpt_pull.sh")
+        finally:
+            Path(tf).unlink(missing_ok=True)
+        run(pod, "bash /workspace/ckpt_pull.sh && rm /workspace/ckpt_pull.sh")
+        # VERIFY, do not assume: stat the destination the trainer will actually open.
+        got = run(pod, "; ".join(f"stat -c %s {R_REPO}/{r} 2>/dev/null || echo 0" for r in rel),
+                  capture=True).split()
+        bad = [r for r, g in zip(rel, got) if int(g or 0) != sizes[r]]
+        return (pod["rank"], bad)
+
+    res = sorted(for_pods(select(st, a.ranks), one, workers=24))
+    bad = {rank: b for rank, b in res if b}
+    log(f"{len(res)} pods x {len(rel)} file(s), {total:.1f} MB each")
+    if bad:
+        log(f"WRONG SIZE OR MISSING on ranks {sorted(bad)}: {bad}")
+    else:
+        log(f"verified by size at {', '.join(R_REPO + '/' + r for r in rel)} on all {len(res)} pods")
+
+
 def cmd_ppo(a) -> None:
     """Fleet-wide PPO curve, straight from each rank's train log. The answer to "is it improving".
 
@@ -1060,6 +1131,10 @@ def main() -> None:
     p.add_argument("--last", type=int, default=12, help="show the last N epochs")
     p = add("ppo", cmd_ppo)
     p.add_argument("--last", type=int, default=8, help="show the last N updates")
+    p = add("ckpt", cmd_ckpt)
+    p.add_argument("--path", required=True,
+                   help="comma-separated repo-relative checkpoint path(s) to place on every pod, e.g. "
+                        "checkpoints/kept/gohma-kl-v15-r4_latest.pt")
     p = add("collected", cmd_collected)
     p.add_argument("--out", default="datasets/transitions/v4-collect", help="the collector's --out path")
     p.add_argument("--verbose", action="store_true", help="per-pod breakdown")
