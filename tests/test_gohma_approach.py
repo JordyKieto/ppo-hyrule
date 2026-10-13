@@ -69,15 +69,26 @@ def main():
     # Tested at the SHIPPED coefficient, not the function default: the cap only means anything against the
     # value the fleet actually trains with, and when v16 raised 0.5 -> 1.5 this assertion was the thing that
     # noticed the cap no longer bound.
+    # The preset ships g_approach OFF. The mechanics are still tested at a non-zero coefficient so the term
+    # stays correct if it is ever re-enabled, and the fact that it is off is asserted separately WITH its
+    # reason -- a 0.0 default must be a deliberate, documented state, not something that drifted.
     live = GOHMA_SIMPLE["g_approach"]
-    print(f"\nthe cap, at the coefficient the `simple` preset ships ({live})")
-    check("a 1350-unit walk hits the cap", run(list(range(1400, 0, -50)), g_approach=live),
+    ok0 = live == 0.0
+    print(f"\nthe shipped preset: g_approach = {live}")
+    print(f"  {'PASS' if ok0 else 'FAIL'}  OFF, because boss damage measured a monotone dose-response "
+          f"against it (v14 0.0 -> +0.012*, v15 0.5 -> +0.004*, v16 1.5 -> -0.017*). AGENTS 34")
+    if not ok0:
+        fails.append("g_approach should ship at 0.0")
+
+    TEST_COEF = 0.5
+    print(f"\nthe cap mechanics, exercised at {TEST_COEF} so they stay correct if the term is re-enabled")
+    check("a 1350-unit walk hits the cap", run(list(range(1400, 0, -50)), g_approach=TEST_COEF),
           CombatConfig().g_approach_cap)
 
     # THE DESIGN PROPERTY: the cap must NOT bind on a real crossing, or the gradient dies partway across the
     # room -- which is exactly what raising the coefficient alone would have done.
     far = CombatConfig()
-    crossing = run([541, 450, 350, 250, 150, 90], g_approach=live)
+    crossing = run([541, 450, 350, 250, 150, 90], g_approach=TEST_COEF)
     ok = crossing < far.g_approach_cap
     print(f"  {'PASS' if ok else 'FAIL'}  the longest real crossing (541 -> 90) stays UNDER the cap: "
           f"{crossing:+.2f} < {far.g_approach_cap:+.2f}")
@@ -89,9 +100,10 @@ def main():
 
     c = CombatConfig()
     print("\nscale, against the terms it competes with")
-    print(f"  a full 490 -> 90 crossing pays {run([490, 390, 290, 190, 90], g_approach=live):+.2f} at the "
-          f"shipped {live}  (cap {c.g_approach_cap:+.2f}, g_spacing_cap {c.g_spacing_cap:+.2f}, "
-          f"boss_defeat {c.g_boss_defeat:+.0f})")
+    print(f"  a full 490 -> 90 crossing would pay "
+          f"{run([490, 390, 290, 190, 90], g_approach=TEST_COEF):+.2f} at {TEST_COEF}, and pays "
+          f"{run([490, 390, 290, 190, 90], g_approach=live):+.2f} at the shipped {live} "
+          f"(boss_defeat {c.g_boss_defeat:+.0f}, boss_damage {c.g_boss_damage:+.1f}/HP)")
     print(f"\n{'ALL PASS' if not fails else str(len(fails)) + ' FAILED: ' + ', '.join(fails)}")
     return 1 if fails else 0
 

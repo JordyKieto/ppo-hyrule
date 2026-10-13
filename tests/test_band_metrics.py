@@ -102,6 +102,29 @@ def main() -> int:
     check("a single near-only rollout has no hard metric", float("combat/success_hard" in one), 0.0)
     check("  ...but still reports balanced", one["combat/success_balanced"], 0.5)
 
+    # BOSS DAMAGE is the headline and must be mix-invariant for the same reason success_balanced is.
+    print("\nboss damage, the headline metric (AGENTS 34)")
+    dmg_skill = {7: 0.0, 3: 0.0, 6: 0.0, 5: 0.0, 4: 0.0, 8: 0.0}
+    def with_dmg(mix, per_slot_dmg):
+        out = []
+        for slot, n in mix.items():
+            for _ in range(n):
+                out.append({"slot": slot, "success": False, "died": True, "boss_hp_start": SLOT_HP[slot],
+                            "boss_damage": per_slot_dmg[slot]})
+        return out
+    d = {7: 6.0, 3: 4.5, 6: 2.0, 5: 3.0, 4: 1.0, 8: 0.5}
+    a2 = band_metrics(with_dmg({7: 200, 3: 50, 6: 50, 5: 50, 4: 50, 8: 50}, d))
+    b2 = band_metrics(with_dmg({s: 100 for s in d}, d))
+    check("boss_damage_balanced is MIX-INVARIANT", a2["combat/boss_damage_balanced"],
+          b2["combat/boss_damage_balanced"])
+    check("  ...and equals the unweighted mean of per-slot damage",
+          a2["combat/boss_damage_balanced"], sum(d.values()) / len(d))
+    check("boss_damage_hard drops the near band (slots 7, 3)", a2["combat/boss_damage_hard"],
+          (d[6] + d[5] + d[4] + d[8]) / 4)
+    ew = sum(d[s] * n for s, n in {7: 200, 3: 50, 6: 50, 5: 50, 4: 50, 8: 50}.items()) / 450
+    print(f"  the episode-weighted mean would read {ew:.2f} on the heavy-slot-7 mix vs "
+          f"{sum(d[s] * 100 for s in d) / 600:.2f} on the flat one -- which is why it is not the headline")
+
     print(f"\n{'ALL PASS' if not fails else str(len(fails)) + ' FAILED: ' + ', '.join(fails)}")
     return 1 if fails else 0
 

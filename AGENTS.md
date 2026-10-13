@@ -579,3 +579,53 @@ Prose did not stop either one. What did:
 The pattern across §21 and this section is now unambiguous: **every rule in this file that is still prose will
 be broken again.** When a rule is cited in a message, the next question is whether it exists as a check, and
 if not, writing the check is part of the work.
+
+## 34. Choose the metric by its INFORMATION, not by its name — and the headline is what the reward pays for
+
+**The incident, which cost two runs and nearly a third.** Asked repeatedly "is it improving", the answer came
+from `combat/success_rate` — boss defeated, a binary event occurring 1–10% of the time. On that signal, six
+consecutive versions read "flat", "plateaued", "not learning", and two experiments were launched to fix the
+plateau. The graded signal was saying the opposite the whole time. Boss damage, the HP actually taken off her
+out of 10, over the same runs:
+
+| version | `g_approach` | boss damage | slope |
+|---|---|---|---|
+| `gohma-v10` | — | 0.38 → 1.21 | **+0.003\*** |
+| `gohma-band-v11` | — | 1.72 → 2.10 | **+0.015\*** |
+| `gohma-band-v12` | — | 2.06 → 2.22 | **+0.008\*** |
+| `gohma-band-v13` | — | 2.41 → 2.75 | **+0.007\*** |
+| `gohma-kl-v14` | **0.0 (absent)** | 2.86 → 3.22 | **+0.012\*** |
+| `gohma-kl-v15` | 0.5 | 3.17 → 3.32 | +0.004\* |
+| `gohma-kl-v16` | 1.5 | 3.12 → 2.85 | **−0.017\*** |
+| `gohma-kl-v17` | 0.5 + deficit sampling | 3.19 → 2.86 | **−0.022\*** |
+
+`*` = slope distinguishable from zero. Return tells the same story: **−12.6 → +56.8** across v10–v15.
+
+**The project had been improving steadily the entire time** — 0.38 → 3.32 HP, an 8.7× gain, every step
+statistically solid — and it was reported as six failures because the instrument was a rare binary. A defeat
+requires ten successful hits; damage counts each one. One of them can show a trend on a few hundred episodes
+and the other cannot.
+
+**Worse, the wrong metric then caused real damage.** `g_approach` was introduced in v15 on the strength of a
+defeat-rate band analysis, and the dose-response above is monotone in its coefficient: v14 without it was the
+last version learning, 0.5 halved the slope, 1.5 reversed it. **The term I added to fix the plateau is what
+created it.** v16 and v17 are both regressions, confirmed on the mix-invariant per-slot form (v16 t=−4.75,
+v17 t=−3.78), so neither is a curriculum artefact.
+
+**The rules.**
+
+1. **Rank candidate metrics by information per episode before choosing one.** A binary at rate *p* carries
+   `p(1−p)` of variance per episode; a graded quantity over 0–10 carries far more. If the headline cannot
+   move detectably over the run length you can afford, it is the wrong headline whatever its name.
+2. **The headline must be the quantity the reward's largest terms pay for.** `g_boss_damage` is +4.0 per HP
+   and `g_boss_defeat` +60 — damage is most of the achievable return, so damage is the headline.
+   `combat/boss_damage_balanced` and `combat/boss_damage_hard` are emitted by
+   `zelda_rl/combat.band_metrics()` and **lead the trainer's log line**, before any success rate.
+3. **Report the trend WITH its standard error.** "Flat" and "rising" are claims about a slope, and a slope
+   without an SE is an impression. `slope ± SE`, and say `|t|>2` or do not say "improving".
+4. **A sparse metric cannot justify adding a reward term.** Before a new term ships, check the graded signal
+   it is meant to help. Had boss damage been read in v15, `g_approach` would never have been added.
+5. Everything in §29 still applies on top: the headline must be **mix-invariant** as well as informative.
+   Episode-weighted boss damage falls when the curriculum moves to the hard slots at identical skill, which
+   is why `boss_damage_balanced` is the unweighted mean of the per-slot values and is asserted mix-invariant
+   in `tests/test_band_metrics.py`.

@@ -637,11 +637,19 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # winning run stayed out of. The counters stay on, so if the policy discovers the shield anyway we see it.
     "g_guard": 0.0,
     "g_spacing": 0.02,
-    # The approach channel, new in v15 at 0.5 / cap 3.0. v16 raised it 3x to 1.5 / cap 7.0 and the banded
-    # training metric says it bought nothing: 0/5 bands moved, and v16 started LEVEL with v15 despite
-    # resuming from v15's update 40. Reverted to v15's value for v17, where the experiment is the sampling
-    # distribution instead. See g_approach in CombatConfig for why the term was absent until v15 at all.
-    "g_approach": 0.5,
+    # THE APPROACH CHANNEL IS OFF, which is v14's reward. It is off because it is HARMFUL, measured as a
+    # dose-response on boss damage -- the quantity the task is actually about -- across three runs that each
+    # changed only this coefficient:
+    #
+    #     v14  g_approach 0.0 (absent)   boss damage slope +0.012*  (2.86 -> 3.22 of 10)
+    #     v15  g_approach 0.5            boss damage slope +0.004*  (3.17 -> 3.32)
+    #     v16  g_approach 1.5            boss damage slope -0.017*  (3.12 -> 2.85)
+    #
+    # Monotone in the coefficient. v14 is the last version that was learning, and the thing that stopped it
+    # was this term. It was introduced on the strength of a DEFEAT-RATE analysis -- a 1-10% binary with
+    # almost no power to show a trend -- while boss damage, which had been climbing 0.38 -> 3.32 across
+    # v10..v15, said the opposite. See AGENTS 34.
+    "g_approach": 0.0,
 }
 
 
@@ -703,6 +711,15 @@ def band_metrics(eps: list[dict]) -> dict[str, float]:
     if full:
         out["by_hp/full/success_rate"] = float(_np.mean([bool(e.get("success")) for e in full]))
         out["by_hp/full/n"] = float(len(full))
+    # THE HEADLINE. Boss damage is what the task is about and it is GRADED 0-10, so it shows a trend where
+    # the defeat rate cannot: across v10..v15 it moved 0.38 -> 3.32 with every step statistically solid,
+    # while the defeat rate read 0.1-10% and was called "flat" for six consecutive versions. Mix-invariant
+    # by the same construction as success_balanced, because the curriculum weights move.
+    dmg = {k: float(_np.mean([e.get("boss_damage", 0.0) for e in eps if e["slot"] == k])) for k in slots}
+    out["combat/boss_damage_balanced"] = float(_np.mean(list(dmg.values())))
+    hard_d = [v for k, v in dmg.items() if GOHMA_SLOT_DIST.get(k, 0) >= 200]
+    if hard_d:
+        out["combat/boss_damage_hard"] = float(_np.mean(hard_d))
     out["combat/success_balanced"] = float(_np.mean(list(rate.values())))
     hard = [v for k, v in rate.items() if GOHMA_SLOT_DIST.get(k, 0) >= 200]
     if hard:

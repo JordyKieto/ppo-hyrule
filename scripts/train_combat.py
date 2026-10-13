@@ -259,7 +259,9 @@ def main():
     # `succ` is mix-weighted and has misled every cross-version decision on this task, so the banded columns
     # sit right next to it: bal = unweighted mean over slots (mix-free), hard = the same excluding the near
     # band, then near/mid/far by engagement distance, then nz = how many slots are non-zero at all.
-    band_hdr = (f" {'bal':>5} {'hard':>5} {'near':>5} {'mid':>5} {'far':>5} {'nz':>5}"
+    # dmgB / dmgH lead, because boss damage is what the task is about and it is the only signal with enough
+    # resolution to show a trend (AGENTS 34). succ is kept but is the LAST thing to read.
+    band_hdr = (f" {'dmgB':>5} {'dmgH':>5} {'bal':>5} {'hard':>5} {'near':>5} {'mid':>5} {'far':>5} {'nz':>5}"
                 if args.profile == "gohma" else "")
     hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
@@ -468,7 +470,11 @@ def main():
             def _pc(key, w=5):
                 v = metrics.get(key)
                 return f"{v:>{w}.1%}" if isinstance(v, float) and v == v else f"{'-':>{w}}"
+            def _f2(key):
+                v = metrics.get(key)
+                return f"{v:>5.2f}" if isinstance(v, float) and v == v else f"{'-':>5}"
             band_line = ("" if args.profile != "gohma" else
+                         f" {_f2('combat/boss_damage_balanced')} {_f2('combat/boss_damage_hard')}"
                          f" {_pc('combat/success_balanced')} {_pc('combat/success_hard')} "
                          f"{_pc('by_band/near/success_rate')} {_pc('by_band/mid/success_rate')} "
                          f"{_pc('by_band/far/success_rate')} "

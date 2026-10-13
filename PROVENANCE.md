@@ -266,6 +266,54 @@ measurement silently:**
 at 0 while the weights continue from v14 update ~33. **Reproducing v11–v14 under the `simple` preset now
 requires `--combat-json '{"g_approach": 0}'`**, because the preset turns the term on.
 
+### THE CENTRAL RETRACTION: six versions reported as plateaued were improving, and the fix broke them
+
+Every "is it improving" answer in this project came from `combat/success_rate` — boss defeated, a binary event
+at 1–10%. On that signal v10 through v15 read flat and two experiments were launched to break the plateau. On
+**boss damage**, the HP taken off her out of 10, the same runs read (**M**, W&B history, slope ± SE, `*` =
+|t|>2):
+
+| version | `g_approach` | boss damage | slope | return |
+|---|---|---|---|---|
+| `gohma-v10` | — | 0.38 → 1.21 | **+0.003\*** | −12.58 → 15.46 **+0.105\*** |
+| `gohma-band-v11` | — | 1.72 → 2.10 | **+0.015\*** | 1.06 → 18.75 **+0.700\*** |
+| `gohma-band-v12` | — | 2.06 → 2.22 | **+0.008\*** | 4.87 → 6.63 +0.081 |
+| `gohma-band-v13` | — | 2.41 → 2.75 | **+0.007\*** | 18.93 → 26.36 **+0.168\*** |
+| **`gohma-kl-v14`** | **0.0 (absent)** | **2.86 → 3.22** | **+0.012\*** | 45.54 → 52.62 **+0.226\*** |
+| `gohma-kl-v15` | 0.5 | 3.17 → 3.32 | +0.004\* | 54.25 → 56.79 +0.078 |
+| `gohma-kl-v16` | 1.5 | 3.12 → 2.85 | **−0.017\*** | 56.08 → 46.88 **−0.531\*** |
+| `gohma-kl-v17` | 0.5 + deficit sampling | 3.19 → 2.86 | **−0.022\*** | 52.35 → 37.55 **−1.008\*** |
+
+**The project improved 0.38 → 3.32 HP, 8.7×, with every step statistically solid, and it was reported as six
+consecutive failures.** A defeat needs ten successful hits; damage counts each one, so one signal can show a
+trend on a few hundred episodes and the other cannot. Every claim in this file of the form "version N
+plateaued" or "no version was trending" is **withdrawn**.
+
+**And the wrong metric did real harm.** `g_approach` was added in v15 from a defeat-rate band analysis. The
+dose-response is monotone in its coefficient — v14 without the term was the last version learning, 0.5 halved
+the slope, 1.5 reversed it. **The term introduced to fix the plateau is what created it.** Confirmed on the
+mix-invariant per-slot form, so neither regression is a curriculum artefact:
+
+| version | per-slot boss damage, first ⅓ → last ⅓ | slope | t |
+|---|---|---|---|
+| v15 | 3.250 → 3.275 | +0.0007 | +0.49 (flat) |
+| v16 | 3.141 → 2.722 | −0.0284 | **−4.75** |
+| v17 | 3.335 → 2.980 | −0.0236 | **−3.78** |
+
+Both v16 and v17 are **my** changes: the 3× coefficient and the deficit sampling. Both are regressions against
+the policy they resumed from. Recorded in `paper/CLAIMS.md` as R23/R24 superseded, and as AGENTS 34.
+
+### v18: v14's reward, v15's weights, boss damage as the headline
+
+`g_approach` is **off** — which is v14's reward exactly, since the term did not exist before v15. Deficit
+sampling is **not used** (the code and its 25 tests stay, recorded as a negative result). Weights resume from
+`gohma-kl-v15-r4_latest.pt`, which is the peak level on the mix-invariant damage metric (3.275 against v14's
+3.22), so v18 is **v14's reward applied to the best weights**. Anchor, ladder, `--death-scale 0` unchanged.
+
+`combat/boss_damage_balanced` and `combat/boss_damage_hard` now LEAD the trainer's log line, before any
+success rate, and are asserted mix-invariant in `tests/test_band_metrics.py`. The reference to beat is
+**v14's +0.012 HP/update**, and the judgement is a slope with a standard error, not a level.
+
 ### CORRECTION: the start-slot distances were 3D, and six of ten were overstated
 
 Asked whether any start slot is still the PRE-FIGHT state (`ceiling_wait`, which needs the cutscene triggered
