@@ -143,9 +143,74 @@ def main() -> int:
     ap.add_argument("--baseline", default=None, help="wandb group to compare against, e.g. gohma-kl-v15")
     ap.add_argument("--updates", type=int, default=None,
                     help="clip BOTH runs to this many updates (default: the shorter run's length)")
+    ap.add_argument("--trend", action="store_true",
+                    help="fit the HEADLINE slope for --compare with a standard error, and say rising / flat / "
+                         "falling. This is the answer to \"is it improving\": a slope without an SE is an "
+                         "impression, and the metric is boss damage because the defeat rate is a 1-10%% "
+                         "binary with no power to show a trend (AGENTS 34)")
     ap.add_argument("--exact", default=None,
                     help="fleet experiment whose live pod logs give exact per-episode counts for --compare")
     a = ap.parse_args()
+
+    if a.trend:
+        import wandb
+        from collections import defaultdict
+        api = wandb.Api(timeout=120)
+        HEAD = [("combat/boss_damage_balanced", "bossHP bal /10", 1.0),
+                ("combat/boss_damage_hard", "bossHP hard /10", 1.0),
+                ("combat/success_balanced", "succ bal %", 100.0),
+                ("combat/success_hard", "succ hard %", 100.0)]
+
+        def fit(xs, ys):
+            n = len(xs)
+            mx = sum(xs) / n
+            my = sum(ys) / n
+            sxx = sum((x - mx) ** 2 for x in xs)
+            if not sxx:
+                return 0.0, float("inf")
+            b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+            c = my - b * mx
+            r = [y - (c + b * x) for x, y in zip(xs, ys)]
+            s2 = sum(v * v for v in r) / max(n - 2, 1)
+            return b, (s2 / sxx) ** 0.5
+
+        per: dict[str, dict[int, list]] = defaultdict(lambda: defaultdict(list))
+        runs = list(api.runs(ENTITY_PROJECT, {"group": a.compare}))
+        for r in runs:
+            have = [k for k, _, _ in HEAD if k in r.summary]
+            if not have:
+                continue
+            for row in r.history(keys=have + ["_step"], pandas=False, samples=100000):
+                u = row.get("_step")
+                if u is None:
+                    continue
+                for k in have:
+                    v = row.get(k)
+                    if isinstance(v, (int, float)):
+                        per[k][int(u)].append(float(v))
+        if not per:
+            print(f"{a.compare}: none of the headline metrics are logged yet")
+            return 1
+        print(f"{a.compare}: {len(runs)} ranks\n")
+        print(f"{'metric':<18}{'first 1/3':>11}{'last 1/3':>10}{'slope/upd':>12}{'SE':>8}{'t':>7}  verdict")
+        for k, label, sc in HEAD:
+            if k not in per:
+                continue
+            us = sorted(per[k])
+            ys = [sc * sum(per[k][u]) / len(per[k][u]) for u in us]
+            if len(us) < 5:
+                print(f"{label:<18}{'':>11}{'':>10}  only {len(us)} updates -- need 5")
+                continue
+            b, se = fit(us, ys)
+            t = b / se if se else 0.0
+            t3 = max(len(ys) // 3, 1)
+            v = "RISING" if t > 2 else "FALLING" if t < -2 else "flat (within noise)"
+            print(f"{label:<18}{sum(ys[:t3])/t3:>11.3f}{sum(ys[-t3:])/t3:>10.3f}{b:>+12.4f}{se:>8.4f}"
+                  f"{t:>+7.2f}  {v}")
+        print(f"\n  reference: v14's boss damage slope was +0.012 HP/update (2.86 -> 3.22 over 40 updates),")
+        print(f"             the last version that was learning. v16 -0.017, v17 -0.022. AGENTS 34.")
+        if not a.baseline and not a.exact:
+            return 0
 
     if a.exact:
         per = exact_slots(a.exact, a.compare)
