@@ -45,6 +45,9 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R33 | A long credit horizon needs a lower learning rate | **M** | 12-cell grid: at whole-episode credit, lr 3e-4 -> 3e-5 moves damage 0.76 -> 2.08 (2.7x); at 30s 1.21 -> 2.30; at v15's 1.8s horizon LR does nothing. GOHMA_CREDIT_PLAN 9.1 |
 | R34 | The 9s/3e-5 cell beats v15's settings | **M -> WITHDRAWN** | grid said +32% (3.16 vs 2.40) on 1 pod per arm; matched confirmation, 7 vs 6 pods from one init, gives +0.065 +/- 0.117, t=+0.56. Winner's curse. AGENTS 35 |
 | R35 | A 20s-horizon policy can be switched to a long horizon | **M -> NO** | tried at vf_coef 0.05 and 0.5; both destroyed v15 (3.275 -> 1.84, t=-3.30) with the critic never converging |
+| R36 | 53% of the Gohma observation is dead weight | **M** | obs 1033 -> 481 (n_actors 16 -> 4) is within noise of the control across 22-36 updates per arm, with v15's weights loaded unchanged (missing=0). GOHMA_CREDIT_PLAN 10 |
+| R37 | Restoring Deku's params-per-input ratio unlocks learning | **M -> NO** | n4 sits AT that ratio (1,413 vs Deku's 1,275) and is the worst-trending arm, slope -0.0249 t=-2.65. Best vs control +0.193 +/- 0.104, t=+1.85, not significant |
+| R38 | The 120s episode cap and removed approach reward cost ~0.7 damage | **I** | every arm of every sweep on 2026-10-15, control included, sits below v15's 3.275 start |
 
 ## WM track
 

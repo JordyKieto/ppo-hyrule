@@ -260,3 +260,61 @@ policy. Nothing in this session beat it.** The credit-assignment line is closed 
 untested route is **from scratch at a long horizon with the LR swept**, since from-scratch is the one setting
 where the critic learns the long horizon from the beginning and the grid's LR interaction has never been
 tested there.
+
+---
+
+# 10. Observation narrowing (2026-10-15): harmless, and it does not help
+
+The actor table is `N_ACTORS=16` rows x 46 dims = **736 of the 1033-dim observation**, and the Gohma room has
+at most 4 occupied slots (boss + 3 larvae) — so ~550 dims describe nothing on a typical step, while the
+**SOLVED** Deku task was 483 dims total on this same 256-wide network. `--n-actors` keeps only the N nearest
+rows (rows are sorted by distance, `zelda_rl/obs.py:203`; Gohma also has her own 69-dim block so she cannot
+drop out).
+
+**The enabler, which made this cheap:** the actor encoder is applied **per row and pooled**, so **no weight
+shape depends on the row count** — parameters are 679,725 at every `n_actors`. Verified that v15's checkpoint
+loads into `n_actors` 4 / 6 / 8 with `missing=0, unexpected=0` and a working forward pass. So the sweep
+started from the best policy at damage 3.275 instead of from scratch.
+
+4 arms x 3 pods, all from v15, **only the observation width differs** (v15's own γ/λ/lr retained):
+
+| arm | `n_actors` | obs_dim | params/dim | vs Deku's 1,275 | n | dmgB | SE | slope | t | far% |
+|---|---|---|---|---|---|---|---|---|---|---|
+| n6 | 6 | 573 | 1,186 | 0.93x | 22 | **2.779** | 0.082 | −0.0153 | −1.20 | 0.19% |
+| n4 | 4 | **481** | 1,413 | **1.11x** | 23 | 2.611 | 0.070 | **−0.0249** | **−2.65** | 1.74% |
+| n8 | 8 | 665 | 1,022 | 0.80x | 26 | 2.605 | 0.071 | −0.0045 | −0.46 | 0.26% |
+| n16 | 16 (control) | 1033 | 658 | 0.52x | 36 | 2.586 | 0.065 | +0.0009 | +0.13 | 0.31% |
+
+**Best vs control: +0.193 ± 0.104, t=+1.85 — not significant.** Slope rule: gap +0.0096 against a combined SE
+of 0.0159 → **TIE, region only.**
+
+## 10.1 Two mid-run reports that reversed, recorded because the reversal is the lesson
+
+At 12 updates n4 read slope **+0.0023** and `far` **3.33%**, and both were reported as "the only arm pointing
+the right way" and "something to watch". At 23 updates n4's slope is **−0.0249, t=−2.65** — the sign flipped
+and it is now the *worst*-trending arm — and its `far` halved to 1.74% while the control's moved too. Three
+lucky updates, exactly the failure mode AGENTS 35 was written about hours earlier. **Nothing below 20 updates
+per arm should have been quoted at all.**
+
+## 10.2 What holds
+
+- **Cutting the observation 1033 → 481 dims (53%) does no measurable harm.** Every narrowed arm is within
+  noise of the control, with v15's weights loaded unchanged. ~550 dims really are dead weight. **M.**
+- **Narrowing does not help either.** The capacity-ratio hypothesis — that restoring Deku's 1,275
+  params-per-input would unlock learning — is **not supported**: n4 sits *at* that ratio (1,413) and is the
+  worst-trending arm. **M.**
+- **Every arm, including the control, sits below v15's 3.275 start.** The consistent effect across the whole
+  day is the **120 s episode cap plus the removed approach reward**, costing ~0.7 damage regardless of
+  anything else varied.
+
+## 10.3 Levers tried on 2026-10-15, all ties
+
+| lever | outcome |
+|---|---|
+| credit horizon, retrofitted onto v15 | **destroys it** — 3.275 → 1.84, t=−3.30, at two `vf_coef` values |
+| credit horizon, from scratch | works but **+0.0030 ± 0.0019/update, the same rate as v10's +0.0034** |
+| horizon x LR grid (12 cells) | real mechanism (long horizons need low LR, 2.7x), **no winning cell** |
+| learning rate from scratch (4 arms, 30x range) | **four-way tie** |
+| observation width (4 arms, 1033 → 481) | **tie**; harmless but not helpful |
+
+**v15 (damage 3.275) is still the best policy. Nothing on 2026-10-15 beat it.**
