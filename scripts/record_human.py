@@ -223,7 +223,15 @@ def build_env(slots, slots_dir, seconds, visible, pad_ini=""):
                     video_backend="Metal" if visible else "Null", unlimited_speed=False,
                     audio=visible, obs_version=7, task="combat", stall_timeout=600.0,
                     human_pad_ini=pad_ini,
-                    combat=CombatConfig(profile="gohma", max_seconds=seconds, target_ids=(0x28, 0x55)))
+                    # room_radius / fall_drop MUST be the replay harness's values, not the trainer's.
+                    # The trainer's 1400 / 150 are tuned for agents that start ALREADY ENGAGED and barely
+                    # move. A human from the pre-fight state walks ~1240 units to reach her and DROPS DOWN
+                    # into the arena, so the defaults fire "left the room" and "fell through the floor"
+                    # mid-fight and reload the savestate under you. scripts/replay_gohma_trace.py uses
+                    # 5000 / 1000 for exactly this reason -- it replays the real 167 s human win end to end.
+                    combat=CombatConfig(profile="gohma", max_seconds=seconds, target_ids=(0x28, 0x55),
+                                        room_radius=5000.0, fall_drop=1000.0,
+                                        timeout_penalty_per_target=10.0, success_time_bonus=30.0))
     root = Path(os.environ.get("TMPDIR", "/tmp")) / f"human_{os.getpid()}"
     return DolphinGoalEnv(0, root / "i0", files, states, states[min(slots)], cfg)
 
@@ -434,7 +442,9 @@ def main() -> int:
                 git_commit=GIT,
             )
             md5 = hashlib.md5(f.read_bytes()).hexdigest()
-            tag = "KILLED HER" if won else "you died" if died else "time up"
+            end = str(ep_info.get("end", "?"))
+            tag = ("KILLED HER" if won else "you died" if died else
+                   f"ENDED EARLY: {end}" if end not in ("timeout", "success", "death") else "time up")
             print(f"  {'*' * 8} {tag} {'*' * 8}")
             kept.append((f.name, won, ep_info.get("boss_damage", 0), len(A) / 10.0, slot,
                          start_state, md5, f.stat().st_size))
