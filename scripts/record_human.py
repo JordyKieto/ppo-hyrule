@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
+import struct
 import sys
 import time
 from pathlib import Path
@@ -40,6 +42,14 @@ from zelda_rl.env import COMBAT_ACTIONS_V5, COMBAT_BUTTONS_V5, action_name  # no
 from zelda_rl.obs import PLAY_STATE, read_state_file_v2  # noqa: E402
 from zelda_rl.policy_io import DEFAULT_SLOTS_DIR  # noqa: E402
 
+OBS_FIELDS: list = []          # filled in main() once the layout is known
+ACTION_SPEC: list = []
+try:
+    GIT = __import__("subprocess").run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
+                                       text=True, cwd=Path(__file__).resolve().parents[1]).stdout.strip()
+except Exception:              # noqa: BLE001
+    GIT = "unknown"
+
 # gPlayState + 0x14 = Input[4], 0x14 bytes each. docs/RAM_MAP.md section 4, status VERIFIED.
 INPUT0 = PLAY_STATE + 0x14
 
@@ -51,11 +61,16 @@ BITS = {"A": 0x8000, "B": 0x4000, "Z": 0x2000, "START": 0x1000,
 
 
 def read_pad(ram) -> tuple[int, int, int]:
-    """(button bitmask, stick_x, stick_y) from controller 0."""
-    b = int(np.frombuffer(ram[INPUT0:INPUT0 + 2], ">u2")[0])
-    x = int(np.frombuffer(ram[INPUT0 + 2:INPUT0 + 3], np.int8)[0])
-    y = int(np.frombuffer(ram[INPUT0 + 3:INPUT0 + 4], np.int8)[0])
-    return b, x, y
+    """(button bitmask, stick_x, stick_y) from controller 0.
+
+    `env.ram` is indexed by ARENA OFFSET, not by absolute address -- every reader in zelda_rl/obs.py masks
+    with `& 0x3FFFFF`. Slicing with the raw 0x801C8D74 returned an empty buffer and the probe crashed on an
+    empty array, which is the loud version of this mistake; the quiet version would have been reading garbage
+    from a wrapped offset. Uses struct.unpack_from with the same mask as _u32/_s16 rather than re-deriving it.
+    """
+    b = struct.unpack_from(">H", ram, INPUT0 & 0x3FFFFF)[0]
+    x, y = struct.unpack_from(">bb", ram, (INPUT0 + 2) & 0x3FFFFF)
+    return int(b), int(x), int(y)
 
 
 def held(mask: int) -> list[str]:
@@ -153,6 +168,19 @@ def main() -> int:
     a = ap.parse_args()
 
     slots = [int(s) for s in a.slots.split(",")]
+
+    # The observation layout and the action table, taken from the SAME definitions train_combat.py uses, so
+    # the dataset describes itself and a remote job cannot drift from this repo's source (AGENTS 25).
+    global OBS_FIELDS, ACTION_SPEC
+    from zelda_rl.combat import COMBAT_FIELDS
+    from zelda_rl.ego import ACTOR_FIELDS_V7, EGO_V7_FIELDS
+    from zelda_rl.gohma import BOSS_FIELDS
+    from zelda_rl.obs import GLOBAL_FIELDS_V2, N_ACTORS
+    OBS_FIELDS = {"global": [list(x) for x in GLOBAL_FIELDS_V2 + COMBAT_FIELDS + BOSS_FIELDS + EGO_V7_FIELDS],
+                  "n_actors": N_ACTORS, "actor": [list(x) for x in ACTOR_FIELDS_V7]}
+    ACTION_SPEC = [{"i": i, "world_dir_rad": d, "buttons": list(COMBAT_BUTTONS_V5[b]),
+                    "name": action_name(i, "combat")} for i, (d, b) in enumerate(COMBAT_ACTIONS_V5)]
+
     env = build_env(slots, a.slots_dir, a.seconds, not a.headless)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -165,13 +193,24 @@ def main() -> int:
         for ep in range(a.episodes):
             slot = slots[ep % len(slots)]
             obs = env.reset(slot)
-            O, A, R, PAD = [], [], [], []
-            print(f"\n=== episode {ep + 1}/{a.episodes}, slot {slot}. Play. Ctrl-C to stop recording.")
+            # Report the start state. A pre-cutscene slot reads `ceiling_wait`; an engaged one does not. This
+            # is recorded per episode so a remote trainer can filter by it without re-deriving anything.
+            from zelda_rl.gohma import find_gohma, gohma_state, hdist
+            st0 = read_combat_state(env.ram)
+            g0 = find_gohma(st0)
+            start_state = gohma_state(g0) if g0 else "ABSENT"
+            start_dist = round(hdist(g0.pos, st0.pos), 1) if g0 else None
+            start_hp = g0.hp if g0 else 0
+            O, A, R, PAD, CY = [], [], [], [], []
+            print(f"\n=== episode {ep + 1}/{a.episodes}  slot {slot}  gohma={start_state} "
+                  f"hp={start_hp} dist={start_dist}u"
+                  + ("   <-- PRE-CUTSCENE: look up to start the fight" if start_state == "ceiling_wait" else ""))
             t0, info = time.time(), {}
             while True:
                 b, x, y = read_pad(env.ram)
                 act = to_action(b, x, y, env.state.cam_yaw)
                 O.append(np.asarray(obs, np.float32)); A.append(act); PAD.append((b, x, y))
+                CY.append(env.state.cam_yaw)
                 env.send_action(act)                      # mirrors what the human pressed, so state advances
                 while not env.ready():
                     time.sleep(0.0005)
@@ -184,11 +223,33 @@ def main() -> int:
             won = bool(ep_info.get("boss_defeated"))
             died = bool(st.bit(SF1_DEAD))
             f = out / f"ep{ep:02d}_slot{slot}_{'WIN' if won else 'death' if died else 'timeout'}.npz"
-            np.savez_compressed(f, obs=np.stack(O), action=np.array(A, np.int64),
-                                reward=np.array(R, np.float32), pad=np.array(PAD, np.int32),
-                                slot=slot, boss_damage=ep_info.get("boss_damage", 0),
-                                boss_defeated=won, length_s=len(A) / 10.0)
-            kept.append((f.name, won, ep_info.get("boss_damage", 0), len(A) / 10.0))
+            # SELF-DESCRIBING, because this is going to S3 and being trained on remotely: the obs field
+            # names, the action-space definition and the pad decoding all travel WITH the data, so a remote
+            # job never has to reconstruct the layout from this repo's current source (AGENTS 25, 27).
+            np.savez_compressed(
+                f,
+                obs=np.stack(O).astype(np.float32),          # (T, obs_dim) v7
+                action=np.array(A, np.int64),                # (T,) index into COMBAT_ACTIONS_V5
+                reward=np.array(R, np.float32),              # (T,)
+                pad=np.array(PAD, np.int32),                 # (T, 3) raw (button mask, stick_x, stick_y)
+                cam_yaw=np.array(CY, np.float32),            # (T,) the yaw used to decode each action
+                slot=np.int32(slot),
+                start_gohma_state=start_state, start_gohma_hp=np.int32(start_hp),
+                start_dist=np.float32(-1.0 if start_dist is None else start_dist),
+                boss_damage=np.int32(ep_info.get("boss_damage", 0)),
+                boss_defeated=np.bool_(won), died=np.bool_(died),
+                length_s=np.float32(len(A) / 10.0), hz=np.float32(10.0),
+                obs_version=np.int32(7), obs_dim=np.int32(len(O[0])),
+                n_actions=np.int32(len(COMBAT_ACTIONS_V5)),
+                obs_fields=json.dumps(OBS_FIELDS), action_space=json.dumps(ACTION_SPEC),
+                pad_bits=json.dumps(BITS),
+                pad_source="gPlayState+0x14 Input[0], docs/RAM_MAP.md section 4",
+                recorded_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                git_commit=GIT,
+            )
+            md5 = hashlib.md5(f.read_bytes()).hexdigest()
+            kept.append((f.name, won, ep_info.get("boss_damage", 0), len(A) / 10.0, slot,
+                         start_state, md5, f.stat().st_size))
             print(f"  -> {f.name}  {len(A)} steps, {len(A)/10.0:.0f}s, boss damage "
                   f"{ep_info.get('boss_damage', 0)}/10, {'WIN' if won else 'no kill'}")
     except KeyboardInterrupt:
@@ -199,13 +260,23 @@ def main() -> int:
         except Exception:                                                        # noqa: BLE001
             pass
     if kept:
-        wins = sum(1 for _, w, _, _ in kept if w)
-        (out / "MANIFEST.json").write_text(json.dumps(
-            {"episodes": [{"file": n, "win": w, "boss_damage": d, "length_s": s} for n, w, d, s in kept],
-             "wins": wins, "total": len(kept),
-             "action_space": "COMBAT_ACTIONS_V5 (108)", "obs_version": 7,
-             "pad_source": f"gPlayState+0x14 Input[0] (docs/RAM_MAP.md section 4)"}, indent=2))
-        print(f"\n{len(kept)} episodes, {wins} wins -> {out}/")
+        wins = sum(1 for k in kept if k[1])
+        (out / "MANIFEST.json").write_text(json.dumps({
+            "dataset": "human Gohma demonstrations with controller inputs",
+            "episodes": [{"file": n, "win": w, "boss_damage": d, "length_s": s, "slot": sl,
+                          "start_gohma_state": ss, "md5": m, "bytes": by}
+                         for n, w, d, s, sl, ss, m, by in kept],
+            "total": len(kept), "wins": wins,
+            "steps": sum(round(k[3] * 10) for k in kept),
+            "obs_version": 7, "hz": 10.0,
+            "action_space": "COMBAT_ACTIONS_V5", "n_actions": len(COMBAT_ACTIONS_V5),
+            "pad_source": "gPlayState+0x14 Input[0] (docs/RAM_MAP.md section 4)",
+            "git_commit": GIT,
+            "recorded_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "verify": "scripts/verify_human_dataset.py <dir>  -- run BEFORE uploading to S3",
+        }, indent=2))
+        print(f"\n{len(kept)} episodes, {wins} wins, {sum(round(k[3]*10) for k in kept):,} steps -> {out}/")
+        print(f"  NEXT: .venv/bin/python scripts/verify_human_dataset.py {out}")
     return 0
 
 
