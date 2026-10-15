@@ -105,6 +105,14 @@ def held(mask: int) -> list[str]:
     return [n for n, bit in BITS.items() if mask & bit]
 
 
+def unmapped(mask: int) -> list[str]:
+    """Bits set in the pad word that BITS does not name. Reported rather than silently dropped: the L shoulder
+    produced 0x0020 while the agent's pipe produces 0x2000 for the same logical button, and a mask of `[]`
+    looked identical to no press at all."""
+    rest = mask & ~sum(BITS.values())
+    return [f"0x{1 << i:04X}" for i in range(16) if rest & (1 << i)]
+
+
 def to_action(mask: int, sx: int, sy: int, cam_yaw: float, dead: int = 20) -> int:
     """Map a real pad reading onto the policy's 108-action space, inverting `DolphinGoalEnv._stick`.
 
@@ -234,9 +242,23 @@ def probe(env, slot, seconds=10.0):
             stick_seen.add((x // 32, y // 32))
         if (b, x, y) != last:
             a = to_action(b, x, y, cy)
-            # held() returns a LIST; formatting a list with a width spec raises. Stringify first.
-            print(f"  button 0x{b:04X} {str(held(b)) if b else '-':<34} stick ({x:>4},{y:>4})  -> action "
-                  f"{a:>3} {action_name(a, 'combat')}")
+            # The GAME'S REACTION, not just the bits: SF1 bit 15 is Z-target and bit 22 is shield. This is
+            # ground truth for what a button DOES, which is the only way to settle a mapping where the pipe
+            # and the physical pad land on different bits for the same logical button.
+            st = read_combat_state(env.ram)
+            fx = []
+            if st.bit(15):
+                fx.append("Z-LOCK")
+            if st.bit(22):
+                fx.append("SHIELD")
+            if st.targeted:
+                fx.append(f"target=0x{st.targeted:08X}")
+            names = str(held(b)) if b else "-"
+            un = unmapped(b)
+            if un:
+                names += " UNMAPPED" + str(un)
+            print(f"  0x{b:04X} {names:<40} stick ({x:>4},{y:>4}) -> {action_name(a, 'combat'):<14}"
+                  f" {' '.join(fx)}")
             last = (b, x, y)
         time.sleep(0.05)
 
@@ -245,6 +267,15 @@ def probe(env, slot, seconds=10.0):
     # mapping is wrong -- a different problem, and one that must not be hidden behind a single pass/fail.
     print(f"\n  {len(seen)} distinct readings | {len(btn_seen)} distinct button masks "
           f"({sorted(f'0x{v:04X}' for v in btn_seen)}) | {len(stick_seen)} stick regions")
+    unk = sorted({u for m in btn_seen for u in unmapped(m)})
+    if unk:
+        print(f"  UNMAPPED BITS SEEN: {unk} -- these presses are being thrown away. Tell me which physical")
+        print(f"  button produced them and what the game did (Z-LOCK / SHIELD above) and I will name them.")
+    need = {"B", "L"}
+    missing = need - {n for m in btn_seen for n in held(m)}
+    if missing:
+        print(f"  NOT SEEN: {sorted(missing)} -- the fight needs these ({'B'in missing and 'B = sword' or ''}"
+              f"{', ' if len(missing)>1 else ''}{'L' in missing and 'L = Z-target' or ''})")
     ok = True
     if len(btn_seen) < 2:
         print("  FAIL buttons: never changed from 0x%04X." % next(iter(btn_seen), 0))
