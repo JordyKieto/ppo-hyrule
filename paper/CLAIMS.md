@@ -42,6 +42,9 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R30 | The credit horizon never matched the task | **M** | gamma 0.995 / gae_lambda 0.95 identical in all 19 exported runs; advantage horizon 1.8 s vs a 45-154 s fight; boss_defeat worth 0.04% of face value at episode start. GOHMA_CREDIT_PLAN 1.1 |
 | R31 | Network capacity never grew with the problem | **M** | obs 483->1033, actions 63->108, params +10%, params-per-obs-dim halved 1,275 -> 658. hidden 384 restores 1,360 |
 | R32 | A longer credit horizon raises boss damage | **U** | Phase 1 of GOHMA_CREDIT_PLAN, 3 arms incl. a control sharing the same init, gated on slope > +0.012 HP/update with \|t\|>2 |
+| R33 | A long credit horizon needs a lower learning rate | **M** | 12-cell grid: at whole-episode credit, lr 3e-4 -> 3e-5 moves damage 0.76 -> 2.08 (2.7x); at 30s 1.21 -> 2.30; at v15's 1.8s horizon LR does nothing. GOHMA_CREDIT_PLAN 9.1 |
+| R34 | The 9s/3e-5 cell beats v15's settings | **M -> WITHDRAWN** | grid said +32% (3.16 vs 2.40) on 1 pod per arm; matched confirmation, 7 vs 6 pods from one init, gives +0.065 +/- 0.117, t=+0.56. Winner's curse. AGENTS 35 |
+| R35 | A 20s-horizon policy can be switched to a long horizon | **M -> NO** | tried at vf_coef 0.05 and 0.5; both destroyed v15 (3.275 -> 1.84, t=-3.30) with the critic never converging |
 
 ## WM track
 

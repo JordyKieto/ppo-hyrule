@@ -193,3 +193,70 @@ alongside for the held-out question. Not before.
 
 Total to a justified full run: **~$31 and ~4 hours of ablation**, against the ~$60 already spent on v16–v18,
 which produced three regressions because nothing was gated.
+
+---
+
+# RESULTS, 2026-10-15. The diagnosis held; every fix failed. Two winner's-curse errors.
+
+## 9.1 What was established, at **M**
+
+**The diagnosis is correct and stands.** `gamma 0.995 / gae_lambda 0.95` give a **1.8 s advantage horizon** on a
+45–154 s fight, and `boss_defeat` +60 is worth **0.027** at episode start. Nothing below changes that.
+
+**A long horizon with an unchanged learning rate is actively destructive, and lowering LR rescues it.** The
+12-arm grid, all resumed from v15 (damage 3.275), one pod per arm:
+
+| advantage horizon | lr 3e-4 | lr 1e-4 | lr 3e-5 |
+|---|---|---|---|
+| 1.8 s (γ.995/λ.95 — v15's own) | 2.40 | 2.42 | 2.32 |
+| 9 s (γ.999/λ.99) | 2.39 | 2.30 | **3.16** |
+| 30 s (γ.9997/λ.997) | 1.21 | 2.07 | 2.30 |
+| whole episode (γ.9999/λ1.0) | **0.76** | 1.74 | 2.08 |
+
+Read the rows: at the whole-episode horizon, LR 3e-4 → 3e-5 moves damage **0.76 → 2.08, 2.7×**. At 30 s it is
+1.21 → 2.30. At v15's own short horizon LR does **nothing** (2.40 / 2.42 / 2.32) — which is why this was never
+found, and why v16, v17 and v21 all destroyed the policy by lengthening the horizon alone. **M**, a monotone
+pattern across 12 cells with effects far larger than single-pod noise.
+
+## 9.2 What FAILED, and the fix is not available
+
+| attempt | result |
+|---|---|
+| long horizon retrofitted onto v15, `vf_coef 0.05` | critic never converged (value loss oscillating 7–207); damage fell |
+| long horizon retrofitted onto v15, `vf_coef 0.5` | `value_loss` 788 → 166 still oscillating; damage **3.275 → 1.84, −44%, t=−3.30** |
+| from scratch at whole-episode horizon (v20, `hidden 384`) | 0.39 damage, slope **+0.0030 ± 0.0019** — statistically flat, and the **same rate as v10's +0.0034** |
+| the grid's best cell, confirmed at matched n | **tie with the control** (below) |
+
+**A policy trained with a 20 s horizon cannot be switched to a long one.** Its value function is wrong by
+~50× and the policy follows the broken advantages downhill faster than the critic recovers. Tried twice, at
+two `vf_coef` values, both destructive.
+
+## 9.3 THE TWO WINNER'S-CURSE ERRORS — the reusable part
+
+**Error 1.** The grid ranked 12 arms on the **last-3-update mean of ONE pod** (~13 episodes/update). Its
+winner, a6 (9 s / 3e-5), read **3.16**. Scaled to 13 pods, the same settings read **~2.5**. a6's own full-run
+mean was 2.80, not 3.16 — **the top of a 12-way ranking on a noisy statistic is biased upward by
+construction**, and I selected on exactly that.
+
+**Error 2.** Confirming it properly — two arms, **both initialised from v15**, 7 pods vs 6, matched updates
+1–6:
+
+| | mean dmgB |
+|---|---|
+| Arm A (9 s, lr 3e-5) | 2.623 ± 0.096 |
+| Arm B (v15 control) | 2.558 ± 0.067 |
+| **difference** | **+0.065 ± 0.117, t=+0.56 — INDISTINGUISHABLE** |
+
+The grid claimed **+32%**. At matched n it is **+2.5%**. The entire apparent gain was selection noise.
+
+**This is AGENTS 30 repeated.** That rule was written hours earlier about the held-out *checkpoint* selector —
+ranking on a statistic too noisy to rank with — and the same error was made on *arm* selection. The rule
+generalises and is now stated as such in AGENTS 35.
+
+## 9.4 Standing state
+
+**v15 (`checkpoints/kept/gohma-kl-v15-r4_latest.pt`, md5 `397e27b2beb6`, damage 3.275) remains the best
+policy. Nothing in this session beat it.** The credit-assignment line is closed for *retrofitting*; the only
+untested route is **from scratch at a long horizon with the LR swept**, since from-scratch is the one setting
+where the critic learns the long horizon from the beginning and the grid's LR interaction has never been
+tested there.

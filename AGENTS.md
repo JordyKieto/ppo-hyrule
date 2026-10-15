@@ -629,3 +629,29 @@ v17 t=−3.78), so neither is a curriculum artefact.
    Episode-weighted boss damage falls when the curriculum moves to the hard slots at identical skill, which
    is why `boss_damage_balanced` is the unweighted mean of the per-slot values and is asserted mix-invariant
    in `tests/test_band_metrics.py`.
+
+## 35. An ablation's WINNER needs the same statistical care as its measurements
+
+§30 said a selector is not a selector until its statistic has resolution. That was written about choosing a
+**checkpoint**. The identical error was then made twice more on the same day, choosing an **arm**:
+
+**The incident.** A 12-arm grid (4 credit horizons × 3 learning rates) was run one pod per arm and ranked on
+the **last-3-update mean**, i.e. ~40 episodes. The winner read **3.16** boss damage against a control's 2.40,
+a +32% gap, and was scaled to the full fleet — where the same settings read **~2.5**. Confirmed properly as
+two matched arms from one init, 7 pods vs 6: **+0.065 ± 0.117, t=+0.56**. The +32% was **entirely** the
+upward bias of taking the maximum of twelve noisy estimates. The grid cost ~$7 and its *mechanism* finding
+was sound; only its ranking was fiction.
+
+**The rules.**
+
+1. **The maximum of N noisy estimates is biased upward, and the bias grows with N.** A 12-arm grid read on 40
+   episodes per arm will always produce an impressive-looking winner. Before quoting it, ask what the spread
+   of the arms would look like if every arm were identical.
+2. **Rank on the slope over all updates with its SE, never on a last-k mean.** A last-k mean throws away most
+   of the data and keeps the noisiest part.
+3. **A grid selects a REGION, not a cell.** Trust "long horizons need low LR" (monotone across 12 cells,
+   2.7× effect); do not trust "9 s at 3e-5 is the best cell".
+4. **Confirm the winner at matched n against a control, from the same init, before acting on it.** Budget for
+   the confirmation when planning the grid — it is not optional, and here it reversed the conclusion.
+5. **Pre-register the decision rule**: the winner must beat the runner-up by more than the combined standard
+   error, or the result is a tie and the grid chose a region only.
