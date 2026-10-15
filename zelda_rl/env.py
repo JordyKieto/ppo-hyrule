@@ -87,6 +87,12 @@ class EnvConfig:
     # obs_dim by n_actors: 4 -> 481, 5 -> 527, 6 -> 573, 8 -> 665, 16 -> 1033. The Deku Baba task, which was
     # SOLVED at 78% with this same 256-wide network, was 483. See docs/DEKU_VS_GOHMA_SPEC.md.
     n_actors: int = 0                 # 0 = all N_ACTORS rows (the historical behaviour)
+    # Path to a GCPadNew.ini whose [GCPad1] should REPLACE the pipe binding, so a HUMAN's controller drives
+    # the game instead of the agent. build_user_dir binds GCPad1 to Pipe/0/pad, which is why a real
+    # controller reads as all-zeros in the Input struct: the port is not mapped to a physical device at all.
+    # Hotkeys live on a SEPARATE pipe (Pipe/0/hk), so savestate loading keeps working either way.
+    # When this is set, `send_action` writes to a pipe nobody reads -- that is intended for recording.
+    human_pad_ini: str = ""
 
     @property
     def max_steps(self) -> int:
@@ -94,6 +100,29 @@ class EnvConfig:
 
 
 class DolphinGoalEnv:
+    @staticmethod
+    def _install_human_pad(user_dir: Path, src_ini: Path) -> None:
+        """Replace the instance's [GCPad1] with a real device's, keeping everything else.
+
+        Only the GCPad1 section is taken, so the instance keeps its own Hotkeys.ini (the hk pipe) and its own
+        Dolphin.ini. Raises if the source has no [GCPad1] or still points at a Pipe, because silently keeping
+        the pipe binding is exactly the failure this exists to fix -- the controller would read all zeros and
+        a recording session would produce a dataset of neutral input.
+        """
+        text = src_ini.read_text()
+        start = text.index("[GCPad1]")
+        end = text.find("\n[", start + 1)
+        section = text[start:] if end < 0 else text[start:end]
+        if "Device" not in section:
+            raise RuntimeError(f"{src_ini} has no Device line under [GCPad1]")
+        if "Pipe/" in section.split("Device", 1)[1].splitlines()[0]:
+            raise RuntimeError(f"{src_ini} [GCPad1] is still bound to a Pipe -- no physical controller")
+        cfg = user_dir / "Config" / "GCPadNew.ini"
+        cur = cfg.read_text()
+        i = cur.index("[GCPad1]")
+        j = cur.find("\n[", i + 1)
+        cfg.write_text((cur[:i] + section.rstrip() + "\n" + (cur[j + 1:] if j >= 0 else "")))
+
     def _clip_actors(self, flat, actor_dim: int):
         """Keep only the first `cfg.n_actors` rows of the flat actor table (nearest-first, see EnvConfig)."""
         k = getattr(self.cfg, "n_actors", 0) or 0
@@ -108,6 +137,8 @@ class DolphinGoalEnv:
                             audio=cfg.audio, fullscreen=cfg.fullscreen)
         for k, f in slot_files.items():
             shutil.copy(f, ud / "StateSaves" / f"NACE01.s{k:02d}")
+        if cfg.human_pad_ini:
+            self._install_human_pad(ud, Path(cfg.human_pad_ini))
         self.inst = DolphinInstance(ud, video_backend=cfg.video_backend)
         self._read = read_state_v2 if cfg.obs_version >= 2 else read_state
         self.start_flags = None

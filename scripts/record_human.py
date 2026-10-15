@@ -200,13 +200,14 @@ def selftest(env, slot) -> bool:
     return ok
 
 
-def build_env(slots, slots_dir, seconds, visible):
+def build_env(slots, slots_dir, seconds, visible, pad_ini=""):
     from zelda_rl.env import DolphinGoalEnv, EnvConfig
     files = {k: Path(slots_dir) / f"NACE01.s{k:02d}" for k in slots}
     states = {k: read_state_file_v2(f) for k, f in files.items()}
     cfg = EnvConfig(episode_vi=int(seconds * 60), vi_per_step=6,
                     video_backend="Metal" if visible else "Null", unlimited_speed=False,
                     audio=visible, obs_version=7, task="combat", stall_timeout=600.0,
+                    human_pad_ini=pad_ini,
                     combat=CombatConfig(profile="gohma", max_seconds=seconds, target_ids=(0x28, 0x55)))
     root = Path(os.environ.get("TMPDIR", "/tmp")) / f"human_{os.getpid()}"
     return DolphinGoalEnv(0, root / "i0", files, states, states[min(slots)], cfg)
@@ -254,6 +255,10 @@ def main() -> int:
                          "triggered). Pass the live dir for mid-fight engaged starts")
     ap.add_argument("--out", default="datasets/human/gohma")
     ap.add_argument("--probe", action="store_true", help="10 s input check, record nothing")
+    ap.add_argument("--pad-ini", default=str(Path.home() / "Library/Application Support/Dolphin/Config/GCPadNew.ini"),
+                    help="GCPadNew.ini whose [GCPad1] drives the game. Defaults to YOUR Dolphin config, which "
+                         "already has the controller mapped. The env otherwise binds the port to Pipe/0/pad "
+                         "for the agent, which is why a real controller reads all-zeros. '' = keep the pipe")
     ap.add_argument("--skip-probe", action="store_true",
                     help="skip the input gate. ONLY for testing the save path headless -- a real session must "
                          "pass the probe, or you can record 20 episodes of neutral input")
@@ -292,7 +297,8 @@ def main() -> int:
     ACTION_SPEC = [{"i": i, "world_dir_rad": d, "buttons": list(COMBAT_BUTTONS_V5[b]),
                     "name": action_name(i, "combat")} for i, (d, b) in enumerate(COMBAT_ACTIONS_V5)]
 
-    env = build_env(slots, a.slots_dir, a.seconds, not a.headless)
+    env = build_env(slots, a.slots_dir, a.seconds, not a.headless,
+                    pad_ini="" if a.selftest else a.pad_ini)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     kept = []
