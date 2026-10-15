@@ -221,23 +221,46 @@ def probe(env, slot, seconds=10.0):
     print(f"\nPROBE on slot {slot}: gohma={gohma_state(g) if g else 'ABSENT'}"
           + ("  <-- PRE-CUTSCENE" if g is not None and gohma_state(g) == "ceiling_wait" else ""))
     print(f"reading gPlayState+0x14 for {seconds:.0f}s. Press buttons and move the stick.\n")
-    seen, t0, last = set(), time.time(), None
+    print("  press, one at a time:  B (south) = sword   L shoulder = Z-target   R shoulder = shield")
+    print("                         right stick DOWN = slingshot   right stick LEFT = Deku Nut")
+    print("  and move the left stick.\n")
+    seen, btn_seen, stick_seen, t0, last = set(), set(), set(), time.time(), None
     while time.time() - t0 < seconds:
         b, x, y = read_pad(env.ram)
         cy = read_cam_yaw(env.ram)
         seen.add((b, x, y))
+        btn_seen.add(b)
+        if abs(x) > 20 or abs(y) > 20:
+            stick_seen.add((x // 32, y // 32))
         if (b, x, y) != last:
-            print(f"  button 0x{b:04X} {held(b) or '-':<40} stick ({x:>4},{y:>4})  -> action "
-                  f"{to_action(b, x, y, cy):>3} {action_name(to_action(b, x, y, cy), 'combat')}")
+            a = to_action(b, x, y, cy)
+            # held() returns a LIST; formatting a list with a width spec raises. Stringify first.
+            print(f"  button 0x{b:04X} {str(held(b)) if b else '-':<34} stick ({x:>4},{y:>4})  -> action "
+                  f"{a:>3} {action_name(a, 'combat')}")
             last = (b, x, y)
         time.sleep(0.05)
-    print(f"\n  {len(seen)} distinct pad readings in {seconds:.0f}s")
-    if len(seen) < 3:
-        print("  FAIL: the pad reading barely changed. Either nothing was pressed, or the offset is wrong.")
-        print("  Do NOT record until this shows your presses. docs/RAM_MAP.md section 4.")
-        return False
-    print("  OK: inputs are being captured.")
-    return True
+
+    # Buttons and the stick are read from DIFFERENT offsets in the same struct, so they are reported
+    # separately. The stick working while buttons stay 0x0000 would mean the struct is right and the button
+    # mapping is wrong -- a different problem, and one that must not be hidden behind a single pass/fail.
+    print(f"\n  {len(seen)} distinct readings | {len(btn_seen)} distinct button masks "
+          f"({sorted(f'0x{v:04X}' for v in btn_seen)}) | {len(stick_seen)} stick regions")
+    ok = True
+    if len(btn_seen) < 2:
+        print("  FAIL buttons: never changed from 0x%04X." % next(iter(btn_seen), 0))
+        print("        If you DID press B / L / R, the GCPad1 mapping is not reaching the game. Check that")
+        print("        the Dolphin window had focus, then `--pad-ini ''` to confirm the pipe still works.")
+        ok = False
+    else:
+        print(f"  OK buttons: {len(btn_seen)} distinct masks seen")
+    if len(stick_seen) < 2:
+        print("  FAIL stick: never left the deadzone.")
+        ok = False
+    else:
+        print(f"  OK stick: {len(stick_seen)} regions seen")
+    if not ok:
+        print("\n  Do NOT record yet.")
+    return ok
 
 
 def main() -> int:
