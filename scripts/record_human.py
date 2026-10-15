@@ -71,7 +71,14 @@ INPUT0 = PLAY_STATE + 0x14
 #   no-button, silently, and the dataset would have taught the policy never to lock on.
 BITS = {"A": 0x8000, "B": 0x4000, "L": 0x2000, "START": 0x1000,
         "DU": 0x0800, "DD": 0x0400, "DL": 0x0200, "DR": 0x0100,
+        "N64_L": 0x0020,            # the N64 L button: OoT does not use it, and it produced NO effect live
         "R": 0x0010, "CU": 0x0008, "CD": 0x0004, "CL": 0x0002, "CR": 0x0001}
+
+# Names with no slot in COMBAT_BUTTONS_V5. They are recognised so they are not reported as "unmapped", but
+# they intentionally map to no action: N64_L and CU/CR do nothing in this fight, START pauses, and the D-pad
+# is unused. Confirmed live -- 0x0020 and 0x0001 both produced neither Z-LOCK nor SHIELD, while 0x2000 and
+# 0x0010 produced exactly those.
+NO_OP = {"N64_L", "START", "DU", "DD", "DL", "DR", "CU", "CR"}
 
 
 def read_pad(ram) -> tuple[int, int, int]:
@@ -271,6 +278,8 @@ def probe(env, slot, seconds=10.0):
     if unk:
         print(f"  UNMAPPED BITS SEEN: {unk} -- these presses are being thrown away. Tell me which physical")
         print(f"  button produced them and what the game did (Z-LOCK / SHIELD above) and I will name them.")
+    eff = {m for m in btn_seen if m}
+    print(f"  mapped-to-an-action masks: {sorted(f'0x{m:04X}' for m in eff if set(held(m)) - NO_OP)}")
     need = {"B", "L"}
     missing = need - {n for m in btn_seen for n in held(m)}
     if missing:
