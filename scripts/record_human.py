@@ -322,6 +322,10 @@ def main() -> int:
                     help="GCPadNew.ini whose [GCPad1] drives the game. Defaults to YOUR Dolphin config, which "
                          "already has the controller mapped. The env otherwise binds the port to Pipe/0/pad "
                          "for the agent, which is why a real controller reads all-zeros. '' = keep the pipe")
+    ap.add_argument("--settle", type=float, default=3.0,
+                    help="seconds to keep emulating after an episode ends, before the savestate reloads. Lets "
+                         "the kill or death animation play out so the cut is not jarring, and makes the "
+                         "outcome visible on screen before the next row starts")
     ap.add_argument("--skip-probe", action="store_true",
                     help="skip the input gate. ONLY for testing the save path headless -- a real session must "
                          "pass the probe, or you can record 20 episodes of neutral input")
@@ -430,8 +434,15 @@ def main() -> int:
                 git_commit=GIT,
             )
             md5 = hashlib.md5(f.read_bytes()).hexdigest()
+            tag = "KILLED HER" if won else "you died" if died else "time up"
+            print(f"  {'*' * 8} {tag} {'*' * 8}")
             kept.append((f.name, won, ep_info.get("boss_damage", 0), len(A) / 10.0, slot,
                          start_state, md5, f.stat().st_size))
+            if ep < a.episodes - 1 and a.settle > 0:
+                # Keep the emulator ticking so the animation plays, then reload. ready()/observe() are not
+                # used here: the episode is over and the tracker is done, so this is purely wall-clock.
+                print(f"  ... {a.settle:.0f}s, then slot {slots[(ep + 1) % len(slots)]}", flush=True)
+                time.sleep(a.settle)
             print(f"  -> {f.name}  {len(A)} steps, {len(A)/10.0:.0f}s, boss damage "
                   f"{ep_info.get('boss_damage', 0)}/10, {'WIN' if won else 'no kill'}")
     except KeyboardInterrupt:
