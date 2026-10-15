@@ -39,6 +39,9 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R27 | v14's reward is the configuration that learns | **U** | `gohma-kl-v18`, v14's reward (no g_approach) on v15's weights. Judged on boss_damage_balanced slope against v14's +0.012 HP/update |
 | R28 | Gohma boss damage saturates at 3.2-3.4 of 10 | **M** | eight versions, five reward configurations, every run starting near 3.3 fails to climb while every run starting near 2.6 does. The last six HP are the open problem |
 | R29 | Outcome-only reward with the escalating damage multiplier | **U -- built, unrun** | `--reward damage` / `GOHMA_DAMAGE`, 39 shaping terms zeroed. Init not yet chosen; see GOHMA_FOCUS WHERE WE LEFT OFF |
+| R30 | The credit horizon never matched the task | **M** | gamma 0.995 / gae_lambda 0.95 identical in all 19 exported runs; advantage horizon 1.8 s vs a 45-154 s fight; boss_defeat worth 0.04% of face value at episode start. GOHMA_CREDIT_PLAN 1.1 |
+| R31 | Network capacity never grew with the problem | **M** | obs 483->1033, actions 63->108, params +10%, params-per-obs-dim halved 1,275 -> 658. hidden 384 restores 1,360 |
+| R32 | A longer credit horizon raises boss damage | **U** | Phase 1 of GOHMA_CREDIT_PLAN, 3 arms incl. a control sharing the same init, gated on slope > +0.012 HP/update with \|t\|>2 |
 
 ## WM track
 

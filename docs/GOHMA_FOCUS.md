@@ -14,6 +14,15 @@ and nothing there needs to be rerun to proceed here.
 
 **Read this first. It is the state of the task, not a log.**
 
+## THE ROOT CAUSE, found 2026-10-15: the credit horizon
+
+`gamma 0.995` / `gae_lambda 0.95` / `chunk 60` are **identical in all 19 exported RL runs** -- tuned when a
+Deku Baba died in 15 s, applied unchanged to a fight that takes 45-154 s. At 10 Hz that is a **20 s value
+horizon and a 1.8 s ADVANTAGE horizon**: 67.6% of the advantage weight sits inside 2 seconds, and
+`boss_defeat` +60 is worth **0.027** from the start of a 154 s fight -- **0.04% of face value**. The policy
+has never been able to see the kill, which is why damage saturates at 3.2-3.4 of 10 and why eight reward
+terms added inside a 1.8 s window did nothing. **`docs/GOHMA_CREDIT_PLAN.md` is the plan.**
+
 ## The one-line state
 
 **v15 is the best policy we have** (`checkpoints/kept/gohma-kl-v15-r4_latest.pt`, md5 `397e27b2beb6`,
