@@ -62,9 +62,16 @@ INPUT0 = PLAY_STATE + 0x14
 
 # N64 button bits as the VC build reports them in cur.button. Verified empirically by --probe before any
 # recording is kept: a constant or all-zero reading means the offset is wrong and the run aborts.
-BITS = {"A": 0x8000, "B": 0x4000, "Z": 0x2000, "START": 0x1000,
+# VERIFIED BY --selftest, which drives the pad through the env's own pipe and reads these back. The names are
+# the env's button names (COMBAT_BUTTONS_V5), NOT the N64 pad's:
+#
+#   "L" is the env's Z-TARGET button and the game sees it on bit 0x2000 -- the N64 Z bit. docs/RAM_MAP.md:249
+#   says so in words ("L held = Z-target"), and the first version of this table mapped "L" to 0x0020 and
+#   called 0x2000 "Z". Every Z-targeted action -- which is most of this fight -- would have decoded as
+#   no-button, silently, and the dataset would have taught the policy never to lock on.
+BITS = {"A": 0x8000, "B": 0x4000, "L": 0x2000, "START": 0x1000,
         "DU": 0x0800, "DD": 0x0400, "DL": 0x0200, "DR": 0x0100,
-        "L": 0x0020, "R": 0x0010, "CU": 0x0008, "CD": 0x0004, "CL": 0x0002, "CR": 0x0001}
+        "R": 0x0010, "CU": 0x0008, "CD": 0x0004, "CL": 0x0002, "CR": 0x0001}
 
 
 def read_pad(ram) -> tuple[int, int, int]:
@@ -78,6 +85,20 @@ def read_pad(ram) -> tuple[int, int, int]:
     b = struct.unpack_from(">H", ram, INPUT0 & 0x3FFFFF)[0]
     x, y = struct.unpack_from(">bb", ram, (INPUT0 + 2) & 0x3FFFFF)
     return int(b), int(x), int(y)
+
+
+def read_cam_yaw(ram) -> float:
+    """Camera yaw read FRESH from RAM, the same way zelda_rl/obs.py:178 computes it.
+
+    `env.state` is None until the first reset() -- the probe crashed on that -- and after a reset it is only
+    as fresh as the last observe(), i.e. one step stale. The action decode depends on the yaw AT THE MOMENT
+    the stick is read, so it is read directly every frame rather than taken from the cached state.
+    """
+    from zelda_rl.obs import MAIN_CAMERA
+    at = struct.unpack_from(">fff", ram, (MAIN_CAMERA + 0x50) & 0x3FFFFF)
+    eye = struct.unpack_from(">fff", ram, (MAIN_CAMERA + 0x5C) & 0x3FFFFF)
+    import math
+    return math.atan2(at[2] - eye[2], at[0] - eye[0])
 
 
 def held(mask: int) -> list[str]:
@@ -129,6 +150,56 @@ def to_action(mask: int, sx: int, sy: int, cam_yaw: float, dead: int = 20) -> in
     return best if best is not None else 0
 
 
+def selftest(env, slot) -> bool:
+    """Prove the input offset WITHOUT a controller, by driving the pad through the env's own pipe.
+
+    `send_action` writes PRESS/RELEASE and SET MAIN to Dolphin's pad pipe. If gPlayState+0x14 is the real
+    Input[0], those presses must appear there on the next frames. This closes the loop end to end -- offset,
+    button bits and the world/stick direction inversion -- with nothing but the emulator, so a wrong offset
+    can never reach a recording session.
+    """
+    import time as _t
+
+    from zelda_rl.env import COMBAT_ACTIONS_V5, COMBAT_BUTTONS_V5
+    env.reset(slot)
+    print("\nSELFTEST: driving the pad through the pipe and reading it back from gPlayState+0x14\n")
+    cases = []
+    for want in (("B",), ("L",), ("R",), ("A",), ("L", "B"), ("L", "R"), ("CD",), ("CL",),
+                 ("L", "CD"), ("L", "CL")):
+        a = next(i for i, (d, bi) in enumerate(COMBAT_ACTIONS_V5)
+                 if d is None and set(COMBAT_BUTTONS_V5[bi]) == set(want))
+        cases.append((a, set(want)))
+    ok = True
+    for a, want in cases:
+        for _ in range(3):                       # a few frames for the press to register
+            env.send_action(a)
+            while not env.ready():
+                _t.sleep(0.0005)
+            env.observe()
+        b, x, y = read_pad(env.ram)
+        got = set(held(b)) & {"A", "B", "L", "R", "CD", "CL"}
+        good = got == want
+        ok &= good
+        print(f"  {'PASS' if good else 'FAIL'}  sent {sorted(want)!s:<16} read 0x{b:04X} -> {sorted(got)}")
+    # and a direction: send a world angle, confirm the decoded action round-trips
+    import math
+    for a, lbl in [(next(i for i, (d, bi) in enumerate(COMBAT_ACTIONS_V5)
+                         if d is not None and abs(d) < 1e-6 and bi == 0), "world E")]:
+        for _ in range(3):
+            env.send_action(a)
+            while not env.ready():
+                _t.sleep(0.0005)
+            env.observe()
+        b, x, y = read_pad(env.ram)
+        back = to_action(b, x, y, read_cam_yaw(env.ram))
+        good = back == a
+        ok &= good
+        print(f"  {'PASS' if good else 'FAIL'}  sent action {a} ({lbl}) -> stick({x},{y}) -> decoded {back}")
+    env.send_action(0)
+    print(f"\n  {'OFFSET AND MAPPING VERIFIED' if ok else 'SELFTEST FAILED -- do not record'}")
+    return ok
+
+
 def build_env(slots, slots_dir, seconds, visible):
     from zelda_rl.env import DolphinGoalEnv, EnvConfig
     files = {k: Path(slots_dir) / f"NACE01.s{k:02d}" for k in slots}
@@ -141,13 +212,18 @@ def build_env(slots, slots_dir, seconds, visible):
     return DolphinGoalEnv(0, root / "i0", files, states, states[min(slots)], cfg)
 
 
-def probe(env, seconds=10.0):
+def probe(env, slot, seconds=10.0):
     """Ten seconds of live pad reading. If this is constant, the offset is wrong -- stop before recording."""
-    print(f"\nPROBE: reading gPlayState+0x14 for {seconds:.0f}s. Press buttons and move the stick.\n")
+    env.reset(slot)              # also initialises env.state, and puts the game in the recorded start state
+    from zelda_rl.gohma import find_gohma, gohma_state
+    g = find_gohma(read_combat_state(env.ram))
+    print(f"\nPROBE on slot {slot}: gohma={gohma_state(g) if g else 'ABSENT'}"
+          + ("  <-- PRE-CUTSCENE" if g is not None and gohma_state(g) == "ceiling_wait" else ""))
+    print(f"reading gPlayState+0x14 for {seconds:.0f}s. Press buttons and move the stick.\n")
     seen, t0, last = set(), time.time(), None
     while time.time() - t0 < seconds:
         b, x, y = read_pad(env.ram)
-        cy = env.state.cam_yaw
+        cy = read_cam_yaw(env.ram)
         seen.add((b, x, y))
         if (b, x, y) != last:
             print(f"  button 0x{b:04X} {held(b) or '-':<40} stick ({x:>4},{y:>4})  -> action "
@@ -178,6 +254,12 @@ def main() -> int:
                          "triggered). Pass the live dir for mid-fight engaged starts")
     ap.add_argument("--out", default="datasets/human/gohma")
     ap.add_argument("--probe", action="store_true", help="10 s input check, record nothing")
+    ap.add_argument("--skip-probe", action="store_true",
+                    help="skip the input gate. ONLY for testing the save path headless -- a real session must "
+                         "pass the probe, or you can record 20 episodes of neutral input")
+    ap.add_argument("--selftest", action="store_true",
+                    help="prove the input offset with NO controller: drive the pad through the env's pipe and "
+                         "read it back from gPlayState+0x14. Records nothing")
     ap.add_argument("--headless", action="store_true", help="Null backend (for testing only -- you need video)")
     a = ap.parse_args()
 
@@ -215,7 +297,9 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     kept = []
     try:
-        if not probe(env, 10.0):
+        if a.selftest:
+            return 0 if selftest(env, slots[0]) else 1
+        if not a.skip_probe and not probe(env, slots[0], 10.0):
             return 1
         if a.probe:
             return 0
@@ -237,7 +321,7 @@ def main() -> int:
             t0, info = time.time(), {}
             while True:
                 b, x, y = read_pad(env.ram)
-                act = to_action(b, x, y, env.state.cam_yaw)
+                act = to_action(b, x, y, read_cam_yaw(env.ram))
                 O.append(np.asarray(obs, np.float32)); A.append(act); PAD.append((b, x, y))
                 CY.append(env.state.cam_yaw)
                 env.send_action(act)                      # mirrors what the human pressed, so state advances
