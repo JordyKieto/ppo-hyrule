@@ -78,6 +78,15 @@ class EnvConfig:
     audio: bool = False                # game sound (visible play only)
     fullscreen: bool = False
     goal: GoalConfig = field(default_factory=GoalConfig)
+    # How many rows of the actor table reach the policy. The table is N_ACTORS=16 rows x 46 dims = 736 of the
+    # 1033-dim v7 observation, and the Gohma room has at most 4 occupied slots (boss + 3 larvae) -- so ~550
+    # dims describe nothing on a typical step. Rows are sorted by distance from Link (zelda_rl/obs.py:203), so
+    # truncating keeps the NEAREST actors, and Gohma additionally has her own 69-dim BOSS block, so she cannot
+    # vanish from the observation even if she falls outside the kept rows.
+    #
+    # obs_dim by n_actors: 4 -> 481, 5 -> 527, 6 -> 573, 8 -> 665, 16 -> 1033. The Deku Baba task, which was
+    # SOLVED at 78% with this same 256-wide network, was 483. See docs/DEKU_VS_GOHMA_SPEC.md.
+    n_actors: int = 0                 # 0 = all N_ACTORS rows (the historical behaviour)
 
     @property
     def max_steps(self) -> int:
@@ -85,6 +94,11 @@ class EnvConfig:
 
 
 class DolphinGoalEnv:
+    def _clip_actors(self, flat, actor_dim: int):
+        """Keep only the first `cfg.n_actors` rows of the flat actor table (nearest-first, see EnvConfig)."""
+        k = getattr(self.cfg, "n_actors", 0) or 0
+        return flat if k <= 0 else flat[: k * actor_dim]
+
     def __init__(self, idx: int, instance_dir: Path, slot_files: dict[int, Path], slot_states: dict[int, GameState],
                  goal: GameState, cfg: EnvConfig):
         self.idx, self.cfg, self.goal = idx, cfg, goal
@@ -264,12 +278,12 @@ class DolphinGoalEnv:
                 parts.append(boss_features(self.cstate, self.tracker))
             actors = v2[GLOBAL_DIM_V2:]
             if self.cfg.obs_version >= 7:                      # + motion / facing / size / all larvae / seeds / impact
-                from zelda_rl.ego import actor_table_v7, ego_v7_features
+                from zelda_rl.ego import ACTOR_DIM_V7, actor_table_v7, ego_v7_features
                 mem = self.ego_mem
                 mem.step(self.state)
                 parts.append(ego_v7_features(self.state, self.cstate, self.prev_pos, mem))
                 actors = actor_table_v7(actors, self.state, mem)
-                return np.concatenate(parts + [actors])
+                return np.concatenate(parts + [self._clip_actors(actors, ACTOR_DIM_V7)])
             if self.cfg.obs_version >= 6:                      # raw aim + egocentric geometry (zelda_rl/ego.py)
                 from zelda_rl.ego import aim_features, splice_actor_table
                 parts.append(aim_features(self.state, self.cstate, self.prev_pos))

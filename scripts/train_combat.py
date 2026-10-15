@@ -48,6 +48,12 @@ def parse_args():
     ap.add_argument("--transfer-action-margin", type=float, default=2.0, help="when widening a checkpoint: new action "
                     "logits start this far below the old mean (2.0 ~ 2-3%% total mass, 0.2 ~ 10%%)")
     ap.add_argument("--profile", default="deku_baba", choices=["deku_baba", "gohma"], help="combat task profile")
+    ap.add_argument("--n-actors", type=int, default=0,
+                    help="keep only the N nearest actor-table rows (0 = all 16). The table is 736 of the "
+                         "1033-dim v7 observation and at most 4 slots are ever occupied in the Gohma room, so "
+                         "~550 dims describe nothing. obs_dim: 4 -> 481, 6 -> 573, 8 -> 665, 16 -> 1033; the "
+                         "SOLVED Deku task was 483 on this same 256-wide net (docs/DEKU_VS_GOHMA_SPEC.md). "
+                         "Gohma keeps her own 69-dim block regardless, so she cannot drop out")
     ap.add_argument("--obs-version", type=int, default=None, help="4 (Deku Baba v4) | 5 (+boss/larva/item block, "
                     "+slingshot actions); default 4 for deku_baba, 5 for gohma")
     ap.add_argument("--num-envs", type=int, default=3)
@@ -163,17 +169,18 @@ def main():
                         **{**profile_defaults, **(json.loads(args.combat_json) if args.combat_json else {})})
     env_cfg = EnvConfig(episode_vi=int(args.episode_seconds * 60), vi_per_step=args.vi_per_step,
                         video_backend=args.video_backend, unlimited_speed=not args.realtime, obs_version=obs_version,
-                        task="combat", combat=ccfg)
+                        task="combat", combat=ccfg, n_actors=args.n_actors)
     T, N = env_cfg.max_steps, args.num_envs
     from zelda_rl.ego import ACTOR_DIM_V6, ACTOR_DIM_V7, ACTOR_FIELDS_V6, ACTOR_FIELDS_V7, AIM_DIM, AIM_FIELDS, EGO_V7_DIM, EGO_V7_FIELDS
     from zelda_rl.gohma import BOSS_DIM, BOSS_FIELDS
     ego_dim, ego_fields = (EGO_V7_DIM, EGO_V7_FIELDS) if obs_version >= 7 else (AIM_DIM, AIM_FIELDS) if obs_version >= 6 else (0, [])
     global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + (BOSS_DIM if obs_version >= 5 else 0) + ego_dim
     actor_dim = ACTOR_DIM_V7 if obs_version >= 7 else ACTOR_DIM_V6 if obs_version >= 6 else ACTOR_DIM_V2
-    obs_dim = global_dim + N_ACTORS * actor_dim
+    n_actors = args.n_actors if args.n_actors > 0 else N_ACTORS
+    obs_dim = global_dim + n_actors * actor_dim
     n_actions = N_COMBAT_ACTIONS_V5 if obs_version >= 5 else N_COMBAT_ACTIONS
     config = {**vars(args), "task": "combat", "obs_version": obs_version, "obs_dim": obs_dim, "global_dim": global_dim,
-              "n_actors": N_ACTORS, "actor_dim": actor_dim, "n_actions": n_actions, "action_frame": "world",
+              "n_actors": n_actors, "actor_dim": actor_dim, "n_actions": n_actions, "action_frame": "world",
               "obs_fields": GLOBAL_FIELDS_V2 + COMBAT_FIELDS + (BOSS_FIELDS if obs_version >= 5 else []) + ego_fields,
               "actor_fields": ACTOR_FIELDS_V7 if obs_version >= 7 else ACTOR_FIELDS_V6 if obs_version >= 6 else ACTOR_FIELDS_V2,
               "combat_cfg": asdict(ccfg), "steps_per_rollout": T, "recurrent": args.recurrent, "gru": args.gru, "batch_size": T * N, "goal_slot": start_slots[0],
