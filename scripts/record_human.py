@@ -14,7 +14,14 @@ Each episode loads a savestate, you play until Gohma dies / you die / the cap, a
 straight into behaviour cloning with no relabelling.
 
     DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
-      .venv/bin/python-dbg scripts/record_human.py --slots 3,4,5,6,7,8 --episodes 10 --out datasets/human/gohma
+      .venv/bin/python-dbg scripts/record_human.py --probe          # 10 s input check first, records nothing
+
+    DOLPHIN_BIN=... .venv/bin/python-dbg scripts/record_human.py    # 20 episodes from the pre-fight states
+
+Defaults are the five recovered PRE-FIGHT savestates in assets/prefight/ (Gohma in `ceiling_wait`, so you
+look up to trigger the cutscene and fight her end to end). Slot numbers must be 1-10 because the env loads
+via Dolphin's "Load State Slot N" hotkey, which only exists for those; the number is just which of the
+INSTANCE'S OWN StateSaves to load, so any state can sit at any number and your real StateSaves is untouched.
 
     ... --probe        # 10 s input check: hold buttons, confirm they are being read, write nothing
 """
@@ -158,16 +165,38 @@ def probe(env, seconds=10.0):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--slots", default="3,4,5,6,7,8", help="start slots to cycle through")
-    ap.add_argument("--episodes", type=int, default=10)
+    ap.add_argument("--slots", default="1,2,3,4,5",
+                    help="start slots to cycle through. MUST be 1-10: Dolphin only exposes "
+                         "'Load State Slot 1..10' as hotkeys, and the env loads by hotkey. The slot NUMBER is "
+                         "just which of the instance's own StateSaves to load -- the file can be any state, "
+                         "and your real ~/Library/.../StateSaves is never touched (env.py:109 copies into a "
+                         "per-instance user dir)")
+    ap.add_argument("--episodes", type=int, default=20)
     ap.add_argument("--seconds", type=float, default=240.0, help="per-episode cap; the human win took 167 s")
-    ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
+    ap.add_argument("--slots-dir", default="assets/prefight",
+                    help="default: the recovered PRE-FIGHT states (Gohma in ceiling_wait, cutscene not yet "
+                         "triggered). Pass the live dir for mid-fight engaged starts")
     ap.add_argument("--out", default="datasets/human/gohma")
     ap.add_argument("--probe", action="store_true", help="10 s input check, record nothing")
     ap.add_argument("--headless", action="store_true", help="Null backend (for testing only -- you need video)")
     a = ap.parse_args()
 
     slots = [int(s) for s in a.slots.split(",")]
+
+    # Fail here, with the reason, rather than after Dolphin has booted. Dolphin exposes load-state hotkeys for
+    # slots 1-10 only; asking for 11 crashed with a bare KeyError after a 60 s boot.
+    from zelda_rl.dolphin import HOTKEY_MAP
+    have = {int(k.split()[-1]) for k in HOTKEY_MAP if "Load State Slot" in k}
+    bad = [k for k in slots if k not in have]
+    if bad:
+        print(f"slots {bad} cannot be loaded: Dolphin only has Load State Slot hotkeys for {sorted(have)}.")
+        print("Rename your savestates to NACE01.s01..s10 inside --slots-dir; the slot number is only which of")
+        print("the instance's own StateSaves to load, so any state can live at any number 1-10.")
+        return 2
+    missing = [k for k in slots if not (Path(a.slots_dir) / f"NACE01.s{k:02d}").exists()]
+    if missing:
+        print(f"missing savestate files for slots {missing} in {a.slots_dir}")
+        return 2
 
     # The observation layout and the action table, taken from the SAME definitions train_combat.py uses, so
     # the dataset describes itself and a remote job cannot drift from this repo's source (AGENTS 25).
