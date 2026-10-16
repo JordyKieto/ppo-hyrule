@@ -49,7 +49,8 @@ import torch.nn.functional as F
 # python puts the SCRIPT's directory on sys.path, not the repo root, so `python3 scripts/x.py` from the
 # repo cannot import zelda_rl without this -- which is how lifting ObsWM into the package broke the run.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.wm_obs import N_DIRS, ObsWM, field_index, load_episodes  # noqa: E402
+from zelda_rl.wm_obs import (N_DIRS, ObsWM, column_weight, field_index, gate_pos_weight,  # noqa: E402
+                             event_accuracy, key_event_masks, load_episodes, step_weight)
 
 def fit_scales(eps, obs_dim: int) -> np.ndarray:
     """Per-field std of the NON-ZERO deltas, the MOBA normalisation."""
@@ -85,8 +86,12 @@ def main() -> int:
     # 600 with a 200-epoch half-life is ~60x deeper than it ever rolled, and WM_EXPERIMENT_REGIME.md item 4
     # says not to extend the horizon mixture. Measured here: stage 2 at depth 600 drove H20 skill from
     # -0.05 to -1.28 with the trend at t=-2.43.
-    ap.add_argument("--roll-half-life", type=float, default=10.0)
-    ap.add_argument("--max-roll", type=int, default=10, help="deepest rollout in stage 2 (reference: 10)")
+    # The reference keeps EIGHT WM checkpoints and every multistep one uses rollout_k 10 or 20 with
+    # gamma 0.9 -- none trains over full episodes. The paper's 1,400-tick free-running episodes are the
+    # POLICY's dream horizon, not the WM's training depth; I conflated the two and ran 600. Matching its
+    # LARGEST run, wmbig_k20 (250k sequences, 15 epochs): k=20, gamma 0.9, i.e. half-life 6.6 steps.
+    ap.add_argument("--roll-half-life", type=float, default=6.6)
+    ap.add_argument("--max-roll", type=int, default=20, help="deepest stage-2 rollout (wmbig_k20 used 20)")
     ap.add_argument("--out", default="runs/wm_obs/wm.pt")
     ap.add_argument("--resume", action="store_true")
     # SCALE ACROSS GPU PODS, the way the reference does it (mobawm/fleet_link.py: "used by mobawm.wm.train
@@ -100,6 +105,20 @@ def main() -> int:
     ap.add_argument("--fleet-aggregator", type=int, default=0)
     ap.add_argument("--fleet-launch-id", default="0")
     ap.add_argument("--fleet-sync-every", type=int, default=2)
+    ap.add_argument("--event-every", type=int, default=2, help="per-event accuracy report every N epochs")
+    # THE FOUR EVENTS THAT MATTER: boss damage, Link damage, boss death, Link death (zelda_rl.wm_obs).
+    # Missing one and hallucinating one are both fatal, so both are penalised, heavily and separately.
+    ap.add_argument("--key-weight", type=float, default=20.0,
+                    help="per-COLUMN multiplier on the boss-HP and Link-HP columns, so their error is not "
+                         "averaged away into 1033 fields")
+    ap.add_argument("--key-pos-weight", type=float, default=50.0,
+                    help="gate BCE pos_weight on those columns: the penalty for MISSING an event. Under 1%% "
+                         "of ticks fire, where plain BCE is minimised by a gate that never opens")
+    ap.add_argument("--key-halluc-weight", type=float, default=5.0,
+                    help="multiplier on predicted movement in those columns on ticks where NOTHING "
+                         "happened: the penalty for HALLUCINATING damage")
+    ap.add_argument("--death-weight", type=float, default=50.0,
+                    help="per-TICK weight on a boss-death or Link-death tick (one per episode at most)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -117,12 +136,18 @@ def main() -> int:
 
     if a.fleet_world_size > 1:
         n0 = len(eps)
-        wins = [e for e in eps if e.get("win")]
-        losses = [e for e in eps if not e.get("win")]
-        mine = losses[a.fleet_rank::a.fleet_world_size]
-        eps = wins + mine
-        print(f"shard {a.fleet_rank}/{a.fleet_world_size}: every win ({len(wins)}) + "
-              f"{len(mine)}/{len(losses)} losses -> {len(eps)} of {n0} episodes", flush=True)
+        # stratified: each rank gets its slice of the human wins, the PPO wins and the failures, so the
+        # composition matches the whole corpus and the average recombines every episode across ranks.
+        def klass(e):
+            f = str(e.get("file", "")).lower()
+            return "human" if "human" in f or "ep" == f[:2] else ("win" if e.get("win") else "loss")
+        buckets: dict[str, list] = {}
+        for e in eps:
+            buckets.setdefault(klass(e), []).append(e)
+        eps = [e for k in sorted(buckets) for e in buckets[k][a.fleet_rank::a.fleet_world_size]]
+        got = {k: len(buckets[k][a.fleet_rank::a.fleet_world_size]) for k in sorted(buckets)}
+        print(f"shard {a.fleet_rank}/{a.fleet_world_size} (stratified): {got} -> {len(eps)} of {n0} "
+              f"(~{n0/max(len(eps),1):.1f}x faster epoch)", flush=True)
     rng = np.random.default_rng(0)
     order = rng.permutation(len(eps))
     n_val = max(4, int(a.val_frac * len(eps)))
@@ -159,15 +184,33 @@ def main() -> int:
             msk[b, :n] = 1.0
         return obs.to(dev), act.to(dev), msk.to(dev)
 
+    # per-column and per-firing-decision weights, built ONCE from the field definitions (AGENTS 3)
+    KEY = [c for c in (g_hp, l_hp) if c is not None]
+    col_w = column_weight(obs_dim, KEY, a.key_weight, dev)
+    pos_w = gate_pos_weight(obs_dim, KEY, a.key_pos_weight, dev)
+    halluc_w = column_weight(obs_dim, KEY, a.key_halluc_weight, dev)
+    print(f"key columns {KEY}: column weight x{a.key_weight:g}, miss (gate pos_weight) x{a.key_pos_weight:g}, "
+          f"hallucination x{a.key_halluc_weight:g}, death tick x{a.death_weight:g}", flush=True)
+
     def ev_weight(obs, msk):
-        """Extra weight on KEY EVENT ticks: boss HP or Link HP changing (AGENTS 34)."""
-        w = torch.ones_like(msk)
-        if g_hp is not None and l_hp is not None:
-            dg = (obs[:, 1:, g_hp] - obs[:, :-1, g_hp]).abs() > 1e-6
-            dl = (obs[:, 1:, l_hp] - obs[:, :-1, l_hp]).abs() > 1e-6
-            ev = (dg | dl).float()
-            w[:, :-1] = 1.0 + (a.event_weight - 1.0) * ev
-        return w * msk
+        """Per-tick weight: damage ticks x--event-weight, DEATH ticks x--death-weight (AGENTS 34)."""
+        return step_weight(msk, key_event_masks(obs, g_hp, l_hp), a.event_weight, a.death_weight)
+
+    def field_loss(P, Tg, G, W):
+        """Error on the predicted delta + the gate's firing decision, with the key events weighted.
+
+        `fired` is the ground truth for the gate. Three weights act on the key columns: `col_w` lifts their
+        magnitude error above the other 1029 fields, `pos_w` makes MISSING a firing expensive, and
+        `halluc_w` makes predicted movement on a quiet tick expensive.
+        """
+        fired = (Tg.abs() > 1e-6).float()
+        gate = 0.1 + 0.9 * fired
+        bce = F.binary_cross_entropy_with_logits(G, fired, reduction="none", pos_weight=pos_w)
+        mag = F.smooth_l1_loss(P, Tg, reduction="none")
+        cw = col_w * fired + halluc_w * (1.0 - fired)          # right event, wrong event, both weighted
+        l = ((mag * gate * cw + bce) * W).sum()
+        den = (gate * cw * W).sum().clamp(min=1.0)
+        return l, den
 
     def teacher_forced(obs, act, msk, shuffle_actions=False):
         B, T, _ = obs.shape
@@ -186,14 +229,7 @@ def main() -> int:
                 ws.append(w[:, t])
             P = torch.stack(preds, 1); Tg = torch.stack(tgts, 1); W = torch.stack(ws, 1)[..., None]
             G = torch.stack(gates, 1)
-            # EVENT-GATED: a field's error counts on the ticks where it MOVES, plus a floor so a field
-            # that never moves is still held to predicting no movement
-            fired = (Tg.abs() > 1e-6).float()
-            gate = 0.1 + 0.9 * fired
-            # the GATE learns which fields change; the VALUE head only has to be right where they do
-            bce = F.binary_cross_entropy_with_logits(G, fired, reduction="none")
-            l = ((F.smooth_l1_loss(P, Tg, reduction="none") * gate + bce) * W).sum()
-            den = (gate * W).sum().clamp(min=1.0)
+            l, den = field_loss(P, Tg, G, W)
             loss_num = loss_num + l; loss_den = loss_den + den
             if model.training:
                 (l / den).backward()
@@ -216,12 +252,8 @@ def main() -> int:
             nxt = cur + d * scales
             tgt = (obs[:, j + 1] - cur) / scales                 # drift-correcting
             dec = 0.5 ** (j / a.roll_half_life)
-            fired = (tgt.abs() > 1e-6).float()
-            gate = 0.1 + 0.9 * fired
             ww = (w[:, j][..., None] * dec)
-            bce = F.binary_cross_entropy_with_logits(g, fired, reduction="none")
-            step_l = ((F.smooth_l1_loss(d, tgt, reduction="none") * gate + bce) * ww).sum()
-            step_d = (gate * ww).sum()
+            step_l, step_d = field_loss(d, tgt, g, ww)         # same key-event weighting under rollout
             num = num + step_l
             den = den + step_d
             rep_n += float(step_l.detach()); rep_d += float(step_d.detach())
@@ -238,6 +270,11 @@ def main() -> int:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 100.0)
             opt.step(); opt.zero_grad(set_to_none=True)
         return rep_n / max(rep_d, 1e-9)
+
+    def event_report(pool):
+        """MISSED and HALLUCINATED per key event -- the quantities the key-event penalties pay for."""
+        return event_accuracy(model, scales, pool[:min(32, len(pool))], g_hp, l_hp, dev,
+                              max_steps=400, batch=min(8, len(pool)), obs_dim=obs_dim)
 
     @torch.no_grad()
     def evaluate(pool, horizons=(1, 5, 20, 100)):
@@ -265,6 +302,7 @@ def main() -> int:
         model.train()
         return {h: {k: float(np.mean(v)) if v else float("nan") for k, v in d.items()} for h, d in res.items()}
 
+    hist_sk: list[float] = []
     link = None
     if a.fleet_experiment and a.fleet_world_size > 1:
         try:
@@ -296,9 +334,27 @@ def main() -> int:
             vl = np.mean([teacher_forced(*pad(g)) for g in batches(val, min(8, len(val)))])
             model.train()
         m = evaluate(val)
+        # HEARTBEAT EVERY EPOCH, BEFORE the sync. average_weights finds its peers through
+        # live_peers(), which reads heartbeats -- and the heartbeat used to be sent only AFTER a
+        # successful sync, so at every sync no rank had ever announced itself, the aggregator saw no live
+        # peers, waited ~6 s and averaged ITSELF (sync_ranks=1 on all six ranks, five sixths of the work
+        # overwritten). A rank must announce itself before it asks who else is there.
+        if link is not None:
+            try:
+                link.heartbeat({"epoch": ep, "h20_skill": 1 - m[20]["model"] / max(m[20]["persist"], 1e-9)})
+            except Exception:                                    # noqa: BLE001
+                pass
         if link is not None and ep % a.fleet_sync_every == 0:
             try:
-                sync = link.average_weights(model, ep, aggregator=a.fleet_aggregator)
+                # KEY THE SYNC ON A ROUND, NOT AN EPOCH. average_weights keys its blobs by the
+                # number passed here; with the epoch number, ranks that drift apart (shards differ in
+                # size, so one rank is at 36 while another is at 40) NEVER occupy the same key and each
+                # one averages alone -- measured: sync_ranks 1 on all six, and the followers loading the
+                # aggregator's weights without contributing, i.e. 5/6 of the work discarded. A round
+                # absorbs +-sync_every epochs of drift, and the wait is long enough for a slow rank.
+                _round = ep // max(a.fleet_sync_every, 1)
+                sync = link.average_weights(model, _round, aggregator=a.fleet_aggregator,
+                                            straggler_wait=120.0, timeout=600.0)
                 if sync:
                     print(f"      fleet sync @epoch {ep}: {sync}", flush=True)
                 _h20 = m[20]
@@ -317,12 +373,37 @@ def main() -> int:
               f"{h20['model']:.2f}/{h20['persist']:.2f}/{h20['shuf']:.2f}   "
               f"{h100['model']:.2f}/{h100['persist']:.2f}/{h100['shuf']:.2f}"
               f"   {time.time() - t0:.0f}s", flush=True)
+        # ONE LINE PER QUESTION, every epoch, in words.
+        def verdict(h, label):
+            sk = 1 - h["model"] / max(h["persist"], 1e-9)
+            return f"{label} {'BEATS' if sk > 0.02 else 'LOSES TO' if sk < -0.02 else 'ties'} persistence ({sk:+.3f})"
+        print(f"      Q1 better than doing nothing?  {verdict(h1,'H1')} | {verdict(h20,'H20')} | "
+              f"{verdict(h100,'H100')}", flush=True)
+        hist_sk.append(1 - h20["model"] / max(h20["persist"], 1e-9))
+        if len(hist_sk) >= 3:
+            y = np.array(hist_sk); x = np.arange(len(y), dtype=float)
+            A = np.vstack([x, np.ones_like(x)]).T
+            b_, *_ = np.linalg.lstsq(A, y, rcond=None)
+            r_ = y - A @ b_
+            se_ = float(np.sqrt((r_ @ r_ / max(len(x) - 2, 1)) * np.linalg.inv(A.T @ A)[0, 0]))
+            tt = b_[0] / se_ if se_ > 0 else float("nan")
+            print(f"      Q2 getting better?            H20 skill {b_[0]:+.4f} +- {se_:.4f}/epoch "
+                  f"t={tt:+.2f} -> {'IMPROVING' if tt > 2 else 'GETTING WORSE' if tt < -2 else 'FLAT'} "
+                  f"over {len(y)} epochs", flush=True)
+        if ep % max(1, a.event_every) == 0:
+            for k_, v_ in event_report(val).items():
+                if not v_["n_events"]:
+                    continue
+                print(f"      Q3 {k_:<12} {v_['n_events']:>4} events | MISSED {100*v_['missed']:5.1f}% | "
+                      f"HALLUCINATED {v_['halluc_per_1k_quiet']:5.1f}/1k quiet ticks | "
+                      f"precision {v_['precision']:.3f} | drift {v_['phantom_drift_per_tick']:.1e} | "
+                      f"magnitude skill {v_['event_skill']:+.3f} -> "
+                      f"{'PREDICTS' if v_['recall'] > 0.1 and v_['precision'] > 0.1 else 'MISSES ALL' if v_['recall'] < 0.1 else 'FIRES WILDLY'}",
+                      flush=True)
         # THE VERDICT, every epoch, so a model that has learned nothing cannot hide behind a falling loss
-        sk = 1 - h20["model"] / max(h20["persist"], 1e-9)
         ab = h20["shuf"] / max(h20["model"], 1e-9)
-        print(f"      H20 skill vs persistence {sk:+.3f} | shuffled-action penalty x{ab:.2f} "
-              f"({'ACTION-CONDITIONED' if ab > 1.1 else 'NOT action-conditioned -- the action is decoration'})",
-              flush=True)
+        print(f"      Q4 is the ACTION used?         shuffled-action penalty x{ab:.2f} -> "
+              f"{'ACTION-CONDITIONED' if ab > 1.1 else 'NO -- the action is decoration'}", flush=True)
     print(f"\nsaved {out}", flush=True)
     return 0
 

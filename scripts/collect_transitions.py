@@ -249,7 +249,7 @@ def main():
     if bad := [k for k, n in found.items() if n == 0]:
         raise SystemExit(f"slots {bad} in {args.slots_dir} have no live {tgt_label} -> wrong savestates "
                          f"for --profile {args.profile}.\n  per-slot {tgt_label}: {found}")
-    out = Path(args.out or f"datasets/transitions/deku-baba/{time.strftime('%Y%m%d-%H%M%S')}")
+    out = Path(args.out or f"datasets/transitions/{args.profile}/{time.strftime('%Y%m%d-%H%M%S')}")
     (out / "episodes").mkdir(parents=True, exist_ok=True)
 
     ck_paths = [resolve_checkpoint(p) for p, _, _ in quota]
@@ -262,7 +262,7 @@ def main():
     goal = f"{args.transitions:,} transitions (<={total} fights)" if args.transitions else f"{total} fights"
     print(f"▶ collecting {goal} from {len(quota)} checkpoints | {args.workers} headless envs | "
           f"state {STATE_DIM}d (link {LINK_DIM} + {MAX_ENEMIES}x{ENEMY_DIM}) | obs {cfg['obs_dim']}d | -> {out}\n"
-          f"  slots {args.slots_dir}: babas per slot {babas}")
+          f"  slots {args.slots_dir}: live {tgt_label} per slot {found}")
     for (p, g, n), (_, c, ck) in zip(quota, models):
         print(f"    G{g:<4} u{ck.get('update', 0):<4} {n:>3} eps  {Path(p).name}")
 

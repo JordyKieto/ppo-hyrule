@@ -85,6 +85,43 @@ def _state_load(data: bytes):
     return torch.load(io.BytesIO(data), weights_only=False, map_location="cpu")
 
 
+def _cpu_state(sd: dict) -> dict:
+    """A CPU copy of a state dict. Everything that leaves a rank or gets reduced is CPU-side.
+
+    The GPU WM fleet averaged NOTHING for its whole run because this was missing in three places: the
+    weight hash called `.numpy()` on cuda tensors, the aggregator summed cuda tensors against CPU blobs,
+    and `.double()` is unsupported on mps. The trainer caught the exception and printed "fleet sync FAILED
+    ... training alone" once per round, so four pods trained four independent quarter-data models while the
+    launch log said "averaging every 2 epoch(s)".
+    """
+    return {k: (v.detach().cpu() if hasattr(v, "detach") else v) for k, v in sd.items()}
+
+
+def average_states(states: list[dict]) -> dict:
+    """Mean of state dicts, on CPU, in float64, in the caller's given order -> bit-identical on every rank."""
+    import torch
+    with torch.no_grad():
+        ref = _cpu_state(states[0])
+        cpu = [_cpu_state(st) for st in states]
+        return {k: (sum(st[k].double() for st in cpu) / len(cpu)).to(ref[k].dtype) for k in ref}
+
+
+def weight_hash(sd: dict) -> str:
+    """Device-independent fingerprint: the same weights hash the same from cpu, cuda or mps."""
+    return hashlib.sha256(b"".join(v.detach().cpu().numpy().tobytes()
+                                   for v in sd.values())).hexdigest()[:12]
+
+
+def pick_aggregator(configured: int, live: set[int], self_rank: int) -> int:
+    """The configured aggregator if it is alive, else the lowest live rank promotes itself.
+
+    Rank 0 of the WM fleet died at launch and never wrote a log line. Every other rank then waited the full
+    600 s follower timeout on every sync round -- 616 s epochs against 15 s normally -- for an average that
+    could never be published. A dead aggregator must cost one round, not the run."""
+    roster = set(live) | {self_rank}
+    return configured if configured in roster else min(roster)
+
+
 class FleetLink:
     """Used by train_ppo.py on each pod (rank) of an experiment."""
 
@@ -164,10 +201,12 @@ class FleetLink:
         root = f"zrl:{self.exp}:sync:{self.launch}"
         base = f"{root}:u{update}"
         t0 = time.time()
-        local = model.state_dict()
+        local = _cpu_state(model.state_dict())
         self.u.put_blob(f"{base}:r{self.rank}", _state_bytes(local), ttl=SYNC_TTL)
+        live0 = self.live_peers()
+        aggregator = pick_aggregator(aggregator, live0, self.rank)
         if self.rank == aggregator:
-            live = self.live_peers()
+            live = live0
             expected = live if (live or update > 2) else {r for r in range(self.world) if r != self.rank}
             peers = {self.rank: local}
             wait = straggler_wait if update > 2 else max(straggler_wait, 120.0)
@@ -179,8 +218,7 @@ class FleetLink:
                 if not expected <= set(peers):
                     time.sleep(1.0)
             states = [peers[r] for r in sorted(peers)]
-            with torch.no_grad():
-                avg = {k: (sum(st[k].double() for st in states) / len(states)).to(local[k].dtype) for k in local}
+            avg = average_states(states)
             self.u.put_blob(f"{base}:avg", _state_bytes({"state": avg, "ranks": sorted(peers), "update": update}), ttl=SYNC_TTL)
             self.u.cmd("SET", f"{root}:latest", str(update), "EX", SYNC_TTL)
             model.load_state_dict(avg)
@@ -190,7 +228,9 @@ class FleetLink:
                 self._submit(self._cleanup, [f"{root}:u{old}:avg"] + [f"{root}:u{old}:r{r}" for r in range(self.world)])
         else:
             payload, src = None, None
-            while time.time() - t0 < timeout and payload is None:
+            # a follower never waits the full timeout on an aggregator that is not alive (see pick_aggregator)
+            deadline = timeout if aggregator in live0 or update <= 2 else min(timeout, straggler_wait + 30.0)
+            while time.time() - t0 < deadline and payload is None:
                 blob = self.u.get_blob(f"{base}:avg")
                 if blob is not None:
                     payload, src = _state_load(blob), update
@@ -207,8 +247,9 @@ class FleetLink:
             else:
                 model.load_state_dict(payload["state"])
                 n, got = len(payload["ranks"]), payload["ranks"]
-        h = hashlib.sha256(b"".join(v.numpy().tobytes() for v in model.state_dict().values())).hexdigest()[:12]
+        h = weight_hash(model.state_dict())
         return {"sync_ranks": n, "sync_wait_s": time.time() - t0, "weight_hash": h,
+                "aggregator": aggregator,
                 "sync_included_self": self.rank in got, "sync_from_update": src if src is not None else -1}
 
     def _cleanup(self, keys: list[str]) -> None:

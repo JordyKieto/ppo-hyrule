@@ -40,10 +40,17 @@ def defects(path: Path) -> list[str]:
     if not main:
         bad.append("has no `if __name__ == \"__main__\":` block, so it runs nothing when executed")
     else:
-        called = ast.unparse(main[0])
+        # a test counts as reached if its name is REFERENCED anywhere outside its OWN definition: called
+        # from __main__, called from main(), or passed as a function object to a runner loop. Scanning only
+        # the __main__ block's text reported test_rvs_memguard.py as a failure while it was passing.
         for t in tests:
-            if f"{t}(" not in called:
-                bad.append(f"{t}() is defined but never called from __main__")
+            refs: set[str] = set()
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and node.name == t:
+                    continue
+                refs |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            if t not in refs:
+                bad.append(f"{t}() is defined but nothing references it -- it would never run")
     return bad
 
 

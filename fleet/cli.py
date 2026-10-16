@@ -741,6 +741,16 @@ def cmd_collected(a) -> None:
 PREFLIGHT = {
     # name -> (shell test printing 1/0, what a 0 means)
     "dolphin":   (f"test -x {R_DOLPHIN_BIN} && echo 1 || echo 0", "Dolphin binary missing (bootstrap incomplete)"),
+    # EXISTING is not RUNNABLE (AGENTS 16). The prebuilt tarball in S3 is linked against GLIBC 2.38,
+    # GLIBCXX 3.4.32 and Qt 6.4; on an older image the binary is present, executable, and dies instantly
+    # with "version `GLIBC_2.38' not found". The eval then reports "N64 RAM not found ... Permission
+    # denied: /proc/<pid>/fd", because the pid it is reading is already a zombie -- which cost this project
+    # a day of chasing ptrace permissions on the GPU pods while `test -x` reported dolphin OK.
+    "dolphin_abi": (f"ldd {R_DOLPHIN_BIN} 2>&1 | grep -q 'not found' && echo 0 || echo 1",
+                    "Dolphin is present but CANNOT LOAD its libraries on this image (GLIBC/GLIBCXX/Qt "
+                    "mismatch). No Dolphin can boot here: no collection, no eval. Either run this job on a "
+                    "pod whose image matches the build, or rebuild in place with "
+                    "scripts/pod_build_dolphin.sh. Run `ldd` on the binary to see which version is missing"),
     "torch":     (f"{R_VENV}/bin/python -c 'import torch' 2>/dev/null && echo 1 || echo 0", "venv has no torch"),
     "boto3":     (f"{R_VENV}/bin/python -c 'import boto3' 2>/dev/null && echo 1 || echo 0",
                   "no boto3: the collector CANNOT upload to S3 and pod-local storage becomes the only copy"),

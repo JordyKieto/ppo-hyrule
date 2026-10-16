@@ -254,12 +254,24 @@ def main() -> int:
         # the one thing that matters. Every rank keeps every win and 1/N of the failures.
         if a.fleet_world_size > 1:
             n_before = len(eps)
-            losses = [e for e in eps if not e["win"]]
-            kept_losses = losses[a.fleet_rank::a.fleet_world_size]
-            eps = [e for e in eps if e["win"]] + kept_losses
-            print(f"  shard {a.fleet_rank}/{a.fleet_world_size}: kept every win + "
-                  f"{len(kept_losses)}/{len(losses)} losses -> {len(eps)} of {n_before} episodes "
-                  f"(epoch is ~{a.fleet_world_size}x faster; the average recombines them)", flush=True)
+            # STRATIFIED sharding: every CLASS is split round-robin, so each rank holds the same
+            # COMPOSITION as the whole corpus -- its own slice of the human wins, of the PPO wins and of
+            # the failures. Anchoring is preserved by composition, not by duplication: the win multiplier
+            # is re-solved per rank, so human play carries the same share of each rank's gradient, and the
+            # weight average recombines all 100 human wins every round. Keeping them whole on every rank
+            # capped the speedup at ~2x for no statistical benefit; this is the full ~Nx.
+            def klass(e):
+                src = (str(e.get("src", "")) + " " + str(e.get("file", ""))).lower()
+                return "human" if "human" in src else ("win" if e["win"] else "loss")
+            buckets: dict[str, list] = {}
+            for e in eps:
+                buckets.setdefault(klass(e), []).append(e)
+            eps = [e for k in sorted(buckets)
+                   for e in buckets[k][a.fleet_rank::a.fleet_world_size]]
+            got = {k: len(buckets[k][a.fleet_rank::a.fleet_world_size]) for k in sorted(buckets)}
+            print(f"  shard {a.fleet_rank}/{a.fleet_world_size} (stratified): {got} -> {len(eps)} of "
+                  f"{n_before} episodes (~{n_before/max(len(eps),1):.1f}x faster epoch; every class keeps "
+                  f"its proportion and the average recombines all ranks)", flush=True)
         wins = [e for e in eps if e["win"]]
         lim_ = _mem_limit()
         print(f"corpus holds {getattr(load_all, 'gib', 0):.1f} GiB in RAM"
@@ -408,9 +420,27 @@ def main() -> int:
         # -- and a restart then began from a random init. An interruption must never cost more than one
         # epoch (AGENTS 39).
         save_ckpt(Path(str(a.out) + ".last.pt"), ep_i, score)
+        # HEARTBEAT EVERY EPOCH, BEFORE the sync. average_weights finds its peers through
+        # live_peers(), which reads heartbeats -- and the heartbeat used to be sent only AFTER a
+        # successful sync, so at every sync no rank had ever announced itself, the aggregator saw no live
+        # peers, waited ~6 s and averaged ITSELF (sync_ranks=1 on all six ranks, five sixths of the work
+        # overwritten). A rank must announce itself before it asks who else is there.
+        if link is not None:
+            try:
+                link.heartbeat({"epoch": ep_i, "val_win_acc": float(score)})
+            except Exception:                                    # noqa: BLE001
+                pass
         if link is not None and ep_i % a.fleet_sync_every == 0:
             try:
-                sync = link.average_weights(model, ep_i, aggregator=a.fleet_aggregator)
+                # KEY THE SYNC ON A ROUND, NOT AN EPOCH. average_weights keys its blobs by the
+                # number passed here; with the epoch number, ranks that drift apart (shards differ in
+                # size, so one rank is at 36 while another is at 40) NEVER occupy the same key and each
+                # one averages alone -- measured: sync_ranks 1 on all six, and the followers loading the
+                # aggregator's weights without contributing, i.e. 5/6 of the work discarded. A round
+                # absorbs +-sync_every epochs of drift, and the wait is long enough for a slow rank.
+                _round = ep_i // max(a.fleet_sync_every, 1)
+                sync = link.average_weights(model, _round, aggregator=a.fleet_aggregator,
+                                            straggler_wait=120.0, timeout=600.0)
                 if sync:
                     print(f"  fleet sync @epoch {ep_i}: {sync}", flush=True)
             except Exception as e:                               # noqa: BLE001

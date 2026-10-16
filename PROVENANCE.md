@@ -1637,3 +1637,38 @@ Close these before any of them enters a paper.
 .venv/bin/python scripts/export_wandb.py --history      # results/<run_id>/ for all 23 groups
 .venv/bin/python scripts/make_samples.py               # samples/ excerpts + artifacts/MANIFEST.json
 ```
+
+---
+
+## 7. Session 2026-10-16 (afternoon): v15's kill rate, the RvS null, and the WM's first clear readout
+
+### RL track
+
+| row | claim | class | artefact |
+|---|---|---|---|
+| R98 | **v15 (best PPO) kills on 6/120 = 5.00% of held-out episodes on slots 3–8** (95% CI [2.31, 10.48]); mix-invariant `kills_balanced` 5.00%, `damage_balanced` 2.88 | **M** | `results/v15_slots38/{r0,r1}.jsonl` (120 rows), `summary.json`; W&B `v15_slots38` runs `hqsbkscu`, `ebb8o843`; pods `gohma-eval` r0/r1 |
+| R99 | v15's kills are concentrated: slot 7 20%, slot 5 10%, **slots 3, 4, 6, 8 all 0/20** — the pooled 5% is two starts, as in §29 | **M** | same |
+| R100 | **The consolidated offline RvS run is NOT separable from v15 at killing**: 149/3118 = 4.78% vs 6/120 = 5.00%, z=+0.11 | **M** | `scripts/arm_defeats.py`, `results/v15_slots38/summary.json` |
+| R101 | More RvS epochs buy no kills: within-arm early(≤40ep) vs late(>40ep) is flat on **all six ranks** (z from −0.67 to +0.95, none significant) | **M** | `scripts/arm_defeats.py` output, this session |
+| R102 | RvS consolidated beats the 40-epoch arms (z=+2.53) and the BC clones (0/400, z=+4.47), and is not separable from 160-epoch, 400-epoch or `rvs_M5` | **M** | same |
+| R103 | RvS artefacts saved off-pod before repurposing: 6 pods × (ckpt + eval rows + logs) **verified in S3 by re-HEAD** under `zelda/save/rvs_consolidated/*`, 23.9–26.8 MB each | **M** | `scripts/pod_save_artifacts.py`, `runs/save_manifest.json` per pod |
+| R104 | 31,654 episodes / 15.8 GB of Gohma trajectories are in S3 under `zelda/ppo/gohma_steps2/`, `gohma_steps/`, `human/gohma/` | **M** | S3 listing, this session |
+
+### WM track
+
+| row | claim | class | artefact |
+|---|---|---|---|
+| W40 | At epoch 7 the obs-space WM **loses to persistence at every horizon** on 32 held-out episodes: skill −0.029 (H1), −0.070 (H5), −0.156 (H20), **−0.733 (H100)** | **M** | `scripts/wm_status.py --json runs/wm_obs/status_r1.json` on pod `gohma-wm` r1 |
+| W41 | The action is still **decoration**: shuffled-action penalty ×1.00 at H20 | **M** | same |
+| W42 | **The gate never fires**: precision 0.000 / recall 0.000 / F1 0.000 at threshold 0.5 on both HP columns, over 15,567 held-out ticks (48 boss-damage, 120 Link-damage events) | **M** | same |
+| W43 | **But the gate ORDERS events correctly**: boss-HP ROC-AUC **0.884** (p 0.0326 on event ticks vs 0.0156 off), Link-HP AUC 0.679. The information is present and the 0.5 threshold is unreachable under plain BCE at a 0.31% event rate | **M** | same |
+| W44 | Conditional magnitude is already better than persistence on the ticks that fire: boss-HP MAE 0.066 vs 0.125 (**event-skill +0.47**), Link-HP 0.134 vs 0.175 (+0.23) | **M** | same |
+| W45 | **RETRACTION.** The 4×H100 WM run was reported as a distributed sharded fleet. It averaged nothing on any round (cuda→numpy in `weight_hash`, cuda-vs-CPU reduction in the aggregator) and rank 0, the aggregator, was dead from launch, so every follower burned its 600 s timeout per round (616 s sync epochs vs 15 s). It was **four independent quarter-corpus models**. Fixed and tested in `tests/test_fleet_sync_device.py`; see AGENTS §42 | **M** | pod logs `logs/wm_r{1,2,3}.log`, `zelda_rl/fleet_link.py` |
+| W46 | Dolphin cannot run on the GPU pods at all: the prebuilt binary needs GLIBC 2.38 / GLIBCXX 3.4.32 / Qt 6.4 and `ldd` reports 5 missing versions there, 0 on the CPU pods. This, not ptrace, is why three v15 eval attempts produced zero episodes; `fleet preflight` now tests it (`dolphin_abi`). See AGENTS §41 | **M** | `ldd` on both pod classes, this session |
+
+### What is running at the end of this session
+
+| what | where | config | first numbers |
+|---|---|---|---|
+| WM, key-event penalties | `gohma-wm` r0–r3 (4×H100) | resumed from epoch 7 (`wm_e7_preKeyEvents.pt`), `--key-weight 20 --key-pos-weight 50 --key-halluc-weight 5 --death-weight 50 --event-every 1`, sync fixed | pending |
+| Full Dyna loop | `gohma-la` r0/r1/r2/r8, `gohma-rvs` r0/r1 (6×16-vCPU) | `dyna_loop.py --anchor gohma-kl-v15-r4_latest.pt --iters 12 --episodes-collect 60 --workers 8 --wm-epochs 2 --dream-transitions 200000 --eval-episodes 20 --slots 3,4,5,6,7,8`; 20 eval episodes × 6 pods = 120 per iteration (the n §30 demands) | collecting at 32–222 steps/s |

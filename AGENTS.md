@@ -877,3 +877,75 @@ and I still set 600 — because its narrative described a mixture reaching H=180
    pods then cost 6× the compute for ~1× the speed. Throughput needs the DATA sharded — and the scarce
    class (here the 100 human wins) stays whole on every rank, because sharding the anchor dilutes the only
    thing that drives the metric.
+
+## 41. "Installed" is not "runnable": check the binary LOADS, on the pod it will run on
+
+**The incident.** The v15 defeat-rate measurement — the single number that answers "does our offline policy
+beat our best PPO at killing her" — was dispatched to the GPU pods three times and produced **zero
+episodes**, over roughly a day of elapsed time. The error it printed was:
+
+```
+TimeoutError: N64 RAM not found in Dolphin pid 14610 after 60s
+  (shm: [Errno 13] Permission denied: '/proc/14610/fd'; vm_readv: no mapping with MEM1/N64 signatures yet)
+```
+
+So I investigated ptrace: `ptrace_scope`, `CapEff` on the GPU pod against the CPU pod, uid, `/proc` mount
+flags. All of it was a dead end — reading `/proc/<pid>/fd` works fine on those pods. The pid was a **zombie**
+by the time the reader looked, and `/proc/<zombie>/fd` is exactly what EPERM looks like. The actual cause,
+visible in one command:
+
+```
+$ ldd /workspace/dolphin/install/bin/dolphin-emu | grep 'not found'
+  libstdc++.so.6: version `GLIBCXX_3.4.32' not found
+  libm.so.6: version `GLIBC_2.38' not found
+  libQt6Core.so.6: version `Qt_6.4' not found        # 5 lines on the GPU pods, 0 on the CPU pods
+```
+
+The prebuilt Dolphin tarball in S3 was built on a newer image than the GPU pods run. The binary is present
+and executable, so `fleet preflight`'s `test -x` reported **dolphin OK** on a pod where no Dolphin can ever
+boot.
+
+**The rules.**
+
+1. **A presence test is not a capability test.** `test -x`, `which`, "the file is 40 MB" — none of them say
+   the thing runs. `fleet preflight` now has `dolphin_abi` (`ldd … | grep 'not found'`) and says what a
+   failure means: no collection and no eval on this pod, run it elsewhere or rebuild in place.
+2. **Read the error's LAST clause first.** "no mapping with MEM1/N64 signatures yet" means the game never
+   booted. The permission error was downstream of a dead process, and it was the one I chased because it
+   named a mechanism I could theorise about.
+3. **When one machine works and another does not, diff the machines before theorising.** `ldd` on both pods
+   is ten seconds and would have ended this on the first attempt; comparing capability masks felt more
+   expert and answered nothing.
+4. Binaries are per-image artefacts. A prebuilt tarball needs the image it was built on recorded beside it.
+
+## 42. A distributed run that reports "sync FAILED … training alone" once per round is NOT a distributed run
+
+**The incident.** Four H100 pods were launched as one sharded world model, `--fleet-world-size 4
+--fleet-sync-every 2`. Each rank printed `fleet sync: gohma-wm-fleet rank N/4, averaging every 2 epoch(s)`
+at startup and the fleet was reported — by me, to the user — as a distributed WM training run. It averaged
+**nothing, in every round, for the entire run**. Two causes, both GPU-only:
+
+- `weight_hash` called `.numpy()` on cuda tensors, and the aggregator reduced cuda tensors against CPU-loaded
+  peer blobs: `can't convert cuda:0 device type tensor to numpy`. The whole `average_weights` call sat inside
+  the trainer's `try/except`, which downgraded it to one line per round: `fleet sync FAILED @epoch 2 …
+  training alone`.
+- Rank 0 — the configured aggregator — **died at launch and never wrote a log line**, so every follower also
+  waited its full 600 s follower timeout per round. Visible in the epoch times: **616 s on sync epochs, 15 s
+  otherwise**, which I had read as "the sync is slow".
+
+The cost is not just the waiting: four pods each trained on a **quarter** of the corpus and never saw the
+other three quarters, which is strictly worse than one pod on the whole corpus, at 4× the price.
+
+**The rules.**
+
+1. **Distributed code must be tested on the DEVICE it will run on.** CPU tests passed on all of it. mps
+   reproduces both failures locally with the same message (`tests/test_fleet_sync_device.py`), so there is no
+   excuse for shipping a cuda-only path untested.
+2. **A caught exception in a per-round collective is a FAILED RUN, not a warning.** It must either abort or
+   be counted and surfaced: `sync_ranks` is already returned — `sync_ranks: 1` on every round of a 4-rank
+   fleet is the alarm, and nothing was reading it.
+3. **Elect around a dead aggregator.** `pick_aggregator` promotes the lowest live rank when the configured
+   one is not in `live_peers()`, and a follower whose aggregator is not alive stops waiting after
+   `straggler_wait + 30 s` instead of 600 s.
+4. **An unexplained change in epoch time is a measurement, not an annoyance.** 616 s against 15 s was the
+   whole bug, printed every round, in a column I was already reading.

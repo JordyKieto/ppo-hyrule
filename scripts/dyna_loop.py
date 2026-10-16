@@ -191,7 +191,8 @@ def main() -> int:
                      "--num-envs", str(a.workers), "--slots-dir", "assets/states",
                      "--video-backend", "Null", "--per-episode-out", str(per_ep),
                      "--out", str(run / f"{tag}_eval.json"), "--fleet-world-size", "1",
-                     "--run-name", f"{a.run}_{tag}_eval", "--no-wandb"], run / f"{tag}_evalreal.log")
+                     "--run-name", f"{a.run}_{tag}_eval",
+                 "--wandb-project", "zelda-rl-dyna", "--wandb-group", f"{a.run}_eval"], run / f"{tag}_evalreal.log")
             cand_score = read_eval(per_ep)
             if rc != 0 or cand_score is None:
                 raise SystemExit(f"{tag}: real eval failed rc={rc}; see {run / f'{tag}_evalreal.log'}")

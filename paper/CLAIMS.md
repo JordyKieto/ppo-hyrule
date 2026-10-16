@@ -131,3 +131,14 @@ could not be defended six months later. Fill a row when the measurement happens,
 | any architecture comparison | matched epochs AND matched data subset; two of this session's contradictions were subset effects |
 | any action-conditioning number | must be scored at lag ≥ 2 on the action-sensitive subset, not on all states |
 | any arm ranked by online eval | the POOLED mean over every eval with its SE, and a gap wider than the combined SE. A single 24-episode eval swings ±0.75 (R73) |
+
+## Session 2026-10-16 (afternoon)
+
+| Claim | Class | Artefact | Note |
+|---|---|---|---|
+| v15 (best PPO) defeats Gohma on 5.00% of held-out episodes (6/120, slots 3–8) | **M** | `results/v15_slots38/` | first measurement of this number; CI [2.31, 10.48] |
+| Offline RvS matches the best PPO at killing (4.78% vs 5.00%, z=+0.11) | **M** | `results/v15_slots38/summary.json` | not separable, NOT "equal" |
+| RvS training length does not improve kills (flat within-arm on 6/6 ranks) | **M** | `scripts/arm_defeats.py` | run stopped on this basis |
+| The obs-space WM loses to persistence at every horizon at epoch 7 | **M** | `runs/wm_obs/status_r1.json` | skill −0.029 → −0.733 |
+| The WM's change gate ranks damage events well (AUC 0.884) but never fires at 0.5 | **M** | same | motivates the key-event penalties |
+| The 4×H100 WM run was four independent models, not a sharded fleet | **M** | pod logs + `tests/test_fleet_sync_device.py` | retraction of an earlier claim |
