@@ -40,6 +40,9 @@ from fleet.cli import R_REPO, STATE_DIR, for_pods, load_state, run   # noqa: E40
 
 # `upd  steps(with commas)  eps  succ%  dmgB  dmgH` -- boss damage leads the trainer's line (AGENTS.md 34)
 ROW = re.compile(r"INFO\s+(\d+)\s+([\d,]+)\s+(\d+)\s+([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s")
+# scripts/train_rvs.py is a PURE-RvS arm: it has no PPO updates, it evaluates itself online every few
+# epochs. Same headline (balanced boss damage), different x-axis, so the slope is per EPOCH there.
+EVAL = re.compile(r"EVAL epoch (\d+): dmgB\(balanced\) ([\d.]+)")
 NAME = re.compile(r"[a-z0-9]+_c[0-9.]+_w[0-9.]+_d[01]|[a-z0-9]+[0-9]*-r[0-9]+")
 
 
@@ -92,18 +95,28 @@ def main() -> int:
     def grab(pod):
         body = run(pod, f"for f in {R_REPO}/logs/*.log; do tail -{a.tail} \"$f\" 2>/dev/null; done",
                    capture=True, check=False, timeout=300)
-        label = run(pod, f"grep -hoE '{NAME.pattern}' {R_REPO}/logs/*.log 2>/dev/null | tail -1",
-                    capture=True, check=False, timeout=200).strip()
+        # The arm's identity is its LOG FILE, not a pattern grepped out of the log: the first version
+        # matched `v15-r4` out of the --init-from path and labelled every latent-alignment arm after the
+        # checkpoint it started from. One log per arm is how every launcher here writes it.
+        label = run(pod, f"ls -t {R_REPO}/logs/*.log 2>/dev/null | head -1 | xargs -r basename",
+                    capture=True, check=False, timeout=200).strip().removesuffix(".log")
         return pod["_exp"], pod["rank"], label, body
 
     arms = []
     for exp, rank, label, body in for_pods(jobs, grab, workers=max(8, len(jobs))):
         seen: dict[int, float] = {}
+        unit = "upd"
         for line in body.splitlines():
             m = ROW.search(line)
             if m:
                 seen[int(m.group(1))] = float(m.group(5))
-        arms.append({"exp": exp, "rank": rank, "name": label or "?", "u": seen})
+        if not seen:                                  # a pure-RvS arm reports online evals, not updates
+            for line in body.splitlines():
+                m = EVAL.search(line)
+                if m:
+                    seen[int(m.group(1))] = float(m.group(2))
+                    unit = "epoch"
+        arms.append({"exp": exp, "rank": rank, "name": label or "?", "u": seen, "unit": unit})
 
     print(f"{'arm':24} {'pod':12} {'n':>3} {'dmgB':>6} {'slope':>9} {'SE':>7} {'t':>6}")
     for arm in sorted(arms, key=lambda x: x["name"]):
@@ -115,7 +128,7 @@ def main() -> int:
         sl, se = fit(u, d)
         t = sl / se if se == se and se > 0 else float("nan")
         print(f"{arm['name']:24} {arm['exp'][-4:]+' r'+str(arm['rank']):12} {len(u):3d} "
-              f"{d[-1]:6.2f} {sl:9.4f} {se:7.4f} {t:6.2f}")
+              f"{d[-1]:6.2f} {sl:9.4f} {se:7.4f} {t:6.2f}  /{arm['unit']}")
 
     ctrl = [x for x in arms if a.control in x["name"] and x["u"]]
     rest = [x for x in arms if a.control not in x["name"] and x["u"]]

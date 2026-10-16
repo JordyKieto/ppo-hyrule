@@ -369,11 +369,25 @@ def main():
     anchor = None
     bc = bc_teacher = peer = peer_opt = latent_proj = None
     opt_extra = []
-    if args.bc_data and (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0
-                         or args.align_coef > 0):
+    # Aligning on ROLLOUT states needs NO demonstrations: the rollout branch in zelda_rl/ppo.py reads the
+    # policy's own obs and sits OUTSIDE the `bc is not None` gate. Demanding --bc-data for it killed all
+    # nine gohma-la arms 15 s after launch, with a message that read backwards (AGENTS 36).
+    _terms = (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0
+              or args.align_coef > 0)
+    _demo_needed = (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.align_coef > 0
+                    or (args.bc_latent_coef > 0 and args.bc_latent_states == "demo"))
+    if _demo_needed and not args.bc_data:
+        raise SystemExit("--bc-coef / --bc-adaptive-frac / --align-coef, and --bc-latent-coef with "
+                         "--bc-latent-states demo, all read demonstrations: pass --bc-data. "
+                         "--bc-latent-states rollout does NOT need it.")
+    if args.bc_data and not _terms:
+        raise SystemExit("--bc-data is read by nothing: set one of --bc-coef / --bc-adaptive-frac / "
+                         "--bc-latent-coef / --align-coef > 0")
+    if _terms:
         from zelda_rl.bc_demos import coef_at, describe, load_bc_chunks
-        bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions,
-                            qfilter_steps=args.bc_qfilter)
+        if args.bc_data:
+            bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions,
+                                qfilter_steps=args.bc_qfilter)
         if args.bc_latent_coef > 0:
             if not args.bc_teacher:
                 raise SystemExit("--bc-latent-coef needs --bc-teacher (the frozen policy to align to)")
@@ -411,13 +425,14 @@ def main():
         if args.bc_adaptive_frac > 0:
             LOGGER.info("ADAPTIVE BC weight: holding the BC term at %.3f of |policy loss| (--bc-coef ignored)",
                         args.bc_adaptive_frac)
-        if args.bc_coef_final is not None:
+        if bc is not None and args.bc_coef_final is not None:
             LOGGER.info("BC regulariser %s: coef %.3f -> %.3f over %d updates, then held (long tail): %s",
                         args.bc_data, args.bc_coef, args.bc_coef_final, args.bc_coef_updates, describe(bc))
-        else:
+        elif bc is not None:
             LOGGER.info("BC regulariser %s (coef %.3f, constant): %s", args.bc_data, args.bc_coef, describe(bc))
-    elif args.bc_data or args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0:
-        raise SystemExit("--bc-data needs one of --bc-coef / --bc-adaptive-frac / --bc-latent-coef > 0")
+        elif args.bc_latent_coef > 0:
+            LOGGER.info("no --bc-data: the ONLY demonstration-derived term is the latent alignment, on the "
+                        "policy's own rollout states")
 
     rvs = rvs_idx = None
     if args.rvs_data:
