@@ -114,6 +114,16 @@ proposal was enabled from update 1.
 below a threshold or for the first N updates, so the head is fitted on the policy's own actions first. Until
 then any IBRL number from this repo is a measurement of a random gate, and claim R49 says so.
 
+## THE FLEET WAS LOST AT ~20:14 AND NO ARM'S CHECKPOINTS SURVIVE
+
+All 34 pods disappeared at once -- `fleet list` $0.00/hr, RunPod's API 0 pods. `fleet sync` had never been run
+on any of the day's arms, so **no weights from any of the fifteen arms exist**, along with the eval pod's
+per-episode rows and every per-rank log. W&B histories were exported afterwards and are the only record; that
+export needed a fix first, because `zelda-rl-goal-ppo` -- where `fleet launch` sends combat runs -- was missing
+from `scripts/export_wandb.py`'s project list.
+
+**Run `fleet sync` whenever you read a number worth keeping.** Not at the end of a session.
+
 ## RETRACTION: the decay-vs-constant comparison was first read on an unmatched window
 
 `python -m fleet ppo` prints only the **last 8** fleet-mean rows unless `--last N` is passed. The first

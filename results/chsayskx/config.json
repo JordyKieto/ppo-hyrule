@@ -1,0 +1,7 @@
+{
+  "envs": 8,
+  "rank": 1,
+  "slots": "1,2,9,10",
+  "watch": "runs/gohma-kl-v14-r0/checkpoints",
+  "episodes": 40
+}

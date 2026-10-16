@@ -1,0 +1,24 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/vc48mqx8",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/vc48mqx8",
+  "name": "gohma-bc3-lat-r8",
+  "group": "gohma-bc3-lat",
+  "state": "crashed",
+  "created_at": "2026-10-16T02:09:42Z",
+  "heartbeat_at": "2026-10-16T02:37:43Z",
+  "representative_of_group": "aggregator",
+  "group_size": 4,
+  "group_run_ids": [
+    "l25tu0y9",
+    "o9fbezc2",
+    "vc48mqx8",
+    "82wgowwr"
+  ],
+  "group_run_names": [
+    "gohma-bc3-lat-r10",
+    "gohma-bc3-lat-r11",
+    "gohma-bc3-lat-r8",
+    "gohma-bc3-lat-r9"
+  ],
+  "max_step_in_group": 22
+}

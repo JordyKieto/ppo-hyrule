@@ -1,0 +1,20 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-gohma-ppo/wkz77do3",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-gohma-ppo/runs/wkz77do3",
+  "name": "eval-gohma-eval-v14f-r0",
+  "group": "gohma-eval-v14f",
+  "state": "crashed",
+  "created_at": "2026-10-06T02:18:17Z",
+  "heartbeat_at": "2026-10-06T02:27:47Z",
+  "representative_of_group": "longest",
+  "group_size": 2,
+  "group_run_ids": [
+    "wkz77do3",
+    "bnvpf0jh"
+  ],
+  "group_run_names": [
+    "eval-gohma-eval-v14f-r0",
+    "eval-gohma-eval-v14f-r1"
+  ],
+  "max_step_in_group": 0
+}

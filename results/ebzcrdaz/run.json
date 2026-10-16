@@ -1,0 +1,18 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/ebzcrdaz",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/ebzcrdaz",
+  "name": "eval-holdout",
+  "group": "gohma-v20-v15bcd-eval",
+  "state": "crashed",
+  "created_at": "2026-10-16T01:43:18Z",
+  "heartbeat_at": "2026-10-16T03:11:48Z",
+  "representative_of_group": "longest",
+  "group_size": 1,
+  "group_run_ids": [
+    "ebzcrdaz"
+  ],
+  "group_run_names": [
+    "eval-holdout"
+  ],
+  "max_step_in_group": 55
+}

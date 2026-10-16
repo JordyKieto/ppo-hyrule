@@ -1,0 +1,20 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-gohma-ppo/chsayskx",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-gohma-ppo/runs/chsayskx",
+  "name": "eval-gohma-eval-v14-r1",
+  "group": "gohma-eval-v14",
+  "state": "crashed",
+  "created_at": "2026-10-06T01:48:37Z",
+  "heartbeat_at": "2026-10-06T01:49:23Z",
+  "representative_of_group": "longest",
+  "group_size": 2,
+  "group_run_ids": [
+    "chsayskx",
+    "b85o930r"
+  ],
+  "group_run_names": [
+    "eval-gohma-eval-v14-r1",
+    "eval-gohma-eval-v14-r0"
+  ],
+  "max_step_in_group": 0
+}

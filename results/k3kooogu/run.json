@@ -1,0 +1,24 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/k3kooogu",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/k3kooogu",
+  "name": "gohma-bc3-mutual-r8",
+  "group": "gohma-bc3-mutual",
+  "state": "crashed",
+  "created_at": "2026-10-16T02:38:06Z",
+  "heartbeat_at": "2026-10-16T03:11:51Z",
+  "representative_of_group": "aggregator",
+  "group_size": 4,
+  "group_run_ids": [
+    "5e8ijmis",
+    "k3kooogu",
+    "w2ialjbt",
+    "w8xl16ky"
+  ],
+  "group_run_names": [
+    "gohma-bc3-mutual-r11",
+    "gohma-bc3-mutual-r8",
+    "gohma-bc3-mutual-r10",
+    "gohma-bc3-mutual-r9"
+  ],
+  "max_step_in_group": 27
+}

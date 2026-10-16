@@ -743,6 +743,73 @@ arm's updates 18-25 were compared against the constant arm's 1-8. The error move
 hypothesis under test. Series are now pulled with `--last 60` and the update range is printed beside every
 slope (AGENTS 12). The instrument gave no sign: both windows print identically.
 
+### ARTEFACTS LOST: the whole fleet vanished at ~20:14 on 2026-10-15 (A)
+
+`python -m fleet list` returned **$0.00/hr and zero pods**, and RunPod's REST API confirmed **0 pods** on the
+account. All 34 pods -- 12 IBRL, 4 IBRL replicate, 12 `gohma-bc3` (FitNets / transition / mutual), 2
+on-policy, 4 `gohma-v15bc`, and the eval pod -- were gone at once. The cause is not recoverable from here:
+there were no pods left to query for a termination reason, and nothing in this session terminated them (the
+only `fleet kill` was `gohma-bcw`, 4 pods, at the author's instruction at 19:14).
+
+**What was lost, precisely:**
+
+- **every arm's checkpoints.** `fleet sync` was never run on any of the 2026-10-15 BC/latent arms, so no
+  weights from fifteen arms exist anywhere. The best policy of the day cannot be re-evaluated or resumed.
+- **the eval pod's `runs/eval_watch.jsonl`** -- the per-episode rows behind six held-out evaluations.
+- **every per-rank training log**, including the `bcPick` / `bcL` / `bcA` / `bcZ` columns at per-update
+  resolution.
+
+**What survived, and only because W&B was exported after the loss:** every arm's damage history. The export
+itself nearly failed -- `scripts/export_wandb.py` scanned three projects and **`zelda-rl-goal-ppo` was not one
+of them**, which is where `fleet launch` sends combat runs. Fixed in the same commit; had the loss happened
+before that was noticed, the repo's own tooling could not have exported the day's work.
+
+**The rule this produces, and it is AGENTS 25 restated for training runs:** a running arm's checkpoints exist
+only on a pod, and a pod can vanish without warning. `fleet sync` belongs in the loop that reads the metrics,
+not at the end of a session. Sync when you read a number worth keeping.
+
+| arm | W&B group | run id | ranks | history rows |
+|---|---|---|---|---|
+| FitNets projection | `gohma-bc3-fitnet` | `0elfmc4m` | 4 | 19 |
+| latent transition | `gohma-bc3-latroll` -> delta | `w3wsholh` | 4 | 17 |
+| one-way latent (GRU, demo) | `gohma-bc3-lat` | `vc48mqx8` | 4 | 23 |
+| mutual alignment | `gohma-bc3-mutual` | `k3kooogu` | 4 | 28 |
+| inverse (clone student) | `gohma-bc3-inv` | `72uww7w7` | 4 | 16 |
+| Q-filter | `gohma-bc3-qf` | `vj96cuw5` | 4 | 16 |
+| IBRL | `gohma-v20-ibrl` | `xb2e5oli` | 12 | 14 |
+| on-policy distillation | `gohma-lbc-onpol` | `e6fssffk` | 2 | 13 |
+| decay (12 ranks) | `gohma-v20-v15bcd` | `81mre82x` | 12 | 64 |
+| decay replicate | `gohma-v15bc-v15bcd` | `un4fkisv` | 4 | 73 |
+| **held-out eval** | `gohma-v20-v15bcd-eval` | `ebzcrdaz` | 1 | 6 |
+
+### THE DAY'S RESULT, fifteen arms: nothing beats v15, and nothing rises (M)
+
+| arm | mechanism | n | mean | max | slope +/- SE | t |
+|---|---|---|---|---|---|---|
+| FitNets projection | learned linear map before the MSE, rollout states | 14 | **2.87** | 3.37 | -0.0064 +/- 0.0192 | -0.33 |
+| latent transition | MSE on `h_t - h_(t-1)` | 14 | **2.79** | 3.21 | +0.0100 +/- 0.0159 | +0.62 |
+| mutual alignment | both nets trainable, contrastive | 22 | 2.66 | 3.28 | +0.0017 +/- 0.0132 | +0.13 |
+| one-way latent (GRU, demo) | MSE to the frozen clone | 17 | 2.47 | 3.19 | -0.0220 +/- 0.0188 | -1.17 |
+| decay 0.1->0.02 | action-level BC, decaying | 26 | 2.32 | 2.74 | -0.0086 +/- 0.0049 | -1.74 |
+| on-policy distillation | KL to the clone on rollout states | 7 | 2.43 | 3.67 | **-0.2779 +/- 0.0930** | **-2.99** |
+| decay replicate | as above | 29 | 2.08 | — | **-0.0235 +/- 0.0070** | **-3.37** |
+| constant 0.1 | action-level BC, fixed | 8 | 2.31 | 2.64 | **-0.0857 +/- 0.0172** | **-4.98** |
+| Q-filter | BC on the 12% of frames that damage her | 6 | ~2.0 | 2.42 | — | too few |
+| IBRL | clone proposes, Q head picks | 9 | **0.38** | 0.51 | -0.0050 +/- 0.0105 | -0.48 |
+| inverse (clone student) | v15's representation into the clone | 9 | 0.48 | 0.76 | — | flat at the floor |
+| BC init | clone as the starting policy | 6 | 0.28 | 0.35 | +0.028/upd | rising from nothing |
+| **v15 alone** | **no human data at all** | — | **3.275** | — | the bar | |
+
+**Three arms produced one update above 3.275 each** (FitNets 3.37, mutual 3.28, on-policy 3.67) and **no arm
+produced a trend above it**. The two arms that merely HELD at v15's level are the two whose design follows the
+measurement that the divergence between v15 and the clone is accumulated memory rather than perception
+(encoder gap 0.497, GRU gap 0.938). Both had 4 ranks and ~14 updates when the fleet died.
+
+**IBRL's number is not a result.** `bcPick` 54-78% with `q_loss` 2.5-10: the Q head was untrained when it
+began gating, so the policy executed the clone's actions on most steps and fell from 2.3 to 0.38 in nine
+updates. That is an implementation error of this repo's on-policy adaptation, not a property of the method
+(claim R49).
+
 **Arm 3 as launched (config).** `gohma-v20-v15bcd` launch `20261015180929` (12 ranks)
 and `gohma-v15bc-v15bcd` launch `20261015181013` (4 ranks): coef **0.1 -> 0.02 over 50 updates, then held
 at 0.02 forever**. Decaying to zero was rejected on the author's instruction and is asserted impossible in

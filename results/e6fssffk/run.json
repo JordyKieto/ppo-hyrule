@@ -1,0 +1,20 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/e6fssffk",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/e6fssffk",
+  "name": "gohma-lbc-onpol-r1",
+  "group": "gohma-lbc-onpol",
+  "state": "crashed",
+  "created_at": "2026-10-16T02:57:36Z",
+  "heartbeat_at": "2026-10-16T03:11:52Z",
+  "representative_of_group": "aggregator",
+  "group_size": 2,
+  "group_run_ids": [
+    "e6fssffk",
+    "52zvxw87"
+  ],
+  "group_run_names": [
+    "gohma-lbc-onpol-r1",
+    "gohma-lbc-onpol-r3"
+  ],
+  "max_step_in_group": 12
+}

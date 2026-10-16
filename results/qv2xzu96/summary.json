@@ -1,0 +1,13 @@
+{
+  "_runtime": 1391.395495176,
+  "_step": 10,
+  "_timestamp": 1791252440.800911,
+  "holdout/boss_hp_taken": 1.95,
+  "holdout/death_rate": 0.9,
+  "holdout/defeat_rate": 0.1,
+  "holdout/episodes": 40,
+  "holdout/full_hp_defeats": 0,
+  "holdout/full_hp_episodes": 0,
+  "holdout/published_update": 10,
+  "holdout/return": 42.071156872923495
+}

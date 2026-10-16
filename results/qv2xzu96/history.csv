@@ -1,0 +1,3 @@
+holdout/boss_hp_taken,_timestamp,holdout/episodes,holdout/death_rate,holdout/full_hp_defeats,holdout/full_hp_episodes,_runtime,holdout/return,holdout/defeat_rate,holdout/published_update,_step
+1.45,1791252069.7761383,40,1,0,0,1031.147596245,17.631153645519557,0,5,5
+1.95,1791252440.800911,40,0.9,0,0,1391.395495176,42.071156872923495,0.1,10,10

@@ -21,7 +21,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECTS = ("zelda-rl-combat-ppo", "zelda-rl-gohma-ppo", "zelda-wm")
+# zelda-rl-goal-ppo is where `fleet launch` sends combat runs by default -- it was missing from this
+# list, so the BC/latent arms of 2026-10-15 were not exported until the fleet had already been lost.
+PROJECTS = ("zelda-rl-combat-ppo", "zelda-rl-gohma-ppo", "zelda-rl-goal-ppo", "zelda-wm")
 ENTITY = "drift-ai-models"
 
 

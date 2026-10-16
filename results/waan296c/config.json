@@ -1,0 +1,215 @@
+{
+  "lr": 0.0003,
+  "clip": 0.2,
+  "seed": 0,
+  "gamma": 0.995,
+  "slots": {
+    "1": {
+      "pos": [
+        -1307.8,
+        -62.1,
+        -263.4
+      ],
+      "scene": 85,
+      "rupees": 0
+    },
+    "2": {
+      "pos": [
+        -274.5,
+        0,
+        -163.1
+      ],
+      "scene": 85,
+      "rupees": 0
+    },
+    "3": {
+      "pos": [
+        46.2,
+        180,
+        -4.5
+      ],
+      "scene": 85,
+      "rupees": 1
+    },
+    "5": {
+      "pos": [
+        797.9,
+        0,
+        230.5
+      ],
+      "scene": 85,
+      "rupees": 6
+    }
+  },
+  "w_pos": 1,
+  "wandb": true,
+  "epochs": 4,
+  "hidden": 256,
+  "resume": false,
+  "obs_dim": 429,
+  "out_dir": "runs",
+  "vf_coef": 0.5,
+  "w_flags": 1,
+  "w_rupee": 1,
+  "ent_coef": 0.01,
+  "goal_cfg": {
+    "w_pos": 1,
+    "w_flags": 1,
+    "w_rupee": 1,
+    "rupee_weight": 1,
+    "time_penalty": 0.001,
+    "success_bonus": 10,
+    "success_radius": 75,
+    "scene_exit_penalty": 5
+  },
+  "headless": false,
+  "n_actors": 16,
+  "num_envs": 8,
+  "realtime": false,
+  "run_name": "kokiri-v2-r0",
+  "actor_dim": 24,
+  "goal_slot": 5,
+  "n_actions": 27,
+  "slots_dir": "assets/states",
+  "target_kl": 0.03,
+  "batch_size": 4800,
+  "fleet_rank": 0,
+  "fleet_sync": "avg",
+  "gae_lambda": 0.95,
+  "global_dim": 45,
+  "obs_fields": [
+    [
+      "link_pos",
+      3
+    ],
+    [
+      "goal_pos",
+      3
+    ],
+    [
+      "goal_delta",
+      3
+    ],
+    [
+      "goal_dist",
+      1
+    ],
+    [
+      "link_yaw_sin_cos",
+      2
+    ],
+    [
+      "camera_yaw_sin_cos",
+      2
+    ],
+    [
+      "link_vel",
+      3
+    ],
+    [
+      "rupees",
+      1
+    ],
+    [
+      "goal_rupees",
+      1
+    ],
+    [
+      "rupee_gap",
+      1
+    ],
+    [
+      "health_frac",
+      1
+    ],
+    [
+      "time_left",
+      1
+    ],
+    [
+      "prev_action_world_dir_sin_cos",
+      2
+    ],
+    [
+      "prev_action_button",
+      2
+    ],
+    [
+      "state_flags1_bits",
+      14
+    ],
+    [
+      "owns_sword_shield",
+      2
+    ],
+    [
+      "goal_flags_missing_extra",
+      2
+    ],
+    [
+      "same_scene_as_goal",
+      1
+    ]
+  ],
+  "plot_every": 5,
+  "save_every": 10,
+  "minibatches": 8,
+  "obs_version": 2,
+  "start_slots": "1,2,3",
+  "vi_per_step": 6,
+  "wandb_group": null,
+  "action_frame": "world",
+  "actor_fields": [
+    [
+      "id",
+      1
+    ],
+    [
+      "category_onehot",
+      12
+    ],
+    [
+      "rel_pos",
+      3
+    ],
+    [
+      "dist",
+      1
+    ],
+    [
+      "flag_targetable_hostile_friendly",
+      3
+    ],
+    [
+      "health",
+      1
+    ],
+    [
+      "rupee_value",
+      1
+    ],
+    [
+      "params_low",
+      1
+    ],
+    [
+      "present",
+      1
+    ]
+  ],
+  "wandb_entity": null,
+  "max_grad_norm": 0.5,
+  "publish_every": 5,
+  "success_bonus": 10,
+  "torch_threads": 2,
+  "total_updates": 400,
+  "video_backend": "Null",
+  "wandb_project": "zelda-rl-goal-ppo",
+  "success_radius": 75,
+  "episode_seconds": 60,
+  "fleet_launch_id": "20260912235128",
+  "wandb_artifacts": false,
+  "fleet_experiment": "kokiri-v2",
+  "fleet_world_size": 5,
+  "steps_per_episode": 600
+}

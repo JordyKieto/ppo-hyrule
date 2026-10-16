@@ -1,0 +1,18 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-gohma-ppo/vucwgaku",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-gohma-ppo/runs/vucwgaku",
+  "name": "gohma-v20-a7-r7",
+  "group": "gohma-v20-a7",
+  "state": "crashed",
+  "created_at": "2026-10-15T20:10:03Z",
+  "heartbeat_at": "2026-10-15T20:40:49Z",
+  "representative_of_group": "longest",
+  "group_size": 1,
+  "group_run_ids": [
+    "vucwgaku"
+  ],
+  "group_run_names": [
+    "gohma-v20-a7-r7"
+  ],
+  "max_step_in_group": 17
+}

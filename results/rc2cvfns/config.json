@@ -1,0 +1,7 @@
+{
+  "envs": 12,
+  "rank": 1,
+  "slots": null,
+  "watch": "runs/gohma-eval-v14f4-r0/checkpoints",
+  "episodes": null
+}

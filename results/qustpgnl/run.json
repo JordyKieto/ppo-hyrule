@@ -1,0 +1,20 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-gohma-ppo/qustpgnl",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-gohma-ppo/runs/qustpgnl",
+  "name": "eval-gohma-eval-v16-r0",
+  "group": "gohma-eval-v16",
+  "state": "crashed",
+  "created_at": "2026-10-13T14:58:45Z",
+  "heartbeat_at": "2026-10-13T18:34:46Z",
+  "representative_of_group": "longest",
+  "group_size": 2,
+  "group_run_ids": [
+    "qustpgnl",
+    "5xjdgtei"
+  ],
+  "group_run_names": [
+    "eval-gohma-eval-v16-r0",
+    "eval-gohma-eval-v16-r1"
+  ],
+  "max_step_in_group": 20
+}

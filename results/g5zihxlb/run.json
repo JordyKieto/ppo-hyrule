@@ -1,0 +1,22 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/g5zihxlb",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/g5zihxlb",
+  "name": "kokiri-goal-v1",
+  "group": "(ungrouped)",
+  "state": "finished",
+  "created_at": "2026-09-13T05:30:51Z",
+  "heartbeat_at": "2026-09-13T05:46:49Z",
+  "representative_of_group": "longest",
+  "group_size": 3,
+  "group_run_ids": [
+    "g5zihxlb",
+    "ud1ejo5r",
+    "arpz58dg"
+  ],
+  "group_run_names": [
+    "kokiri-goal-v1",
+    "kokiri-goal-v2",
+    "kokiri-goal-v2.1"
+  ],
+  "max_step_in_group": 29
+}

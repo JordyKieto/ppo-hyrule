@@ -1,0 +1,24 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/0elfmc4m",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/0elfmc4m",
+  "name": "gohma-bc3-fitnet-r0",
+  "group": "gohma-bc3-fitnet",
+  "state": "crashed",
+  "created_at": "2026-10-16T02:47:40Z",
+  "heartbeat_at": "2026-10-16T03:11:41Z",
+  "representative_of_group": "aggregator",
+  "group_size": 4,
+  "group_run_ids": [
+    "0elfmc4m",
+    "un8mgb06",
+    "5bb6pu8h",
+    "qvwwfwjx"
+  ],
+  "group_run_names": [
+    "gohma-bc3-fitnet-r0",
+    "gohma-bc3-fitnet-r3",
+    "gohma-bc3-fitnet-r1",
+    "gohma-bc3-fitnet-r2"
+  ],
+  "max_step_in_group": 18
+}

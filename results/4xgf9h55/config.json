@@ -1,0 +1,728 @@
+{
+  "lr": 3e-05,
+  "gru": 256,
+  "clip": 0.2,
+  "seed": 5,
+  "task": "combat",
+  "chunk": 60,
+  "gamma": 0.999,
+  "wandb": true,
+  "epochs": 4,
+  "hidden": 256,
+  "resume": false,
+  "reward": "simple",
+  "kl_coef": 0.3,
+  "obs_dim": 1033,
+  "out_dir": "runs",
+  "profile": "gohma",
+  "vf_coef": 0.5,
+  "ent_coef": 0.01,
+  "n_actors": 16,
+  "num_envs": 8,
+  "realtime": false,
+  "run_name": "gohma-v20-a6-r5",
+  "slot_ema": 0.3,
+  "actor_dim": 46,
+  "goal_slot": 3,
+  "init_from": "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
+  "kl_anchor": null,
+  "n_actions": 108,
+  "recurrent": true,
+  "slots_dir": "assets/states",
+  "target_kl": 0.03,
+  "batch_size": 9600,
+  "combat_cfg": {
+    "g_guard": 0,
+    "profile": "gohma",
+    "w_block": 1,
+    "w_dodge": 0.2,
+    "w_defeat": 5,
+    "w_lockon": 0,
+    "block_cap": 8,
+    "dodge_cap": 5,
+    "fall_drop": 400,
+    "g_spacing": 0.02,
+    "g_approach": 0,
+    "g_nut_miss": 0.3,
+    "g_nut_stun": 2,
+    "g_stun_hit": 2,
+    "lockon_cap": 8,
+    "shield_cap": 0.5,
+    "target_ids": [
+      40
+    ],
+    "w_approach": 0.5,
+    "w_stun_hit": 0.5,
+    "block_range": 220,
+    "g_grass_cut": 0,
+    "g_guard_cap": 6,
+    "g_link_heal": 0.1,
+    "g_seed_miss": 0.15,
+    "g_seed_stun": 15,
+    "max_seconds": 120,
+    "room_radius": 3000,
+    "speed_ref_s": 30,
+    "w_link_heal": 0.05,
+    "w_lock_step": 0,
+    "g_larva_kill": 2,
+    "g_nut_pickup": 0,
+    "g_pickup_cap": 0,
+    "lunge_radius": 110,
+    "time_penalty": 0.001,
+    "death_penalty": 20,
+    "g_block_range": 250,
+    "g_boss_damage": 4,
+    "g_boss_defeat": 60,
+    "g_seed_pickup": 0,
+    "g_sling_ready": 0,
+    "g_spacing_cap": 1.5,
+    "g_spacing_far": 600,
+    "g_sword_range": 90,
+    "g_sword_ready": 0.02,
+    "lock_step_cap": 1,
+    "shield_radius": 150,
+    "success_bonus": 20,
+    "w_link_damage": 0.25,
+    "w_shield_face": 0.01,
+    "g_approach_cap": 3,
+    "g_larva_damage": 0.5,
+    "g_lock_red_eye": 0,
+    "g_nut_scarcity": 20,
+    "g_nut_stun_cap": 10,
+    "g_red_eye_seed": 0,
+    "speed_mult_max": 2,
+    "w_enemy_damage": 1,
+    "g_death_penalty": 0,
+    "g_elevated_seed": 0,
+    "g_grass_cut_cap": 0,
+    "g_seed_scarcity": 30,
+    "g_seed_stun_cap": 60,
+    "g_sling_red_eye": 0,
+    "g_spacing_range": 150,
+    "g_speed_ref_min": 3,
+    "steps_per_second": 10,
+    "g_sling_ready_cap": 0,
+    "g_stun_on_convert": true,
+    "g_sword_ready_cap": 1,
+    "g_unfired_red_eye": 0,
+    "spawn_grace_steps": 2,
+    "g_boss_hp_progress": 2,
+    "g_larva_kill_sling": 1,
+    "g_lock_red_eye_cap": 0,
+    "g_nut_window_steps": 6,
+    "g_red_eye_seed_cap": 0,
+    "leave_room_penalty": 20,
+    "success_time_bonus": 30,
+    "g_drop_red_eye_shot": 0,
+    "g_elevated_seed_cap": 0,
+    "g_seed_window_steps": 10,
+    "g_sling_red_eye_cap": 0,
+    "g_larva_damage_sling": 0.25,
+    "g_seed_window_hit_steps": 12,
+    "timeout_penalty_per_target": 10
+  },
+  "fleet_rank": 5,
+  "fleet_sync": "avg",
+  "gae_lambda": 0.99,
+  "global_dim": 297,
+  "obs_fields": [
+    [
+      "link_pos",
+      3
+    ],
+    [
+      "goal_pos",
+      3
+    ],
+    [
+      "goal_delta",
+      3
+    ],
+    [
+      "goal_dist",
+      1
+    ],
+    [
+      "link_yaw_sin_cos",
+      2
+    ],
+    [
+      "camera_yaw_sin_cos",
+      2
+    ],
+    [
+      "link_vel",
+      3
+    ],
+    [
+      "rupees",
+      1
+    ],
+    [
+      "goal_rupees",
+      1
+    ],
+    [
+      "rupee_gap",
+      1
+    ],
+    [
+      "health_frac",
+      1
+    ],
+    [
+      "time_left",
+      1
+    ],
+    [
+      "prev_action_world_dir_sin_cos",
+      2
+    ],
+    [
+      "prev_action_button",
+      2
+    ],
+    [
+      "state_flags1_bits",
+      14
+    ],
+    [
+      "owns_sword_shield",
+      2
+    ],
+    [
+      "goal_flags_missing_extra",
+      2
+    ],
+    [
+      "same_scene_as_goal",
+      1
+    ],
+    [
+      "link_hp_frac",
+      1
+    ],
+    [
+      "link_hp_cap",
+      1
+    ],
+    [
+      "targets_alive_frac",
+      1
+    ],
+    [
+      "targets_start",
+      1
+    ],
+    [
+      "locked_on_target",
+      1
+    ],
+    [
+      "arrow_on_target",
+      1
+    ],
+    [
+      "shielding",
+      1
+    ],
+    [
+      "damaged",
+      1
+    ],
+    [
+      "nearest_target_rel_pos",
+      3
+    ],
+    [
+      "nearest_target_dist",
+      1
+    ],
+    [
+      "nearest_target_hp",
+      1
+    ],
+    [
+      "nearest_target_facing_cos_sin",
+      2
+    ],
+    [
+      "second_target_rel_pos",
+      3
+    ],
+    [
+      "second_target_dist",
+      1
+    ],
+    [
+      "second_target_hp",
+      1
+    ],
+    [
+      "time_left",
+      1
+    ],
+    [
+      "mem_kills_frac",
+      1
+    ],
+    [
+      "mem_damage_dealt",
+      1
+    ],
+    [
+      "mem_hearts_lost",
+      1
+    ],
+    [
+      "mem_since_last_hit",
+      1
+    ],
+    [
+      "mem_since_last_damage",
+      1
+    ],
+    [
+      "mem_since_last_kill",
+      1
+    ],
+    [
+      "mem_lockons",
+      1
+    ],
+    [
+      "t1_state_onehot",
+      10
+    ],
+    [
+      "t1_facing_link_cos_sin",
+      2
+    ],
+    [
+      "t1_timer",
+      1
+    ],
+    [
+      "t2_state_onehot",
+      10
+    ],
+    [
+      "t2_facing_link_cos_sin",
+      2
+    ],
+    [
+      "t2_timer",
+      1
+    ],
+    [
+      "gohma_present",
+      1
+    ],
+    [
+      "gohma_hp_frac",
+      1
+    ],
+    [
+      "gohma_eye_rel_pos",
+      3
+    ],
+    [
+      "gohma_eye_dist",
+      1
+    ],
+    [
+      "gohma_on_ceiling",
+      1
+    ],
+    [
+      "gohma_state_onehot",
+      18
+    ],
+    [
+      "gohma_vulnerable",
+      1
+    ],
+    [
+      "gohma_stunned",
+      1
+    ],
+    [
+      "gohma_time_in_state",
+      1
+    ],
+    [
+      "gohma_facing_link_cos_sin",
+      2
+    ],
+    [
+      "link_aim_to_eye_cos_sin_elev",
+      3
+    ],
+    [
+      "locked_on_gohma",
+      1
+    ],
+    [
+      "larvae_alive",
+      1
+    ],
+    [
+      "larva1_rel_pos",
+      3
+    ],
+    [
+      "larva1_dist",
+      1
+    ],
+    [
+      "larva1_hp",
+      1
+    ],
+    [
+      "larva1_state_onehot",
+      11
+    ],
+    [
+      "larva1_facing_link_cos_sin",
+      2
+    ],
+    [
+      "link_facing_larva1_cos_sin",
+      2
+    ],
+    [
+      "larva2_rel_pos",
+      3
+    ],
+    [
+      "larva2_dist",
+      1
+    ],
+    [
+      "held_slingshot",
+      1
+    ],
+    [
+      "held_sword",
+      1
+    ],
+    [
+      "first_person_aim",
+      1
+    ],
+    [
+      "ready_to_fire",
+      1
+    ],
+    [
+      "seeds",
+      1
+    ],
+    [
+      "since_last_seed",
+      1
+    ],
+    [
+      "mem_stuns",
+      1
+    ],
+    [
+      "mem_larva_kills",
+      1
+    ],
+    [
+      "nuts",
+      1
+    ],
+    [
+      "since_last_nut",
+      1
+    ],
+    [
+      "aim_forward_world",
+      3
+    ],
+    [
+      "aim_pitch_sin_cos",
+      2
+    ],
+    [
+      "aim_yaw_sin_cos",
+      2
+    ],
+    [
+      "cam_eye_rel_link",
+      3
+    ],
+    [
+      "link_facing_vs_camera_sin_cos",
+      2
+    ],
+    [
+      "link_velocity_cam",
+      3
+    ],
+    [
+      "gohma_eye_cam",
+      3
+    ],
+    [
+      "gohma_eye_body",
+      3
+    ],
+    [
+      "gohma_vel_cam",
+      3
+    ],
+    [
+      "gohma_facing_cam_fwd_right",
+      2
+    ],
+    [
+      "gohma_facing_body_fwd_right",
+      2
+    ],
+    [
+      "larva0_present",
+      1
+    ],
+    [
+      "larva0_hp",
+      1
+    ],
+    [
+      "larva0_state_onehot",
+      11
+    ],
+    [
+      "larva0_cam",
+      3
+    ],
+    [
+      "larva0_body",
+      3
+    ],
+    [
+      "larva0_vel_cam",
+      3
+    ],
+    [
+      "larva0_facing_vs_link_cos_sin",
+      2
+    ],
+    [
+      "larva1_present",
+      1
+    ],
+    [
+      "larva1_hp",
+      1
+    ],
+    [
+      "larva1_state_onehot",
+      11
+    ],
+    [
+      "larva1_cam",
+      3
+    ],
+    [
+      "larva1_body",
+      3
+    ],
+    [
+      "larva1_vel_cam",
+      3
+    ],
+    [
+      "larva1_facing_vs_link_cos_sin",
+      2
+    ],
+    [
+      "larva2_present",
+      1
+    ],
+    [
+      "larva2_hp",
+      1
+    ],
+    [
+      "larva2_state_onehot",
+      11
+    ],
+    [
+      "larva2_cam",
+      3
+    ],
+    [
+      "larva2_body",
+      3
+    ],
+    [
+      "larva2_vel_cam",
+      3
+    ],
+    [
+      "larva2_facing_vs_link_cos_sin",
+      2
+    ],
+    [
+      "seed0_present",
+      1
+    ],
+    [
+      "seed0_cam",
+      3
+    ],
+    [
+      "seed0_vel_cam",
+      3
+    ],
+    [
+      "seed0_vel_body",
+      3
+    ],
+    [
+      "seed1_present",
+      1
+    ],
+    [
+      "seed1_cam",
+      3
+    ],
+    [
+      "seed1_vel_cam",
+      3
+    ],
+    [
+      "seed1_vel_body",
+      3
+    ],
+    [
+      "last_impact_present",
+      1
+    ],
+    [
+      "since_last_impact",
+      1
+    ],
+    [
+      "last_impact_cam",
+      3
+    ],
+    [
+      "last_impact_minus_gohma_eye_cam",
+      3
+    ],
+    [
+      "last_impact_to_gohma_eye_dist",
+      1
+    ]
+  ],
+  "save_every": 10,
+  "combat_json": null,
+  "death_scale": 0,
+  "minibatches": 16,
+  "obs_version": 7,
+  "slot_warmup": 3,
+  "start_slots": "3,4,5,6,7,8",
+  "vi_per_step": 6,
+  "wandb_group": "gohma-v20-a6",
+  "action_frame": "world",
+  "actor_fields": [
+    [
+      "id",
+      1
+    ],
+    [
+      "category_onehot",
+      12
+    ],
+    [
+      "rel_pos",
+      3
+    ],
+    [
+      "dist",
+      1
+    ],
+    [
+      "flag_targetable_hostile_friendly",
+      3
+    ],
+    [
+      "health",
+      1
+    ],
+    [
+      "rupee_value",
+      1
+    ],
+    [
+      "params_low",
+      1
+    ],
+    [
+      "ego_cam_rel_pos",
+      3
+    ],
+    [
+      "ego_body_rel_pos",
+      3
+    ],
+    [
+      "ego_cam_vel",
+      3
+    ],
+    [
+      "ego_body_vel",
+      3
+    ],
+    [
+      "facing_cam_fwd_right",
+      2
+    ],
+    [
+      "facing_body_fwd_right",
+      2
+    ],
+    [
+      "facing_vs_link_cos_sin",
+      2
+    ],
+    [
+      "scale",
+      1
+    ],
+    [
+      "cyl_radius_height",
+      2
+    ],
+    [
+      "mass",
+      1
+    ],
+    [
+      "present",
+      1
+    ]
+  ],
+  "slot_weights": "4=1.125,6=1.125,7=2.25",
+  "wandb_entity": null,
+  "max_grad_norm": 0.5,
+  "publish_every": 5,
+  "slot_sampling": "fixed",
+  "torch_threads": 2,
+  "total_updates": 60,
+  "video_backend": "Null",
+  "wandb_project": "zelda-rl-gohma-ppo",
+  "episode_seconds": 120,
+  "fleet_launch_id": "20261015130940",
+  "fleet_aggregator": 0,
+  "fleet_experiment": "grid-a6",
+  "fleet_world_size": 1,
+  "steps_per_rollout": 1200,
+  "slot_deficit_floor": 0.06,
+  "slot_deficit_ratio": 4,
+  "transfer_action_margin": 2
+}

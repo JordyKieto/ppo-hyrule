@@ -1,0 +1,22 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-gohma-ppo/xzbv1c8x",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-gohma-ppo/runs/xzbv1c8x",
+  "name": "gohma-v20-s3-r7",
+  "group": "gohma-v20-s3",
+  "state": "crashed",
+  "created_at": "2026-10-15T21:18:50Z",
+  "heartbeat_at": "2026-10-15T21:48:36Z",
+  "representative_of_group": "aggregator",
+  "group_size": 3,
+  "group_run_ids": [
+    "6e2jprhx",
+    "xzbv1c8x",
+    "e6xbwa1e"
+  ],
+  "group_run_names": [
+    "gohma-v20-s3-r8",
+    "gohma-v20-s3-r7",
+    "gohma-v20-s3-r11"
+  ],
+  "max_step_in_group": 13
+}

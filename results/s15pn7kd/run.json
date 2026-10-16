@@ -1,0 +1,36 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/s15pn7kd",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/s15pn7kd",
+  "name": "kokiri-v2-rupees7-r0",
+  "group": "kokiri-v2-rupees7",
+  "state": "crashed",
+  "created_at": "2026-09-13T07:27:04Z",
+  "heartbeat_at": "2026-09-13T07:35:19Z",
+  "representative_of_group": "longest",
+  "group_size": 10,
+  "group_run_ids": [
+    "2ufve5ps",
+    "vptyzlrl",
+    "v45dvxbn",
+    "mc8fthua",
+    "s7ef9k68",
+    "s15pn7kd",
+    "qoszkcs5",
+    "oyvrrx8v",
+    "2dj5o5l8",
+    "t4dtr1u5"
+  ],
+  "group_run_names": [
+    "kokiri-v2-rupees7-r0",
+    "kokiri-v2-rupees7-r1",
+    "kokiri-v2-rupees7-r2",
+    "kokiri-v2-rupees7-r3",
+    "kokiri-v2-rupees7-r4",
+    "kokiri-v2-rupees7-r0",
+    "kokiri-v2-rupees7-r1",
+    "kokiri-v2-rupees7-r2",
+    "kokiri-v2-rupees7-r3",
+    "kokiri-v2-rupees7-r4"
+  ],
+  "max_step_in_group": 18
+}
