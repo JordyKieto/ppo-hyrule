@@ -1157,11 +1157,29 @@ wins ALONE is the worst configuration (M1, 0.33 — no contrast, nothing labels 
 return-conditioning on mostly-failures reaches **1.50 from pure supervised learning**, against the plain
 clone's 0.33 and the stratified clone's 0.53 on the same 100 games.
 
-**Retracted, one cycle after it was reported:** M5 read **2.00** at two evals and was called "the most
-promising" — it is **1.33** at three, with a flat slope, while M2 went 0.54 → 0.75 → 1.50. A 24-episode eval
-is the noise floor here, and the maximum of five arms read once is biased upward (§35). Nine pods were
-retooled onto an M5-shaped sweep on the strength of that two-eval maximum; the axis was corrected to include
-`ppo_wins = 0` (the M2 shape) before the arms had finished pulling their corpora.
+**THE CORRECTED RESULT, pooled over five evals (120 episodes per arm) — this is the citable row:**
+
+| arm | pooled dmgB | ±SE | per-eval readings |
+|---|---|---|---|
+| **M5** human + losses + PPO wins, 0.3 | **1.60** | 0.11 | 2.00, 1.33, 1.50, 1.62 |
+| M2 human + losses, 0.3 | 0.93 | 0.17 | 0.54, 0.75, 1.50, 0.75, 1.12 |
+| M4 human + losses, 0.1 | 0.89 | 0.08 | 0.88, 0.71, 0.75, 1.00, 1.12 |
+| M3 human + losses, 0.6 | 0.75 | 0.09 | 0.46, 0.92, 0.75, 0.67, 0.96 |
+| M1 human wins only | 0.30 | 0.04 | 0.25, 0.29, 0.33, 0.38, 0.12 |
+
+**M5 − M2 = 0.67 ± 0.20, t = 3.3.** M5 is the best mix; M1 is the worst by a wide margin; M2/M3/M4 are
+mutually indistinguishable. So **adding the PPO wins to the human win class helps**, and **training on wins
+alone is the worst possible corpus** — the losses are what label the fatal action, which is the RvS premise.
+M5's 1.60 comes from pure supervised learning with no PPO, against the plain clone's 0.33 and the
+event-stratified clone's 0.53 on the same 100 games.
+
+**Two retractions, and the second one was wrong too (§38).** M5's 2.00 (eval 2) was reported as a lead; it
+was then retracted on eval 3 in favour of M2's 1.50; the pooled data says M5 led all along. A 24-episode
+eval swings ±0.75 here — larger than the whole between-arm spread — so EVERY arm was the maximum at some
+eval, and all four statements made from single evals were noise. Nine pods were retooled on eval 2 and the
+axis corrected on eval 3. `scripts/fleet_signal.py` now prints `POOLED ± SE` per arm and a pre-registered
+`VERDICT` line that says `TIE ... NOT a ranking` unless the gap exceeds the combined SE, and `NO VERDICT`
+under three evals.
 
 **In flight:** `gohma-la` retooled to a 9-cell M5-shape sweep — `ppo_wins ∈ {0, 100, 495} x win_share ∈
 {0.15, 0.3, 0.5}`, human wins and ~500 losses in every cell, each cell refusing to start unless its corpus

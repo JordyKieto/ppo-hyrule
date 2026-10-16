@@ -41,9 +41,19 @@ def load_all(dirs, limit_per_dir=0):
         files = sorted(Path(d).glob("*.npz"))
         if limit_per_dir:
             files = files[:limit_per_dir]
+        n_before = len(eps)
+        bad = 0
         for f in files:
-            z = np.load(f, allow_pickle=False)
-            if "obs" not in z.files or "action" not in z.files:
+            # A corpus is downloaded, and a download can be truncated. This is the SECOND loader to die on
+            # `EOFError: No data left in file` today -- zelda_rl.rvs_data was fixed this morning and this
+            # function has its own np.load, so it crashed the M2-shape cell (gohma-la r0). Skip and REPORT.
+            try:
+                z = np.load(f, allow_pickle=False)
+                if "obs" not in z.files or "action" not in z.files:
+                    continue
+                z["obs"].shape, z["action"].shape      # force the read: a lazy npz raises here
+            except Exception:                          # noqa: BLE001
+                bad += 1
                 continue
             obs = z["obs"].astype(np.float32)
             idx = field_offsets(str(z["obs_fields"]))
@@ -55,8 +65,12 @@ def load_all(dirs, limit_per_dir=0):
                         "obs_dim": obs.shape[1] + COND_DIM, "raw_dim": obs.shape[1],
                         "n_actions": int(z["n_actions"]) if "n_actions" in z.files else 108,
                         "fields": json.loads(str(z["obs_fields"]))})
+        load_all.skipped = getattr(load_all, "skipped", 0) + bad
+        if bad:
+            print(f"  {d}: SKIPPED {bad} unreadable of {len(files)} file(s), kept "
+                  f"{len(eps) - n_before}", flush=True)
     if not eps:
-        raise SystemExit(f"no episodes in {dirs}")
+        raise SystemExit(f"no episodes in {dirs} ({getattr(load_all, 'skipped', 0)} unreadable)")
     dims = {e["obs_dim"] for e in eps}
     if len(dims) != 1:
         raise SystemExit(f"mixed observation widths: {dims}")
@@ -142,6 +156,8 @@ def main() -> int:
     wins = [e for e in eps if e["win"]]
     print(f"{len(eps)} episodes, {len(wins)} wins ({100*len(wins)/len(eps):.1f}%), "
           f"{sum(len(e['act']) for e in eps):,} steps")
+    if getattr(load_all, "skipped", 0):
+        print(f"  SKIPPED {load_all.skipped} unreadable .npz file(s)", flush=True)
     for d in a.data:
         sub = [e for e in eps if e["src"] == str(d)]
         print(f"  {d}: {len(sub)} episodes, {sum(1 for e in sub if e['win'])} wins, "

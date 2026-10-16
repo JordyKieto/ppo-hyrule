@@ -93,8 +93,11 @@ def main() -> int:
     print(f"{len(jobs)} live pod(s) across {len({j['_exp'] for j in jobs})} experiment(s)")
 
     def grab(pod):
-        body = run(pod, f"for f in {R_REPO}/logs/*.log; do tail -{a.tail} \"$f\" 2>/dev/null; done",
-                   capture=True, check=False, timeout=300)
+        # ONLY the newest log. Reading every log on the pod made a retooled pod's new cell inherit the
+        # previous arm's update rows: after gohma-la was retooled, `m5_w0_s0.3` reported the old
+        # `la_B_s0` slope verbatim (-0.1068, t=-5.50) on data from an arm that no longer existed.
+        body = run(pod, f"tail -{a.tail} \"$(ls -t {R_REPO}/logs/*.log 2>/dev/null | head -1)\" "
+                        f"2>/dev/null", capture=True, check=False, timeout=300)
         # The arm's identity is its LOG FILE, not a pattern grepped out of the log: the first version
         # matched `v15-r4` out of the --init-from path and labelled every latent-alignment arm after the
         # checkpoint it started from. One log per arm is how every launcher here writes it.
@@ -118,17 +121,50 @@ def main() -> int:
                     unit = "epoch"
         arms.append({"exp": exp, "rank": rank, "name": label or "?", "u": seen, "unit": unit})
 
-    print(f"{'arm':24} {'pod':12} {'n':>3} {'dmgB':>6} {'slope':>9} {'SE':>7} {'t':>6}")
+    print(f"{'arm':24} {'pod':12} {'n':>3} {'last':>6} {'POOLED':>6} {'+-SE':>6} "
+          f"{'slope':>9} {'SE':>7} {'t':>6}")
     for arm in sorted(arms, key=lambda x: x["name"]):
         u = np.array(sorted(arm["u"]))
         if not len(u):
-            print(f"{arm['name']:24} {arm['exp'][-4:]+' r'+str(arm['rank']):12}   0      -  (no update line yet)")
+            print(f"{arm['name']:24} {arm['exp'][-4:]+' r'+str(arm['rank']):12}   0      -       -      -"
+                  f"          -       -      -  (no update line yet)")
             continue
         d = np.array([arm["u"][k] for k in u])
         sl, se = fit(u, d)
         t = sl / se if se == se and se > 0 else float("nan")
+        # POOLED mean +- SE over every eval, not the latest one. A single 24-episode eval swings +-0.75
+        # on this metric, which is larger than any between-arm difference measured today: M2 read 1.50 at
+        # three evals and 0.75 at four, and M5 read 2.00 then 1.33. Ranking on the last value is ranking
+        # on noise (AGENTS 35 rule 2); the pooled mean uses n_evals x 24 episodes.
+        pooled = float(d.mean())
+        pse = float(d.std(ddof=1) / len(d) ** 0.5) if len(d) > 1 else float("nan")
         print(f"{arm['name']:24} {arm['exp'][-4:]+' r'+str(arm['rank']):12} {len(u):3d} "
-              f"{d[-1]:6.2f} {sl:9.4f} {se:7.4f} {t:6.2f}  /{arm['unit']}")
+              f"{d[-1]:6.2f} {pooled:6.2f} {pse:6.2f} {sl:9.4f} {se:7.4f} {t:6.2f}  /{arm['unit']}")
+
+    # THE DECISION RULE, pre-registered in code so a ranking cannot be read off the table by eye.
+    # A 24-episode eval of boss damage swings +-0.75 here. Ranked on the latest eval, M5 read 2.00 and
+    # "led", then 1.33 and was retracted, then 1.50; M2 read 1.50 and "led", then 0.75. Both the claim and
+    # the retraction were single-eval artefacts. Pooled over 5 evals (120 episodes) M5 is 1.60 +- 0.11 and
+    # M2 0.93 +- 0.17: a real 0.67 +- 0.20 gap, t=3.3. So this prints the verdict itself, and prints TIE
+    # whenever the gap to the runner-up is inside the combined SE (AGENTS 35 rule 5, 38).
+    ranked = sorted(([x, float(np.mean([x["u"][k] for k in x["u"]])),
+                      (float(np.std([x["u"][k] for k in x["u"]], ddof=1) / len(x["u"]) ** 0.5)
+                       if len(x["u"]) > 1 else float("nan"))]
+                     for x in arms if x["u"]), key=lambda r: -r[1])
+    if len(ranked) >= 2:
+        (a1, m1, e1), (a2, m2, e2) = ranked[0], ranked[1]
+        comb = (e1 ** 2 + e2 ** 2) ** 0.5 if e1 == e1 and e2 == e2 else float("nan")
+        gap = m1 - m2
+        n1 = len(a1["u"])
+        if not (comb == comb) or len(ranked[0][0]["u"]) < 3:
+            verdict = f"NO VERDICT: {n1} eval(s) on the top arm, need 3+ to pool an SE"
+        elif gap > comb:
+            verdict = (f"LEADER {a1['name']} {m1:.2f} +- {e1:.2f} beats {a2['name']} {m2:.2f} +- {e2:.2f} "
+                       f"by {gap:.2f} > combined SE {comb:.2f}  (t={gap/comb:+.2f})")
+        else:
+            verdict = (f"TIE: {a1['name']} {m1:.2f} and {a2['name']} {m2:.2f} differ by {gap:.2f}, "
+                       f"inside the combined SE {comb:.2f} -- NOT a ranking")
+        print(f"\n=== VERDICT (pooled over every eval, {n1} evals on the top arm) ===\n{verdict}")
 
     ctrl = [x for x in arms if a.control in x["name"] and x["u"]]
     rest = [x for x in arms if a.control not in x["name"] and x["u"]]

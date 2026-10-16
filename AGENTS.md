@@ -749,3 +749,52 @@ control spread, which is what killed every cell-level claim. That is luck, not d
 other axes have no effect at that setting is a duplicate, and N duplicates are a control-spread measurement
 you should decide to run deliberately, not discover afterwards (§35: a grid selects a region, and its
 replicate spread is the thing that says whether any region is distinguishable at all).
+
+## 38. I reported a ranking from ONE 24-episode eval, then retracted it from another, and both were noise
+
+**The incident, in order, all within forty minutes.** Five pure-RvS mixes, each evaluating itself online
+every few epochs on **24 episodes**:
+
+| arm | eval 1 | eval 2 | eval 3 | eval 4 | eval 5 | **pooled (120 eps)** |
+|---|---|---|---|---|---|---|
+| M5 `+PPO wins` | — | **2.00** | 1.33 | 1.50 | 1.62 | **1.60 ± 0.11** |
+| M2 `human+losses` | 0.54 | 0.75 | **1.50** | 0.75 | 1.12 | 0.93 ± 0.17 |
+| M4 `share 0.1` | **0.88** | 0.71 | 0.75 | 1.00 | 1.12 | 0.89 ± 0.08 |
+| M3 `share 0.6` | 0.46 | **0.92** | 0.75 | 0.67 | 0.96 | 0.75 ± 0.09 |
+| M1 `human only` | 0.25 | 0.29 | 0.33 | 0.38 | 0.12 | 0.30 ± 0.04 |
+
+What I told the user, in sequence:
+
+1. "**M4 0.875 beats both BC clones**" — from eval 1, n=24.
+2. "**M5 2.00, the first thing today that might matter**" — from eval 2, n=24.
+3. "**Retraction: M5's lead did not survive; M2 1.50 leads and is the only significant slope**" — from
+   eval 3, n=24. I then **retooled nine pods** off the back of it.
+4. Pooled over all five evals: **M5 1.60 ± 0.11 vs M2 0.93 ± 0.17 — a 0.67 ± 0.20 gap, t = 3.3.** M5 was
+   the leader the whole time.
+
+**Every one of those four statements was a single draw from a distribution whose per-eval swing (±0.75) is
+larger than the entire between-arm spread.** The bolded cell in each row above is that row's maximum — every
+arm "led" at some point. The retraction was as unfounded as the claim, and announcing it cost more credibility
+than the original error, because it made the instrument look like it was reversing rather than like I was
+misreading it.
+
+Note what §35 already said: *"rank on the slope over all updates with its SE, never on a last-k mean."* A
+single eval is the ultimate last-k mean, k=1. The rule existed, was cited in this session, and was broken
+four times inside an hour.
+
+**The rules.**
+
+1. **An eval is a sample, not a measurement.** Before quoting any eval number, state its n and its SE. If
+   the SE is not computable because there is one eval, the number is not quotable — it is a data point.
+2. **Rank on the pooled mean over every eval, with its SE.** `scripts/fleet_signal.py` prints `last`,
+   `POOLED`, `±SE`, slope and t for every arm, and the pooled column is what a claim cites.
+3. **The decision rule is pre-registered IN THE CODE, not applied by eye.** `fleet_signal` now ends with a
+   `VERDICT` line that prints `LEADER` only when the top arm beats the runner-up by **more than the combined
+   SE**, prints `TIE ... NOT a ranking` otherwise, and prints `NO VERDICT` when the top arm has fewer than
+   three evals. A table of numbers invites the eye to pick the maximum; a verdict line does not.
+4. **Do not retool a fleet on an unpooled number** — in either direction. Nine pods were retooled on eval 2
+   and the axis had to be corrected on eval 3, and eval 5 said eval 2 was right. The cost of waiting for
+   three evals was ~8 minutes; the cost of not waiting was two reversals and a wasted axis.
+5. **Size the eval to the difference you need to see.** 24 episodes gives SE ≈ 0.3–0.4 on balanced boss
+   damage, so differences under ~1.0 are invisible per-eval. Either raise the episodes per eval or pool —
+   pooling is free and uses data already paid for, which is why it is the default now.
