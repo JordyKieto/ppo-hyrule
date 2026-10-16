@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.distributions import Categorical
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.combat import band_metrics, deficit_weights, COMBAT_DIM, COMBAT_FIELDS, CombatConfig  # noqa: E402
@@ -112,6 +113,19 @@ def parse_args():
                     help="WHERE to align: `demo` the human's frames, `rollout` the states this policy "
                          "actually visits. Aligning on demo frames shapes the representation where the "
                          "demonstrator went; aligning on rollout states shapes it where the policy is scored")
+    ap.add_argument("--ibrl", action="store_true",
+                    help="IBRL (arXiv 2311.02198) actor proposal: each step, compare the policy's sampled "
+                         "action against --kl-anchor's greedy action with a learned Q head and EXECUTE the "
+                         "better one. No BC term in the loss at all -- the imitation policy influences "
+                         "behaviour by proposing actions, which the paper reports beats loss mixing. "
+                         "Requires --kl-anchor; set --kl-coef 0 to keep the loss pure")
+    ap.add_argument("--q-coef", type=float, default=0.5, help="weight on the IBRL Q head's regression loss")
+    ap.add_argument("--latent-mode", choices=["state", "delta", "projected"], default="state",
+                    help="`state` MSE on the latent itself; `delta` MSE on h_t - h_(t-1), matching how the "
+                         "two policies UPDATE their belief rather than what it is; `projected` FitNets-style, "
+                         "comparing a LEARNED LINEAR MAP of the student's latent to the teacher's, which asks "
+                         "only that the student's latent contain the teacher's information up to a linear "
+                         "transform instead of sharing its basis")
     ap.add_argument("--bc-teacher", default=None,
                     help="frozen policy for --bc-latent-coef, normally the BC checkpoint")
     ap.add_argument("--kl-anchor", default=None,
@@ -307,7 +321,8 @@ def main():
     # ---- KL anchor: a frozen known-good policy. Its log-probs are recorded DURING the rollout so its GRU
     # carries its own hidden state; reusing the trainee's state would be a different network's memory.
     anchor = None
-    bc = bc_teacher = peer = peer_opt = None
+    bc = bc_teacher = peer = peer_opt = latent_proj = None
+    opt_extra = []
     if args.bc_data and (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0
                          or args.align_coef > 0):
         from zelda_rl.bc_demos import coef_at, describe, load_bc_chunks
@@ -324,8 +339,16 @@ def main():
             for q in bc_teacher.parameters():
                 q.requires_grad_(False)
             bc_teacher.eval()
-            LOGGER.info("latent alignment to %s (coef %.3f) at the %s latent on %s states, teacher frozen",
-                        args.bc_teacher, args.bc_latent_coef, args.bc_latent_site, args.bc_latent_states)
+            LOGGER.info("latent alignment to %s (coef %.3f) mode=%s at the %s latent on %s states, "
+                        "teacher frozen", args.bc_teacher, args.bc_latent_coef, args.latent_mode,
+                        args.bc_latent_site, args.bc_latent_states)
+            if args.latent_mode == "projected":
+                # The regressor is trained WITH the policy: it is part of the alignment objective, not of the
+                # policy, and it is deliberately not saved into the checkpoint's model state.
+                w = args.gru if args.bc_latent_site == "gru" else args.gru
+                latent_proj = torch.nn.Linear(w, w)
+                opt_extra = list(latent_proj.parameters())
+                LOGGER.info("FitNets regressor: Linear(%d, %d) trained alongside the policy", w, w)
         if args.bc_peer:
             if args.align_coef <= 0:
                 raise SystemExit("--bc-peer needs --align-coef > 0")
@@ -349,6 +372,23 @@ def main():
             LOGGER.info("BC regulariser %s (coef %.3f, constant): %s", args.bc_data, args.bc_coef, describe(bc))
     elif args.bc_data or args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0:
         raise SystemExit("--bc-data needs one of --bc-coef / --bc-adaptive-frac / --bc-latent-coef > 0")
+
+    q_head = None
+    if args.ibrl:
+        if not args.kl_anchor:
+            raise SystemExit("--ibrl needs --kl-anchor <bc checkpoint>: that policy is the action proposer")
+        from zelda_rl.ppo import ActionValueHead
+        q_head = ActionValueHead(args.gru, args.hidden, n_actions)
+        opt_extra += list(q_head.parameters())
+        LOGGER.info("IBRL actor proposal: the anchor proposes, a Q head picks. Q(%d->%d->%d), coef %.2f",
+                    args.gru, args.hidden, n_actions, args.q_coef)
+
+    if opt_extra:
+        # The optimiser is built before this point, so a regressor created here would get NO gradient steps
+        # and the FitNets arm would silently be the plain-MSE arm. Same failure class as the three
+        # unreachable-gate bugs; add it as a param group rather than hoping.
+        opt.add_param_group({"params": opt_extra, "lr": args.lr})
+        LOGGER.info("added %d FitNets regressor tensors to the optimiser", len(opt_extra))
 
     if args.kl_anchor:
         from zelda_rl.policy_io import load_policy
@@ -379,7 +419,8 @@ def main():
            f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
            + ("   bcL   bcA    bcC" if bc is not None else "")
            + ("   bcZ" if bc_teacher is not None else "")
-           + ("   algn  peerA" if peer is not None else ""))
+           + ("   algn  peerA" if peer is not None else "")
+           + ("  bcPick    qL" if q_head is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -399,6 +440,7 @@ def main():
                     h_a = anchor.init_hidden(N) if (anchor is not None and rec) else None
                     first = torch.ones(N)
                     model.eval()
+                    ibrl_bc_picks = ibrl_steps = 0
                     for t in range(T):
                         obs_buf[t] = obs
                         with torch.no_grad():
@@ -407,11 +449,27 @@ def main():
                                 a, logp, _, v, h = model.act(torch.as_tensor(obs), h, first)
                             else:
                                 a, logp, _, v = model.act(torch.as_tensor(obs))
+                        anc_lg = None
                         if anchor is not None:
                             with torch.no_grad():
                                 x = torch.as_tensor(obs)
                                 lg, _, h_a = anchor.step(x, h_a, first) if rec else (anchor.actor(x), None, None)
+                                anc_lg = lg
                                 anc_buf[t] = torch.log_softmax(lg, -1).numpy()
+                        if q_head is not None and anc_lg is not None:
+                            # IBRL actor proposal: execute whichever of the two candidate actions the Q head
+                            # scores higher, and record the EXECUTED action's log-prob under pi so PPO's
+                            # ratio refers to what was actually done.
+                            with torch.no_grad():
+                                a_bc = anc_lg.argmax(-1)
+                                q = q_head(h)
+                                q_rl = q.gather(-1, a.unsqueeze(-1)).squeeze(-1)
+                                q_bc = q.gather(-1, a_bc.unsqueeze(-1)).squeeze(-1)
+                                take_bc = q_bc > q_rl
+                                a = torch.where(take_bc, a_bc, a)
+                                logp = Categorical(logits=model.pi(h)).log_prob(a)
+                                ibrl_bc_picks += int(take_bc.sum())
+                                ibrl_steps += int(take_bc.numel())
                         first = torch.zeros(N)
                         a = a.numpy()
                         act_buf[t], logp_buf[t], val_buf[t] = a, logp.numpy(), v.numpy()
@@ -480,7 +538,9 @@ def main():
                                              bc_latent_states=args.bc_latent_states,
                                              peer=peer, peer_opt=peer_opt,
                                              peer_bc_coef=args.peer_bc_coef,
-                                             align_coef=args.align_coef, align_kind=args.align_kind)
+                                             align_coef=args.align_coef, align_kind=args.align_kind,
+                                             latent_mode=args.latent_mode, latent_proj=latent_proj,
+                                             q_head=q_head, q_coef=args.q_coef)
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -618,6 +678,8 @@ def main():
                         + (f" {stats.get('bc_latent', float('nan')):>5.2f}" if bc_teacher is not None else "")
                         + (f" {stats.get('align', float('nan')):>6.3f} {100 * stats.get('peer_acc', float('nan')):>5.0f}%"
                            if peer is not None else "")
+                        + (f" {100 * ibrl_bc_picks / max(1, ibrl_steps):>6.1f}% {stats.get('q_loss', float('nan')):>5.2f}"
+                           if q_head is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:

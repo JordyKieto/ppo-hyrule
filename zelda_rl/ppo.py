@@ -196,6 +196,80 @@ def latent_gap(student, teacher, obs, first, w, site: str = "gru"):
     return (d * w).sum() / w.sum().clamp(min=1.0)
 
 
+class ActionValueHead(nn.Module):
+    """Q(s, .) over the discrete action set, read off the policy's GRU state.
+
+    IBRL (Hu et al. 2023, arXiv 2311.02198) selects between the RL actor's action and the BC policy's action
+    with `argmax_a Q(s, a)`. This project's critic is a V head, so there is nothing to compare two candidate
+    actions with -- hence this head. It is a SEPARATE module, not part of the policy, so `--init-from` still
+    loads v15's checkpoint unchanged.
+
+    DEVIATIONS from the paper, stated here because they are structural (AGENTS 13):
+    1. IBRL is built on off-policy RL (RLPD/SAC, replay buffer, n-step targets). This is on-policy PPO, so Q
+       is fitted SARSA-style to the same GAE returns the V head uses -- it is the value of the action actually
+       taken under the current behaviour, not an off-policy optimum.
+    2. Executing the BC policy's action makes the behaviour policy differ from pi, which PPO only tolerates
+       through its ratio clipping. The paper uses off-policy RL precisely to avoid that.
+    3. No ensemble, no bootstrap proposal in the TD target -- actor proposal only.
+    """
+
+    def __init__(self, gru: int, hidden: int, n_actions: int):
+        super().__init__()
+        self.net = nn.Sequential(_layer(gru, hidden), nn.Tanh(), _layer(hidden, n_actions, 1.0))
+
+    def forward(self, h):
+        return self.net(h)
+
+
+def latent_delta_gap(student, teacher, obs, first, w):
+    """Align how the two policies UPDATE their belief, not what their belief is: MSE between `h_t - h_{t-1}`.
+
+    The absolute-state form forces the student's memory to equal the teacher's, which the measurement says is
+    stronger than necessary (encoder gap 0.497 vs GRU gap 0.938 -- the divergence is accumulated memory). Two
+    policies can track the fight the same way while holding different absolute states; matching transitions
+    asks for that and nothing more.
+    """
+    sh, th = student.init_hidden(obs.shape[0]), teacher.init_hidden(obs.shape[0])
+    rows = []
+    for k in range(obs.shape[1]):
+        s_prev, t_prev = sh, th
+        _, _, sh = student.step(obs[:, k], sh, first[:, k])
+        with torch.no_grad():
+            _, _, th = teacher.step(obs[:, k], th, first[:, k])
+        if k > 0:
+            rows.append((((sh - s_prev) - (th - t_prev)) ** 2).mean(-1))
+    if not rows:
+        return torch.zeros((), device=obs.device)
+    d = torch.stack(rows, 1)
+    return (d * w[:, 1:]).sum() / w[:, 1:].sum().clamp(min=1.0)
+
+
+def projected_gap(student, teacher, obs, first, w, proj: nn.Module, site: str = "proj"):
+    """FitNets-style: compare a LEARNED LINEAR MAP of the student's latent to the teacher's, not the raw one.
+
+    Forcing two encoders to produce identical vectors demands they share a basis. A regressor between them
+    (Romero et al. 2015, FitNets) asks only that the student's latent CONTAIN the teacher's information up to
+    a linear transform -- the weaker and more appropriate constraint when both nets solved the task
+    differently (3% action agreement here).
+    """
+    if site == "proj":
+        flat = obs.reshape(-1, obs.shape[-1])
+        sp = proj(student.encode(flat))
+        with torch.no_grad():
+            tp = teacher.encode(flat)
+        d = ((sp - tp) ** 2).mean(-1).reshape(obs.shape[0], obs.shape[1])
+    else:
+        sh, th = student.init_hidden(obs.shape[0]), teacher.init_hidden(obs.shape[0])
+        rows = []
+        for k in range(obs.shape[1]):
+            _, _, sh = student.step(obs[:, k], sh, first[:, k])
+            with torch.no_grad():
+                _, _, th = teacher.step(obs[:, k], th, first[:, k])
+            rows.append(((proj(sh) - th) ** 2).mean(-1))
+        d = torch.stack(rows, 1)
+    return (d * w).sum() / w.sum().clamp(min=1.0)
+
+
 def align_loss(a_lat, b_lat, w, kind: str = "mse", tau: float = 0.1):
     """Pull two encoders' activations for the SAME state together, with gradients into BOTH sides.
 
@@ -219,7 +293,8 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
                          target_kl=None, kl_coef=0.0, bc=None, bc_coef=0.0, bc_adaptive_frac=0.0,
                          bc_teacher=None, bc_latent_coef=0.0, bc_latent_site="gru",
                          bc_latent_states="demo", peer=None, peer_opt=None, peer_bc_coef=1.0,
-                         align_coef=0.0, align_kind="mse"):
+                         align_coef=0.0, align_kind="mse", latent_mode="state", latent_proj=None,
+                         q_head=None, q_coef=0.5):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
     batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
 
@@ -260,10 +335,13 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             h = tt["h"][idx_t[:, 0], idx_n[:, 0]]
             anc = g("anchor_logp") if (kl_coef > 0 and "anchor_logp" in tt) else None
             logps, ents, vals, kls = [], [], [], []
+            qs = []
             for k in range(chunk):
                 logits, v, h = model.step(obs[:, k], h, first[:, k])
                 dist = Categorical(logits=logits)
                 logps.append(dist.log_prob(act[:, k])); ents.append(dist.entropy()); vals.append(v)
+                if q_head is not None:
+                    qs.append(q_head(h).gather(-1, act[:, k:k + 1].long()).squeeze(-1))
                 if anc is not None:
                     lp = torch.log_softmax(logits, -1)
                     # KL(current || anchor), summed over actions: mode-seeking, so it penalises the policy
@@ -277,6 +355,15 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             pg = torch.max(-a * ratio, -a * ratio.clamp(1 - clip, 1 + clip)).mean()
             vl = 0.5 * ((v - ret) ** 2).mean()
             loss = pg - ent_coef * ent.mean() + vf_coef * vl
+            if q_head is not None and qs:
+                # Q(s, a_taken) toward the same return target the V head is fitted to. Without this the
+                # selection in the rollout loop is made by an untrained head and IBRL degenerates into
+                # "sometimes act like the clone at random".
+                q_taken = torch.stack(qs, 1)
+                q_loss = 0.5 * ((q_taken - ret) ** 2).mean()
+                loss = loss + q_coef * q_loss
+                with torch.no_grad():
+                    stats.setdefault("q_loss", []).append(float(q_loss))
             # Every term that reads `b_obs` must be in this gate, or it is unreachable and silently
             # does nothing. That has now happened twice (bc_adaptive_frac, then align_coef), both
             # times caught only because tests/test_bc_regulariser.py asserts each term TRAINS.
@@ -331,7 +418,13 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
                 # both beating her, so aligning the representation is a weaker constraint than aligning
                 # behaviour -- it shares what the clone encodes without overwriting what v15 decided to do.
                 if bc_teacher is not None and bc_latent_coef > 0 and bc_latent_states == "demo":
-                    lat = latent_gap(model, bc_teacher, b_obs, b_first, b_keep, bc_latent_site)
+                    if latent_mode == "delta":
+                        lat = latent_delta_gap(model, bc_teacher, b_obs, b_first, b_keep)
+                    elif latent_mode == "projected":
+                        lat = projected_gap(model, bc_teacher, b_obs, b_first, b_keep, latent_proj,
+                                            bc_latent_site)
+                    else:
+                        lat = latent_gap(model, bc_teacher, b_obs, b_first, b_keep, bc_latent_site)
                     loss = loss + bc_latent_coef * lat
                     with torch.no_grad():
                         stats.setdefault("bc_latent", []).append(float(lat))
@@ -363,7 +456,13 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             if bc_teacher is not None and bc_latent_coef > 0 and bc_latent_states == "rollout":
                 # Align where the policy actually goes, not where the demonstrator went: 13 human episodes
                 # versus the distribution the policy is scored on.
-                lat = latent_gap(model, bc_teacher, obs, first, torch.ones_like(first), bc_latent_site)
+                w1 = torch.ones_like(first)
+                if latent_mode == "delta":
+                    lat = latent_delta_gap(model, bc_teacher, obs, first, w1)
+                elif latent_mode == "projected":
+                    lat = projected_gap(model, bc_teacher, obs, first, w1, latent_proj, bc_latent_site)
+                else:
+                    lat = latent_gap(model, bc_teacher, obs, first, w1, bc_latent_site)
                 loss = loss + bc_latent_coef * lat
                 with torch.no_grad():
                     stats.setdefault("bc_latent", []).append(float(lat))

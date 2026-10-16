@@ -46,7 +46,7 @@ def _ini(sections: dict[str, dict[str, str]]) -> str:
 
 def build_user_dir(root: Path, *, dump_frames: bool = True, internal_res: int = 1,
                    unlimited_speed: bool = False, audio: bool = False,
-                   fullscreen: bool = False) -> Path:
+                   fullscreen: bool = False, volume: int = 100) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     cfg = root / "Config"
     cfg.mkdir(exist_ok=True)
@@ -67,7 +67,8 @@ def build_user_dir(root: Path, *, dump_frames: bool = True, internal_res: int = 
             "CPUThread": "True",
         },
         # Audio off for training (no audio device on pods, less CPU); Cubeb (the macOS default) for watching.
-        "DSP": {"Backend": "Cubeb" if audio else "No Audio Output", "Volume": "100", "EnableJIT": "True"},
+        "DSP": {"Backend": "Cubeb" if audio else "No Audio Output",
+                "Volume": str(max(0, min(100, int(volume)))), "EnableJIT": "True"},
         "Input": {"BackgroundInput": "True"},
         "Interface": {"ConfirmStop": "False", "HotkeysRequireFocus": "False", "UsePanicHandlers": "False",
                       "OnScreenDisplayMessages": "False"},

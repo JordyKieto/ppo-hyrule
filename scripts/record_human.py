@@ -216,13 +216,13 @@ def selftest(env, slot) -> bool:
     return ok
 
 
-def build_env(slots, slots_dir, seconds, visible, pad_ini=""):
+def build_env(slots, slots_dir, seconds, visible, pad_ini="", volume=100):
     from zelda_rl.env import DolphinGoalEnv, EnvConfig
     files = {k: Path(slots_dir) / f"NACE01.s{k:02d}" for k in slots}
     states = {k: read_state_file_v2(f) for k, f in files.items()}
     cfg = EnvConfig(episode_vi=int(seconds * 60), vi_per_step=6,
                     video_backend="Metal" if visible else "Null", unlimited_speed=False,
-                    audio=visible, obs_version=7, task="combat", stall_timeout=600.0,
+                    audio=visible, volume=volume, obs_version=7, task="combat", stall_timeout=600.0,
                     human_pad_ini=pad_ini,
                     # room_radius / fall_drop MUST be the replay harness's values, not the trainer's.
                     # The trainer's 1400 / 150 are tuned for agents that start ALREADY ENGAGED and barely
@@ -341,6 +341,9 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true",
                     help="prove the input offset with NO controller: drive the pad through the env's pipe and "
                          "read it back from gPlayState+0x14. Records nothing")
+    ap.add_argument("--volume", type=int, default=100,
+                    help="Dolphin output volume 0-100. The fight is long and repetitive; 10-15 is audible "
+                         "enough to hear her shriek and the seed impacts without filling the room")
     ap.add_argument("--headless", action="store_true", help="Null backend (for testing only -- you need video)")
     a = ap.parse_args()
 
@@ -374,7 +377,7 @@ def main() -> int:
                     "name": action_name(i, "combat")} for i, (d, b) in enumerate(COMBAT_ACTIONS_V5)]
 
     env = build_env(slots, a.slots_dir, a.seconds, not a.headless,
-                    pad_ini="" if a.selftest else a.pad_ini)
+                    pad_ini="" if a.selftest else a.pad_ini, volume=a.volume)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     # Parse ALL the digits after "ep", not two of them: at 100 episodes `int(name[2:4])` reads "ep100" as 10

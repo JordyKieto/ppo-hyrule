@@ -51,3 +51,4 @@ viz/out/
 # human demonstration savestates and recordings: large binaries, mirrored to S3
 assets/prefight/
 datasets/human/
+assets/mixed/

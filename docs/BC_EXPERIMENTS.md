@@ -83,6 +83,37 @@ transfers. Tracking +0.028 means representation transfer buys nothing either.
 
 **For the v15-init arms (4, 6, 7) the bar is unchanged: 3.275, and beating the constant-0.1 decline.**
 
+## Arms 11-15: the paper-driven designs, and the fleet-wide slope table
+
+All five replace the naive loss-mixing arms. Common: v15 init, the usual base flags, 4 ranks each unless
+stated. Slopes are over ALL updates with the window printed, never a last-k mean (AGENTS 35).
+
+| # | arm | mechanism | n | latest | mean | max | slope +/- SE | t | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 11 | **FitNets projection** | learned linear map of the student's latent before the MSE, rollout states | 14 | 3.03 | **2.87** | 3.37 | -0.0064 +/- 0.0192 | -0.33 | flat, the only arms holding at v15's level |
+| 12 | **latent transition** | MSE on `h_t - h_(t-1)`: match how beliefs UPDATE | 14 | 3.02 | **2.79** | 3.21 | +0.0100 +/- 0.0159 | +0.62 | flat, holding |
+| 13 | **mutual alignment** | both nets trainable, contrastive shared space | 22 | 2.23 | 2.66 | 3.28 | +0.0017 +/- 0.0132 | +0.13 | flat |
+| 14 | **on-policy distillation** | KL to the clone at the states the POLICY visits (Learning by Cheating) | 7 | 1.77 | 2.43 | 3.67 | **-0.2779 +/- 0.0930** | **-2.99** | **DECLINING** |
+| 15 | **IBRL** | clone proposes, a learned Q head picks, no BC loss | 9 | **0.39** | **0.38** | 0.51 | -0.0050 +/- 0.0105 | -0.48 | **BROKEN -- see below** |
+
+**Nothing is rising.** Five arms flat, one declining, one broken. 3 of 15 arms have produced a single update
+above v15's 3.275 (fitnet, mutual, onpol) and none has produced a trend.
+
+### IBRL is broken by a COLD Q head, and that is an implementation error, not a result
+
+`bcPick` -- the fraction of steps where the clone's action was executed -- reads **54-78%** while `qL` is
+still 2.5-10. The head starts untrained, so for the first many updates its "selection" is noise, and the
+policy spends most of its steps executing a policy that takes 0.14 of her 10 HP. v15 went from 2.3 to 0.38
+in nine updates.
+
+The paper does not have this problem: its Q is trained by off-policy RL on a replay buffer that includes the
+demonstrations, so it is informative before it gates anything. On-policy PPO has no such buffer, and the
+proposal was enabled from update 1.
+
+**The fix, not yet run:** gate the proposal on the Q head being useful -- no proposal until `q_loss` falls
+below a threshold or for the first N updates, so the head is fitted on the policy's own actions first. Until
+then any IBRL number from this repo is a measurement of a random gate, and claim R49 says so.
+
 ## RETRACTION: the decay-vs-constant comparison was first read on an unmatched window
 
 `python -m fleet ppo` prints only the **last 8** fleet-mean rows unless `--last N` is passed. The first

@@ -261,6 +261,7 @@ def main() -> int:
     fails += adaptive_checks()
     fails += latent_checks()
     fails += mutual_checks()
+    fails += ibrl_checks()
 
     print()
     for f in fails:
@@ -316,6 +317,51 @@ def mutual_checks() -> list[str]:
         bad.append("the peer never changed -- its optimiser was not stepped, so this is a frozen teacher")
     if st.get("peer_acc", 0) < 0.5:
         bad.append(f"peer accuracy collapsed to {100 * st.get('peer_acc', 0):.0f}% -- alignment overwhelmed its BC loss")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
+
+
+def ibrl_checks() -> list[str]:
+    """IBRL's Q head must learn to RANK actions, or the actor proposal is a coin flip.
+
+    The head is fitted to returns for the action actually taken. The control: build a batch where one action
+    always earns a high return and another always earns a low one, then require Q to order them correctly.
+    A head that reports a falling loss while ranking at chance would make IBRL execute the clone's action
+    arbitrarily -- indistinguishable from the mechanism working, which is why this is asserted.
+    """
+    import torch
+    from zelda_rl.ppo import ActionValueHead, RecurrentEntityActorCritic, ppo_update_recurrent
+    GOOD, BAD = 2, 5
+    torch.manual_seed(0)
+    model = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    q = ActionValueHead(16, 16, A)
+    opt = torch.optim.Adam(list(model.parameters()) + list(q.parameters()), lr=3e-3)
+    r = np.random.default_rng(5)
+
+    def batch(seed):
+        b = rollout(seed=seed)
+        T, N = b["act"].shape
+        a = r.choice([GOOD, BAD], size=(T, N))
+        b["act"] = a.astype(np.int64)
+        b["ret"] = np.where(a == GOOD, 1.0, -1.0).astype(np.float32)   # the only signal Q can learn from
+        return b
+
+    for i in range(40):
+        st = ppo_update_recurrent(model, opt, batch(i), chunk=CH, epochs=1, chunks_per_mb=4, clip=0.2,
+                                  ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, q_head=q, q_coef=1.0)
+    with torch.no_grad():
+        h = model.init_hidden(32)
+        obs = torch.from_numpy(r.standard_normal((32, OBS)).astype(np.float32))
+        qq = q(model.step(obs, h, torch.ones(32))[2])
+        ranked = float((qq[:, GOOD] > qq[:, BAD]).float().mean())
+    bad = []
+    print("\nIBRL Q head: action {} always returns +1, action {} always -1".format(GOOD, BAD))
+    print(f"  Q ranks the good action higher on {100 * ranked:.1f}% of states   "
+          f"q_loss {st.get('q_loss', float('nan')):.4f}")
+    if ranked < 0.9:
+        bad.append(f"Q ranked correctly only {100 * ranked:.0f}% of the time -- the proposal would be a coin flip")
+    if st.get("q_loss", st.get("q_loss")) != st.get("q_loss"):
+        bad.append("no q_loss was reported -- the head is not in the update")
     print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
     return bad
 

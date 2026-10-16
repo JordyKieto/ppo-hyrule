@@ -76,6 +76,7 @@ class EnvConfig:
     combat: "object" = None           # CombatConfig when task == "combat"
     unlimited_speed: bool = False
     audio: bool = False                # game sound (visible play only)
+    volume: int = 100                  # 0-100; low values keep a human recording session bearable
     fullscreen: bool = False
     goal: GoalConfig = field(default_factory=GoalConfig)
     # How many rows of the actor table reach the policy. The table is N_ACTORS=16 rows x 46 dims = 736 of the
@@ -134,7 +135,7 @@ class DolphinGoalEnv:
         self.slot_states = slot_states
         shutil.rmtree(instance_dir, ignore_errors=True)
         ud = build_user_dir(instance_dir.resolve(), dump_frames=False, unlimited_speed=cfg.unlimited_speed,
-                            audio=cfg.audio, fullscreen=cfg.fullscreen)
+                            audio=cfg.audio, fullscreen=cfg.fullscreen, volume=cfg.volume)
         for k, f in slot_files.items():
             shutil.copy(f, ud / "StateSaves" / f"NACE01.s{k:02d}")
         if cfg.human_pad_ini:
