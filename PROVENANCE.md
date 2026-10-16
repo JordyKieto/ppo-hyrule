@@ -743,6 +743,71 @@ arm's updates 18-25 were compared against the constant arm's 1-8. The error move
 hypothesis under test. Series are now pulled with `--last 60` and the update range is printed beside every
 slope (AGENTS 12). The instrument gave no sign: both windows print identically.
 
+### What is IN the 100-game corpus: the event chain, the slingshot, and the reward it earns (M)
+
+Mined from the recorded observations by field name (`scripts/mine_corpus.py`, `scripts/mine_slingshot.py`),
+so it is re-derivable from the dataset alone. Per-episode output in `results/corpus_events.json`.
+
+**The damage chain, from 678 real hits across 100 wins:**
+
+| condition within 2 s before her HP falls | share |
+|---|---|
+| she was **STUNNED** | **678/678 = 100.0%** |
+| a seed impact had landed | 195/678 = 28.8% |
+| the `gohma_vulnerable` flag was set | **9/678 = 1.3%** |
+
+**A stun is the gate, absolutely, and `gohma_vulnerable` is the wrong signal to key a reward on** -- it is set
+for 1.3% of real damage events. (`gohma_stunned` covers `fall`/`land`/`stunned`/`stunned_hit`, which is what
+actually gates the sword.)
+
+**What a human win looks like:** 6.78 hits, **3.13 stuns** (~2 hits per stun), 2.99 seeds fired, 1.71 nuts,
+3.72 larva hits, 0.79 times hurt, first damage at step 190 (19 s -- a third of the episode is setup),
+Z-targeted 63% of the time, slingshot held 49%, **shield 0%** (the human never blocks), mean range to her eye
+400 u but **50 u at the moment damage lands**.
+
+**Correlations with damage dealt** (per episode, n=100): slingshot held **+0.502**, Z-target +0.332,
+vulnerable onsets +0.288, seeds fired +0.202, nuts +0.064, times hurt -0.235, **larva hits -0.598**, **time she
+spends on the ceiling -0.559**. Two of these contradict the current reward: killing larvae is strongly
+NEGATIVE for damage (a distraction, which vindicates zeroing those terms), and so is time she spends on the
+ceiling (unhittable up there -- reward should pay for bringing her down, not for waiting).
+
+**The slingshot, 299 fires / 260 landed = 87% hit rate.** By her state when fired: `ceiling_eye_red` **155
+fires (52% of all shots), 92.9% land**; `ceiling_idle` 37 (89.2%); `ceiling_move` 34 (85.3%); `fall` 25
+(100%); `ceiling_spawn` 19 (84.2%); **`ceiling_wait` 14 (7.1%)** -- the one state where shots are wasted.
+
+Hit vs miss: aim alignment to her eye **0.607 vs 0.270** is the discriminator; **first-person aim 0.115 vs
+0.359**, i.e. first-person aiming is associated with MISSING, so a reward paying for it would pay for the
+failure mode; range 491 u vs 442 u, so LONGER is better (450 u+ lands 91.8%, 300-450 u 81.2%) because those
+are ceiling shots; `ready_to_fire` is irrelevant (0.008 vs 0.026).
+
+**What an impact buys, 371 impacts:** a stun follows 67.7% of the time and **0.70 of her 10 HP** comes off in
+the next 3.5 s -- but entirely conditional on her state at impact: `fall`/`land`/`stunned` 100%,
+`floor_prepare` 95.2%, `floor_eye_close` 88.9%, **`ceiling_eye_red` only 40.6%**, `floor_walk` 42.3%,
+`ceiling_spawn` 26.7%, and **`ceiling_idle`/`ceiling_move` 0% across 71 impacts**. So 71 of 371 impacts were
+wasted seeds, and even a red-eye hit converts only ~40% of the time: hitting the red eye is necessary, not
+sufficient.
+
+**Reward implications this supports:** pay for an impact CONDITIONED on her state (eye-red, prepare,
+eye-close -- never idle/move), pay for the KNOCKDOWN rather than the impact, and pay for neither
+first-person aim nor larva kills.
+
+**The return the corpus earns, and why it is not a target (M).** Summing the recorded per-step reward:
+
+| | human corpus (100 eps) | best PPO, decay r1 | best PPO, constant r1 |
+|---|---|---|---|
+| return | **+316.9** (246 to 372) | +35.7 | +39.4 |
+| boss damage | **7.80** | 2.09 | 2.60 |
+| return per HP | +40.6 | +17.0 | +15.1 |
+| corr(return, damage) | **+0.719** | — | — |
+
+The recorder used the FULL gohma profile and every PPO run uses `--reward simple` (39 terms zeroed), so the
+absolute figures are on different functions. The structural finding survives that caveat: fitting the human's
+return on damage gives **return ~= +253.1 + 8.19 x damage**, so **~80% of it is damage-independent**. Damage
+5-7 earns +295 and a full 10-HP kill earns +335 -- a complete kill is worth 13% more return than a half-kill.
+A reward that moves 13% between half-killing and killing her is not a reward for killing her (AGENTS 34). On
+`GOHMA_SIMPLE` the same episodes would be worth about `4 x 7.8 + 60 = +91` plus the time bonus, i.e. ~2.5x the
+best policy's +36 rather than 8x.
+
 ### Does MORE demonstration data win more? 100 games vs 13, measured online (M)
 
 The corpus grew from 13 to **100 human wins** (54,626 steps, 23 pre-fight starts, 9 slots) and a clone was
