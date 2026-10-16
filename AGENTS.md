@@ -655,3 +655,46 @@ was sound; only its ranking was fiction.
    the confirmation when planning the grid — it is not optional, and here it reversed the conclusion.
 5. **Pre-register the decision rule**: the winner must beat the runner-up by more than the combined standard
    error, or the result is a tie and the grid chose a region only.
+
+## 36. The 2026-10-16 streak: eleven failures, one shape — a check that did not exist, or one that lied
+
+This section exists because §21 and §33 both said "a rule that is only prose will be broken again" and then
+**eleven** things broke in one session anyway. The money is the part worth remembering: **~30 of 35 pods sat
+dead and billing at ~$16/hr**, the 17 sweep arms crashed at 08:59 and were not noticed until 09:2x, and that
+is the *small* number next to the 88-minute bootstrap stall (§20) and the lost 34-pod fleet.
+
+Each row names the check that now exists. **A row without a check is a row that will come back.**
+
+| # | what failed | the money/time | the check that now stops it |
+|---|---|---|---|
+| 1 | Short episode (< one chunk) hit `W[-n:] = [...]*n` with n == 0; `W[-0:]` is `W[0:]`, so one episode wiped every weight collected. `keep` came back with **19** rows beside `obs` with **6890** → `IndexError: index 6538 ... size 19` | **17 of 22 sweep arms, ~$9/hr of dead pods** | weights appended per window in the same loop; `load_rvs_windows` asserts all six keys equal-length before returning; `merge_capped` asserts again after every Dyna merge; `tests/test_rvs_data.py` runs the n == 0 case |
+| 2 | `tests/test_rvs_data.py` used pytest fixtures. **There is no pytest in this venv**, so the test written to catch #1 ran *nothing* and reported nothing | the fix shipped unverified | `tests/run_all.py` runs every `tests/*.py` and **fails on a test that collects nothing or imports pytest** |
+| 3 | The loader printed `solved multiplier 0.88 -> winning play is 0.0% of the gradient`. `win_share_actual` counted weights `> 1.0`; with wins at 11.2% of steps and `--rvs-win-share 0.1` the multiplier is **below 1**, so every winning window failed the test | a fabricated number in every arm's log | the share is computed from the win **mask**, not from a threshold on the weight |
+| 4 | 5 hybrid arms died on `No space left on device` writing a savestate, invisibly | 5 arms | `disk` is a `fleet preflight` check (≥4 GB), and `fleet launch` reclaims `runs/*/instances`, `wandb`, `runs/*.snaps` |
+| 5 | Nothing reported pod liveness across experiments; "everything is dead" was discovered by the user, twice | ~30 pods × ~34 min | `scripts/fleet_health.py`: every experiment with live pods, **crash vs clean exit**, disk, process count, update count, log freshness, **non-zero exit** |
+| 6 | `fleet_health.py` first called the 7 **finished** `gohma-s2` arms DEAD | cried wolf on correct work | a clean exit is matched by its own completion marker before any traceback scan |
+| 7 | The whole fleet was lost with **every arm checkpoint on it** (RunPod balance exhausted), because `fleet sync` is manual | a session of training | `zelda_rl/ckpt_s3.py` uploads at `torch.save` time, daemon thread, and logs `CHECKPOINT BACKUP FAILED ... weights exist ONLY on this pod` |
+| 8 | `fleet ckpt` **deduped by file size**, so a byte-identical reorder never reached the pods | two restarts ran old code | after any push, `grep` the pod for a string unique to the new code — §16, applied: the relaunch helper verifies the fix is present and **refuses to launch the pod if it is not** |
+| 9 | `eval_fleet.py --ckpt` returned before the sinks were opened, so `--dump-steps` and `--per-episode-out` were silently inert | the v15 failure-anatomy run produced no rows | the `--ckpt` early return is below sink setup |
+| 10 | `grep … | tail` on a long job buffers; a healthy run looked hung — **§24, in scripts written the same night** | twice | long jobs write to a file with `-u` and are read afterwards; never pipe one into `tail` |
+| 11 | zsh `set -- $VAR` does not word-split, so three launches passed **empty args** | three launches with no slots | arrays, and the launcher echoes its own resolved argv before exec |
+
+**The honest finding.** Rows 1, 3, 8 and 9 are all one error: **I trusted a success signal instead of the
+artefact.** The loader said "6890 windows"; `keep` had 19. rsync exited 0; the file was not there. `--ckpt`
+returned 0; no rows were written. The log said 0.0%; wins carried 10%. §16 is the oldest rule in this file
+about exactly that, and it keeps being read as being about rsync specifically. It is not:
+
+> **Every number a program prints about its own output is a claim, not evidence. Check the artefact: the
+> array's shape, the file on disk, the row count, the string in the deployed file.**
+
+Rows 2 and 6 are the second shape, and it is worse than having no check: **a check that cannot fail is a
+check that lies.** The test for #1 passed by running nothing. The health script's first version failed on
+seven pods that had done their job. So, before a check is trusted:
+
+1. **Run it against the broken state** and watch it fail. If it cannot be made to fail, it is decoration.
+2. **Run it against the healthy state** and watch it pass. A check that flags correct work gets ignored
+   within a day, which is the same as not existing. (§22 said this about control loops; it is true of every
+   check.)
+3. Checks live where they execute — `tests/`, `fleet preflight`, `fleet_health.py` — **not in a new document.**
+   This file gets five more lines, not a new MD. Prose does not run (§21), and a document nobody opens is
+   worse than prose: it is prose that feels like work.
