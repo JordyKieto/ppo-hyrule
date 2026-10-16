@@ -419,8 +419,6 @@ def main():
     if a.ckpt:
         emit(run_one(Path(a.ckpt), a))
         return
-    if not a.watch:
-        raise SystemExit("pass --ckpt or --watch")
 
     if not a.watch and not a.watch_published:
         raise SystemExit("pass --ckpt, --watch or --watch-published")
