@@ -589,7 +589,11 @@ def cmd_launch(a) -> None:
         run(pod, f"mkdir -p {R_REPO}/logs")
         rsync(pod, [tmp], f"{R_REPO}/logs/launch_{run_name}.sh")
         Path(tmp).unlink(missing_ok=True)
-        run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; rm -rf {R_REPO}/runs/instances {R_REPO}/runs/*/instances")
+        run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; "
+                 f"rm -rf {R_REPO}/runs/instances {R_REPO}/runs/*/instances {R_REPO}/wandb "
+                 f"{R_REPO}/runs/*/wandb {R_REPO}/runs/*.snaps; "
+                 # a previous run's instance dirs are ~230 MB x envs and are never read again
+                 f"find {R_REPO}/runs -maxdepth 2 -name instances -type d -exec rm -rf {{}} + 2>/dev/null; true")
         pod["run_name"], pod["_envs"] = run_name, envs
         return pod
 
@@ -738,6 +742,12 @@ PREFLIGHT = {
                   "fewer than 9 mix policies: resolve_checkpoint will fail on episode 1"),
     "states":    (f"test $(ls {R_REPO}/assets/states 2>/dev/null | wc -l) -ge 10 && echo 1 || echo 0",
                   "fewer than 10 savestates"),
+    # Each env copies a ~230 MB NAND into its instance dir, so 8 envs need ~2 GB before a single episode
+    # runs. On 2026-10-16 five hybrid arms died with "No space left on device" writing a savestate, after a
+    # collected corpus plus a downloaded corpus plus a dead run's instance dirs filled the volume -- and
+    # nothing reported it, so the pods idled and billed. 4 GB is the floor that keeps a launch honest.
+    "disk":      ("test $(df -BG / | awk 'NR==2{gsub(/G/,\"\",$4); print $4}') -ge 4 && echo 1 || echo 0",
+                  "under 4 GB free: 8 envs need ~2 GB of instance dirs, so training dies mid-episode"),
 }
 
 

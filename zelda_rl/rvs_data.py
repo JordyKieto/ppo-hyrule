@@ -60,25 +60,30 @@ def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weig
             continue
         g = conditioning(obs, field_offsets(str(z["obs_fields"])), won)
         x = np.concatenate([obs, g], 1)
+        # -1 marks "winning", resolved after the multiplier is solved. Appended per window, NOT slice-assigned:
+        # `W[-n:] = ...` with n == 0 (an episode shorter than one chunk) is `W[0:]` and wiped every weight
+        # collected so far, leaving keep shorter than obs -- the `index 6538 ... size 19` crash on gohma-col.
         for k_, i in enumerate(range(0, len(act) - chunk + 1, chunk)):
             O.append(x[i:i + chunk]); A.append(act[i:i + chunk])
             f0 = np.zeros(chunk, np.float32)
             if i == 0:
                 f0[0] = 1.0
-            F.append(f0); W.append(np.float32(1.0))     # filled in below once the multiplier is solved
+            F.append(f0); W.append(np.float32(-1.0 if won else 1.0))   # -1 = winning, kept as the MASK
             EP.append(ep_id); POS.append(k_)
-        W[-len(range(0, len(act) - chunk + 1, chunk)):] = [np.float32(1.0 if not won else -1.0)] * \
-            len(range(0, len(act) - chunk + 1, chunk))   # -1 marks "winning", resolved after solving
         files += 1; n_ep += 1; n_win += int(won); steps += len(act); ep_id += 1
     solved = win_weight if win_weight > 0 else solve_win_weight(w_steps, a_steps, win_share)
-    W = [np.full(chunk, solved if float(w) < 0 else 1.0, np.float32) for w in W]
+    wins_mask = np.array([float(w) < 0 for w in W], bool)
+    W = [np.full(chunk, solved if m else 1.0, np.float32) for m in wins_mask]
     if not O:
         raise SystemExit(f"--rvs-data {dirs}: no usable episodes")
+    if not (len(O) == len(A) == len(F) == len(W) == len(EP) == len(POS)):
+        raise RuntimeError(f"RvS load ragged: obs {len(O)} act {len(A)} first {len(F)} keep {len(W)} "
+                           f"ep {len(EP)} pos {len(POS)}")
     out = {"obs": torch.from_numpy(np.stack(O)), "act": torch.from_numpy(np.stack(A)),
            "first": torch.from_numpy(np.stack(F)), "keep": torch.from_numpy(np.stack(W)),
            "ep": torch.tensor(EP), "pos": torch.tensor(POS)}
     wsum = float(out["keep"].sum())
-    win_share_actual = float(out["keep"][out["keep"] > 1.0].sum()) / max(wsum, 1e-9)
+    win_share_actual = float(out["keep"][torch.from_numpy(wins_mask)].sum()) / max(wsum, 1e-9)
     out["n_static"] = len(O)          # anchored: never evicted by the Dyna refresh
     out["desc"] = (f"{n_ep} episodes ({n_win} wins, {100*n_win/max(n_ep,1):.1f}%), {steps:,} steps -> "
                    f"{len(O)} windows of {chunk}; wins are {100*w_steps/max(a_steps,1):.1f}% of steps, "
@@ -149,9 +154,15 @@ def merge_capped(rvs: dict, fresh: dict, cap: int, fresh_share: float = 0.5) -> 
         return rvs
     n_static = int(rvs.get("n_static", rvs["obs"].shape[0]))
     out = {"n_static": n_static}
-    for k in ("obs", "act", "first", "keep", "ep", "pos"):
-        if k not in rvs or k not in fresh:
-            continue
+    keys = ("obs", "act", "first", "keep", "ep", "pos")
+    # EVERY key must be present on both sides and must end the same length. Skipping one while the others
+    # grew is what produced `index 3932 is out of bounds for dimension 0 with size 19`: obs kept growing
+    # while keep stayed at its original size, and the sampler then indexed past it.
+    missing = [k for k in keys if k not in rvs or k not in fresh]
+    if missing:
+        raise RuntimeError(f"RvS buffer merge: {missing} missing (rvs has {sorted(rvs)}, "
+                           f"fresh has {sorted(fresh)})")
+    for k in keys:
         static, prior = rvs[k][:n_static], rvs[k][n_static:]
         fk = fresh[k]
         if k == "ep":                        # keep fresh episode ids distinct from everything already held
@@ -175,6 +186,9 @@ def merge_capped(rvs: dict, fresh: dict, cap: int, fresh_share: float = 0.5) -> 
         if fw > 0:
             want = (fresh_share / max(1.0 - fresh_share, 1e-6)) * sw
             out["keep"][n_static:] = w[n_static:] * (want / fw)
+    n = {k: int(out[k].shape[0]) for k in keys}
+    if len(set(n.values())) != 1:
+        raise RuntimeError(f"RvS buffer merge produced ragged keys: {n}")
     w = out["keep"]
     out["desc"] = rvs.get("desc", "")
     out["fresh"] = int(fresh["obs"].shape[0])
