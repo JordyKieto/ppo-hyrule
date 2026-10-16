@@ -15,11 +15,14 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+
+torch.set_num_threads(1)   # AGENTS 28: this script now opens Dolphins for its online eval
 import torch.nn.functional as F
 
 REPO = Path(__file__).resolve().parents[1]
@@ -60,6 +63,48 @@ def load_all(dirs, limit_per_dir=0):
     return eps
 
 
+def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> float | None:
+    """Play the game with the TARGET prompt and print balanced boss damage with its slope.
+
+    Reuses scripts/eval_fleet.evaluate rather than reimplementing a rollout -- one tested path, and the
+    checkpoint is loaded through policy_io, which wraps an `rvs_cond` checkpoint with the target prompt
+    g = (1, 1, 0) automatically. Balanced = the UNWEIGHTED mean of the per-slot means, because an
+    episode-weighted average moves with the slot mix and cannot compare arms (AGENTS 29).
+    """
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("eval_fleet", Path(__file__).with_name("eval_fleet.py"))
+    ef = _ilu.module_from_spec(spec); spec.loader.exec_module(ef)
+    slots = [int(x) for x in a.eval_slots.split(",") if x.strip()]
+    try:
+        eps, _ = ef.evaluate(ckpt, slots, a.eval_episodes, a.eval_envs, a.slots_dir, a.episode_seconds)
+    except Exception as e:  # noqa: BLE001
+        print(f"  EVAL epoch {ep_i}: FAILED ({type(e).__name__}: {str(e)[:90]})", flush=True)
+        return None
+    if not eps:
+        print(f"  EVAL epoch {ep_i}: no episodes", flush=True)
+        return None
+    per = {}
+    for e in eps:
+        per.setdefault(e["slot"], []).append(float(e.get("boss_damage", 0)))
+    bal = float(np.mean([np.mean(v) for v in per.values()]))
+    pooled = float(np.mean([d for v in per.values() for d in v]))
+    wins = sum(1 for e in eps if e.get("boss_defeated"))
+    hist.append((ep_i, bal))
+    trend = ""
+    if len(hist) >= 3:
+        u = np.array([h[0] for h in hist], float); d = np.array([h[1] for h in hist], float)
+        A = np.vstack([u, np.ones_like(u)]).T
+        beta, *_ = np.linalg.lstsq(A, d, rcond=None)
+        r = d - A @ beta
+        se = float(np.sqrt((r @ r / max(len(u) - 2, 1)) * np.linalg.inv(A.T @ A)[0, 0]))
+        t = beta[0] / se if se > 0 else float("nan")
+        trend = (f" | slope {beta[0]:+.4f} +- {se:.4f} /epoch  t={t:+.2f}  "
+                 f"{'RISING' if t > 2 else 'FALLING' if t < -2 else 'flat'} over {len(hist)} evals")
+    print(f"  EVAL epoch {ep_i}: dmgB(balanced) {bal:.3f} | pooled {pooled:.3f} | wins {wins}/{len(eps)} | "
+          f"slots {len(per)}{trend}", flush=True)
+    return bal
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", action="append", required=True, help="repeatable: corpus directories")
@@ -81,6 +126,14 @@ def main() -> int:
     ap.add_argument("--episode-seconds", type=float, default=120.0)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", default="checkpoints/kept/rvs.pt")
+    # ONLINE eval inside the arm. Offline accuracy is not the headline: the clone reached 53% val accuracy
+    # and 0.33 boss damage, and the only number that ranks a policy is the damage it does in the game
+    # (AGENTS 34). Evaluating here means one pod gives training AND its own feedback loop, with a slope.
+    ap.add_argument("--eval-every", type=int, default=4, help="online eval every N epochs (0 = never)")
+    ap.add_argument("--eval-episodes", type=int, default=24)
+    ap.add_argument("--eval-envs", type=int, default=8)
+    ap.add_argument("--eval-slots", default="3,4,5,6,7,8")
+    ap.add_argument("--slots-dir", default="assets/states")
     a = ap.parse_args()
     if a.seed is not None:
         torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -133,7 +186,7 @@ def main() -> int:
 
     model = RecurrentEntityActorCritic(global_dim, n_actors, actor_dim, n_actions, hidden=a.hidden, gru=a.gru)
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
-    best = (0.0, -1)
+    best, best_dmg, hist = (0.0, -1), (0.0, -1), []
     print(f"\n{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val acc':>9}{'val WIN acc':>13}")
     for ep_i in range(1, a.epochs + 1):
         model.train()
@@ -146,8 +199,10 @@ def main() -> int:
                            else (0.0, float("nan"), 0))
         print(f"{ep_i:>6}{tl:>12.4f}{100*ta:>10.1f}%{100*vacc:>8.1f}%{100*vwacc:>12.1f}%")
         score = vwacc if vwacc == vwacc else vacc        # accuracy ON WINNING play is what we want
-        if score > best[0]:
-            best = (score, ep_i)
+        do_eval = a.eval_every and (ep_i % a.eval_every == 0 or ep_i == a.epochs)
+        if do_eval or score > best[0]:
+            if score > best[0]:
+                best = (score, ep_i)
             out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
             cfg = {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
                    "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden, "gru": a.gru,
@@ -164,7 +219,16 @@ def main() -> int:
             torch.save({"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
                         "episode_count": 0, "config": cfg}, out)
             ckpt_s3.upload(out, "rvs", ep_i)
+        if do_eval:
+            ev = online_eval(Path(a.out), a, ep_i, hist)
+            if ev is not None and ev > best_dmg[0]:
+                best_dmg = (ev, ep_i)
+                keep = Path(a.out).with_name(Path(a.out).stem + "_bestdmg.pt")
+                shutil.copy(Path(a.out), keep)
+                ckpt_s3.upload(keep, "rvs_bestdmg", ep_i)
     print(f"\nbest val WIN accuracy {100*best[0]:.1f}% at epoch {best[1]} -> {a.out}")
+    if best_dmg[1] > 0:
+        print(f"best ONLINE boss damage (balanced) {best_dmg[0]:.3f} at epoch {best_dmg[1]}")
     print(f"  inference prompt is g = {TARGET} (take all her HP, win, take no damage)")
     return 0
 

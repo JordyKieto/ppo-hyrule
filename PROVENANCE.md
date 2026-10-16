@@ -1029,6 +1029,90 @@ demonstrations shape a few early updates and nothing after. 0.02 against the mea
 ~0.06 to the loss, the same order as PPO's own policy loss (0.01-0.1), so the tail keeps real influence.
 `bc_demos.coef_at()` is the schedule and `bcC` in the log line is the value actually applied.
 
+### FAILURE: 23 of 35 arms died on 2026-10-16, two causes, and the fleet idled unreported (M)
+
+No result from these arms. This records why they produced none, so the relaunch is not mistaken for a rerun
+of a measured config.
+
+| experiment | pods | what happened | cause |
+|---|---|---|---|
+| `gohma-col` | 22 | all **18 RvS arms** died in their first updates, `IndexError: index 6538 is out of bounds for dimension 0 with size 19` (identical on r10 and r12). The 4-5 survivors were the coef-0 controls, which never load the RvS corpus. | **code bug**, below |
+| `gohma-s3` | 6 | **5 arms** died with `No space left on device` writing a savestate | disk: collected corpus + downloaded corpus + a dead run's ~3.2 GB of instance dirs |
+| `gohma-s2` | 7 | **not dead.** Finished cleanly: train, then 80-episode eval (`slot 10 … n=8`), then exit | the health check called every process-less pod DEAD. That was a false alarm. |
+
+**The bug.** `zelda_rl/rvs_data.load_rvs_windows` slice-assigned each episode's window weights with
+`W[-n:] = [...] * n`. An episode shorter than one 60-step chunk gives `n == 0`, `W[-0:]` is `W[0:]`, and that
+**replaced every weight collected so far with an empty list**. Reproduced locally on the real sweep config
+(`datasets/human/gohma` + `datasets/ppo/sample`, `max_windows=4000`): `obs` 2717 windows, `keep` **1807**.
+The sampler draws indices over `obs` and then indexes `keep`, which is where the crash happened. The first
+"fix" (a ragged-key guard in `merge_capped`) only moved the crash. It did not cause it and did not fix it.
+**Retracted:** the earlier claim that the bug was in the Dyna merge.
+
+**Fixed:** weights are appended per window (no slice assignment), and the loader asserts all six keys have equal
+length. Verified on the same real config: load gives `keep` 2717 = `obs` 2717, six simulated Dyna refreshes give
+2813 on every key, and fresh/anchor share is 0.50/0.50 as configured. `tests/test_rvs_data.py` builds a
+corpus with sub-chunk episodes, **fails on the old code** (`keep` 3 vs `obs` 8) and passes on the new.
+
+**Disk:** `fleet launch` now removes stale instance dirs, `wandb/` and `*.snaps` before starting, and
+`fleet preflight` has a `disk` check (≥4 GB free, because 8 envs need ~2 GB of NAND copies).
+**Health check:** `scripts/fleet_health.py` now reports CRASHED (traceback or disk error in the log) separately
+from FINISHED (clean exit), and only CRASHED and low disk count as problems.
+
+**Cost not recorded at the time** (U): idle minutes × pods for `gohma-col` and `gohma-s3` between death and
+discovery. Recover from W&B last-step timestamps against the fleet kill log while the pods still exist.
+
+**RETRACTED, same day: the `gohma-s3` cause above is wrong.** It was not "disk: collected corpus + downloaded
+corpus + instance dirs", and the pods were not small. `/tmp` held **27–34 GB of a 40 GB overlay** in five
+`evalf_*` directories of **6.5 GB each** — the per-instance Dolphin user dirs that `scripts/eval_fleet.py`
+creates as `/tmp/evalf_<pid>` and never deletes; `scripts/record_human.py` leaks `human_*` identically. Every
+pod on the fleet was carrying ~6.5 GB of it, and `gohma-s3` had run the most evaluations, so `gohma-s3` died
+first. Measured when the pods were cleaned: **r0 1 → 38 GB free, r1/r2/r4 4 → 37–38 GB, every `gohma-col` and
+`gohma-s2` pod +6 to +18 GB.** The first diagnosis looked at `/workspace` only (~2 GB) and concluded the image
+filled the disk. **Fixed** in `zelda_rl/tmpdirs.py`: the dir is removed at exit AND any `<prefix>_<pid>` whose
+pid is gone is reaped on the next run, because an OOM-killed run cannot run `atexit` — which is how 33 GB
+accumulated. `fleet launch` clears them; `fleet_health` prints `TMP=` and flags ≥5 GB, finished pods included.
+
+---
+
+### THE RvS SWEEP: 23 cells, and the coefficient does nothing (M)
+
+Launched 2026-10-16 after the ragged-buffer fix, from one init (`gohma-kl-v15-r4_latest.pt`), 8 envs, 120 s
+episodes, slots 3–8, `--reward simple`, lr 3e-4. Grid: `--rvs-coef` ∈ {0, 0.25, 0.5, 1.0} × `--rvs-win-share`
+∈ {0.1, 0.3, 0.6} × Dyna {static, refreshing}. Corpus per pod: **619 episodes — 100 human wins + ~519 pooled
+PPO — 120 wins (19.4%), ~430k steps → ~6,900 windows of 60**. Solved win multiplier confirmed per arm in the
+log: **0.86 / 3.45 / 11.5** for the three shares.
+
+Headline is `boss_damage_balanced` (§34), compared **over the same update numbers on every arm** (§12/§35):
+
+| group | arms | mean dmgB, updates 1–11 | vs control | t |
+|---|---|---|---|---|
+| **control `c=0`** | 5 | **2.512** (sd 0.380, range 2.00–2.97) | — | — |
+| `c=0.25` | 5 | 2.400 | −0.112 ± 0.197 | −0.57 |
+| `c=0.5` | 6 | 2.353 | −0.160 ± 0.188 | −0.85 |
+| `c=1.0` | 6 | 2.568 | +0.056 ± 0.196 | +0.28 |
+
+**Every coefficient is inside the noise, |t| < 1.** No monotone trend in `win_share` at any coefficient, and
+Dyna-on vs Dyna-off is scattered. **The decisive number is the control's own spread: five replicates of one
+identical config span 2.00–2.97 (sd 0.380), which is larger than any arm-to-arm difference the grid produced.**
+That spread is the floor for every claim of this shape and is the reason the grid cannot be read cell-by-cell
+(§35).
+
+**The one solid finding is about the baseline, not RvS.** The five controls ran to 60 updates and ALL declined:
+slopes **−0.0053, −0.0095, −0.0162, −0.0176, −0.0360** per update, three at |t| > 3.7, ending at dmgB 1.33–2.27
+against v15's **3.275**. Continuing PPO from v15 under this config *loses* boss damage, with or without RvS.
+
+The hybrid (`rvs-ppo-dyna2`, RvS+PPO Dyna, `c=0.5 w=0.3`, 400 updates) reached only 4 updates before the fleet
+was killed: group mean dmgB 2.40, mean slope −0.090, **no result**. Its rank r0 alone read +0.668 (t=3.48) and
+that is **not** a result — a single FedAvg rank has been retracted twice in this project (§5).
+
+Fleet killed at 10:57 UTC, `$0.00/hr`. Arms: 23 sweep cells + 6 hybrid + 6 hybrid replicates, 35 pods.
+
+**Pure RvS has never been run (U).** Everything above is RvS as an *auxiliary loss on top of PPO*.
+`scripts/train_rvs.py` exists and has produced no artefact: no `checkpoints/kept/rvs*.pt`, no `results/*rvs*`.
+The single attempt (`gohma-s3 r0`, log `rvs.log`) died on the `/tmp` ENOSPC above. So the sweep's null says
+the coefficient does not help PPO; it says **nothing** about whether return-conditioned BC works on its own.
+This is the §13 failure — variants of an adopted method were run before the method itself.
+
 ---
 
 ## 4. WM track

@@ -698,3 +698,54 @@ seven pods that had done their job. So, before a check is trusted:
 3. Checks live where they execute — `tests/`, `fleet preflight`, `fleet_health.py` — **not in a new document.**
    This file gets five more lines, not a new MD. Prose does not run (§21), and a document nobody opens is
    worse than prose: it is prose that feels like work.
+
+## 37. The question was already answered on the pods — four times asked, four times deferred
+
+§36 is about code that failed. This one is about **me**, and it cost more than any of the bugs in it.
+
+**The incident.** "Is there ANY signal? Has ANY formula done anything?" was asked four times over ~40
+minutes. The answer was in every pod's log the whole time: 23 arms, their per-update boss damage, and five
+replicates of the control to compare against. Each time, the reply was that a legitimate read needed
+"~45 more minutes" of training. When the comparison was finally done **at matched updates** it took 90
+seconds and said, unambiguously, **no effect at any coefficient** (|t| < 1 on all three, control spread sd
+0.380 larger than every arm difference). Three of the four deferrals were wrong, and the fourth was only
+right about the *confirmation*, not about the *read*.
+
+Worse, the 40 minutes were not spent thinking — they went on three self-inflicted parse bugs:
+
+- `grep 'upd '` matched only the repeating **header** line, so the first pass reported `n=0` for all 23 arms
+  and looked like "no data yet";
+- the `steps` column prints thousands separators (`566,400`), so a `(\S+)` field regex failed on every row;
+- the throwaway script was named `signal.py`, which **shadowed the stdlib module** and broke `subprocess`
+  inside `fleet.cli`.
+
+**The rules.**
+
+1. **A question asked twice is a script.** §31 already said "use the instrument you already have before you
+   wait on a slower one" and it was cited in this very session while the slower instrument was being waited
+   on anyway. `scripts/fleet_signal.py` now prints every arm's slope ± SE and the matched-update comparison
+   against the controls, pooling FedAvg ranks into one row. It is the answer to "is anything working", and it
+   takes seconds.
+2. **"We need N more minutes" is a claim that must be checked against what is already on disk.** The honest
+   form is: "the confirmation needs N minutes; here is what the data says NOW, with its n." Never the second
+   half omitted.
+3. **A throwaway script is still code.** Name it so it cannot shadow a stdlib module, and parse the format by
+   looking at one real line first instead of guessing the regex.
+4. **Report the null the moment it is significant enough to act on.** The sweep's null at 11 updates was
+   decision-grade — it freed 23 pods — and 45 minutes of confirmation would not have changed it (§9: ablate
+   before you scale; the corollary is stop paying for a scaled-up null).
+
+### The other half: a design error that made half the grid worthless
+
+The grid was 4 coefficients × 3 win-shares × 2 Dyna settings. **`--rvs-coef 0` disables RvS entirely, so
+`win_share` and `dyna` are meaningless at that coefficient and all six `c=0` cells are the SAME config.**
+Six of 24 pods ran one config, and by chance those were the pods that survived the ragged-buffer crash — so
+the first status report after the crash was five replicates of the control, announced as "5 arms alive".
+
+They turned out to be the most valuable arms in the sweep, because five replicates of one config are the
+control spread, which is what killed every cell-level claim. That is luck, not design.
+
+**The rule: before launching a grid, write out its cells and delete the degenerate ones.** A cell whose
+other axes have no effect at that setting is a duplicate, and N duplicates are a control-spread measurement
+you should decide to run deliberately, not discover afterwards (§35: a grid selects a region, and its
+replicate spread is the thing that says whether any region is distinguishable at all).
