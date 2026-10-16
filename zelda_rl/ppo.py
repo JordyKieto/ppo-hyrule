@@ -147,9 +147,18 @@ class RecurrentEntityActorCritic(nn.Module):
     def init_hidden(self, n: int) -> torch.Tensor:
         return torch.zeros(n, self.hidden_size)
 
+    def encode(self, x):
+        """The pre-GRU latent: a pure function of the observation, with no recurrence in it.
+
+        Alignable separately from the GRU state, which is this encoding plus everything the episode has
+        accumulated. Measured on this task: v15 and the BC clone differ by 0.497 here and 0.938 at the GRU,
+        so most of their divergence is accumulated memory rather than perception.
+        """
+        return self.proj(self.enc._features(x))
+
     def step(self, x, h, first):
         h = h * (1.0 - first.unsqueeze(-1))
-        h = self.gru(self.proj(self.enc._features(x)), h)
+        h = self.gru(self.encode(x), h)
         return self.pi(h), self.v(h).squeeze(-1), h
 
     def act(self, x, h, first, action=None, deterministic=False):
@@ -163,9 +172,54 @@ class RecurrentEntityActorCritic(nn.Module):
         return self.step(x, h, first)[1]
 
 
+def latent_gap(student, teacher, obs, first, w, site: str = "gru"):
+    """Mean squared gap between student and frozen-teacher latents, weighted by `w` (B, L).
+
+    `site` picks WHAT is aligned: "proj" the pre-GRU encoding of the observation, "gru" the recurrent state.
+    The caller picks WHERE by choosing `obs`: demonstration windows, or the policy's own rollout states.
+    """
+    if site == "proj":
+        flat = obs.reshape(-1, obs.shape[-1])
+        sp = student.encode(flat)
+        with torch.no_grad():
+            tp = teacher.encode(flat)
+        d = ((sp - tp) ** 2).mean(-1).reshape(obs.shape[0], obs.shape[1])
+    else:
+        sh, th = student.init_hidden(obs.shape[0]), teacher.init_hidden(obs.shape[0])
+        rows = []
+        for k in range(obs.shape[1]):
+            _, _, sh = student.step(obs[:, k], sh, first[:, k])
+            with torch.no_grad():
+                _, _, th = teacher.step(obs[:, k], th, first[:, k])
+            rows.append(((sh - th) ** 2).mean(-1))
+        d = torch.stack(rows, 1)
+    return (d * w).sum() / w.sum().clamp(min=1.0)
+
+
+def align_loss(a_lat, b_lat, w, kind: str = "mse", tau: float = 0.1):
+    """Pull two encoders' activations for the SAME state together, with gradients into BOTH sides.
+
+    `mse` forces equality -- the strongest constraint, and measured to be stronger than needed here.
+    `infonce` is the contrastive form of the teacher-student alignment work (arXiv 2605.28372): the same
+    state's two encodings are the positive pair and every other state in the batch is a negative, so each
+    encoder must IDENTIFY the state in the other's space rather than reproduce its numbers. Scale- and
+    basis-free, which matters when both encoders are moving.
+    """
+    if kind == "mse":
+        d = ((a_lat - b_lat) ** 2).mean(-1)
+        return (d * w).sum() / w.sum().clamp(min=1.0)
+    a = F.normalize(a_lat.reshape(-1, a_lat.shape[-1]), dim=-1)
+    b = F.normalize(b_lat.reshape(-1, b_lat.shape[-1]), dim=-1)
+    logits = a @ b.t() / tau
+    tgt = torch.arange(a.shape[0], device=a.device)
+    return 0.5 * (F.cross_entropy(logits, tgt) + F.cross_entropy(logits.t(), tgt))
+
+
 def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, clip, ent_coef, vf_coef, max_grad_norm,
                          target_kl=None, kl_coef=0.0, bc=None, bc_coef=0.0, bc_adaptive_frac=0.0,
-                         bc_teacher=None, bc_latent_coef=0.0):
+                         bc_teacher=None, bc_latent_coef=0.0, bc_latent_site="gru",
+                         bc_latent_states="demo", peer=None, peer_opt=None, peer_bc_coef=1.0,
+                         align_coef=0.0, align_kind="mse"):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
     batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
 
@@ -223,7 +277,11 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             pg = torch.max(-a * ratio, -a * ratio.clamp(1 - clip, 1 + clip)).mean()
             vl = 0.5 * ((v - ret) ** 2).mean()
             loss = pg - ent_coef * ent.mean() + vf_coef * vl
-            if (bc_coef > 0 or bc_adaptive_frac > 0 or bc_latent_coef > 0) and bc is not None:
+            # Every term that reads `b_obs` must be in this gate, or it is unreachable and silently
+            # does nothing. That has now happened twice (bc_adaptive_frac, then align_coef), both
+            # times caught only because tests/test_bc_regulariser.py asserts each term TRAINS.
+            if (bc_coef > 0 or bc_adaptive_frac > 0 or bc_latent_coef > 0 or align_coef > 0) \
+                    and bc is not None:
                 # Same number of human windows as rollout chunks in this minibatch, so the term's weight does
                 # not drift with the minibatch size. Fresh hidden per window (see zelda_rl/bc_demos.py).
                 j = torch.randint(0, bc["obs"].shape[0], (min(chunks_per_mb, bc["obs"].shape[0]),))
@@ -272,23 +330,57 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
                 # instead of forcing the same action. The two policies agree on 3% of actions (R46) while
                 # both beating her, so aligning the representation is a weaker constraint than aligning
                 # behaviour -- it shares what the clone encodes without overwriting what v15 decided to do.
-                if bc_teacher is not None and bc_latent_coef > 0:
-                    sh, tht = torch.stack(s_hid, 1), torch.stack(t_hid, 1)
-                    lat = ((sh - tht) ** 2).mean(-1)
-                    lat = (lat * b_keep).sum() / b_keep.sum().clamp(min=1.0)
+                if bc_teacher is not None and bc_latent_coef > 0 and bc_latent_states == "demo":
+                    lat = latent_gap(model, bc_teacher, b_obs, b_first, b_keep, bc_latent_site)
                     loss = loss + bc_latent_coef * lat
                     with torch.no_grad():
                         stats.setdefault("bc_latent", []).append(float(lat))
+
+                # MUTUAL alignment: `peer` is a SECOND TRAINABLE network (normally the clone). It keeps its
+                # own BC objective while both encoders are pulled into a common representation space, so
+                # nothing is frozen and the shared space has to explain the human's behaviour AND the return.
+                # One-way distillation imposes the teacher's basis; this negotiates one.
+                if peer is not None and align_coef > 0:
+                    flat = b_obs.reshape(-1, b_obs.shape[-1])
+                    al = align_loss(model.encode(flat), peer.encode(flat), b_keep.reshape(-1), align_kind)
+                    ph, plog = peer.init_hidden(b_obs.shape[0]), []
+                    for k in range(b_obs.shape[1]):
+                        lg_p, _, ph = peer.step(b_obs[:, k], ph, b_first[:, k])
+                        plog.append(lg_p)
+                    p_lg = torch.stack(plog, 1)
+                    p_ce = F.cross_entropy(p_lg.reshape(-1, p_lg.shape[-1]), b_act.reshape(-1),
+                                           reduction="none")
+                    p_ce = (p_ce * b_keep.reshape(-1)).sum() / b_keep.sum().clamp(min=1.0)
+                    loss = loss + align_coef * al + peer_bc_coef * p_ce
+                    with torch.no_grad():
+                        stats.setdefault("align", []).append(float(al))
+                        stats.setdefault("peer_acc", []).append(
+                            float(((p_lg.argmax(-1) == b_act).float() * b_keep).sum()
+                                  / b_keep.sum().clamp(min=1.0)))
             if kl_anchor is not None:
                 loss = loss + kl_coef * kl_anchor
                 stats.setdefault("kl_anchor", []).append(float(kl_anchor.detach()))
+            if bc_teacher is not None and bc_latent_coef > 0 and bc_latent_states == "rollout":
+                # Align where the policy actually goes, not where the demonstrator went: 13 human episodes
+                # versus the distribution the policy is scored on.
+                lat = latent_gap(model, bc_teacher, obs, first, torch.ones_like(first), bc_latent_site)
+                loss = loss + bc_latent_coef * lat
+                with torch.no_grad():
+                    stats.setdefault("bc_latent", []).append(float(lat))
             if not torch.isfinite(loss):
                 skipped += 1
                 continue
             opt.zero_grad()
+            if peer_opt is not None:
+                peer_opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             opt.step()
+            if peer_opt is not None:
+                # One backward populates both graphs, so both optimisers step on the same alignment
+                # gradient. That is what makes it mutual rather than a frozen teacher.
+                nn.utils.clip_grad_norm_(peer.parameters(), max_grad_norm)
+                peer_opt.step()
             with torch.no_grad():
                 stats["policy_loss"].append(pg.item()); stats["value_loss"].append(vl.item())
                 stats["entropy"].append(ent.mean().item())

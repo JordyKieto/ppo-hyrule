@@ -260,6 +260,7 @@ def main() -> int:
     fails += filter_checks()
     fails += adaptive_checks()
     fails += latent_checks()
+    fails += mutual_checks()
 
     print()
     for f in fails:
@@ -268,6 +269,55 @@ def main() -> int:
     return 1 if fails else 0
 
 
+
+
+def mutual_checks() -> list[str]:
+    """Mutual alignment must move BOTH networks and keep the peer doing its own job.
+
+    The failure modes this rules out: only the policy moves (a frozen teacher wearing a different name);
+    the peer collapses because alignment overwhelms its BC loss; the term reports numbers while the peer's
+    parameters never change because its optimiser was never stepped.
+    """
+    import copy
+    import torch
+    from zelda_rl.ppo import RecurrentEntityActorCritic, ppo_update_recurrent
+    bc = bc_data()
+    torch.manual_seed(0)
+    model = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    torch.manual_seed(1)
+    peer = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    before = copy.deepcopy(peer.state_dict())
+    opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+    popt = torch.optim.Adam(peer.parameters(), lr=3e-3)
+
+    def gap():
+        with torch.no_grad():
+            flat = bc["obs"].reshape(-1, bc["obs"].shape[-1])
+            a, b = model.encode(flat), peer.encode(flat)
+            an = torch.nn.functional.normalize(a, dim=-1); bn = torch.nn.functional.normalize(b, dim=-1)
+            return float((an * bn).sum(-1).mean())          # cosine similarity of the two encodings
+
+    g0 = gap()
+    for i in range(30):
+        st = ppo_update_recurrent(model, opt, rollout(seed=i), chunk=CH, epochs=1, chunks_per_mb=4, clip=0.2,
+                                  ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, bc=bc, bc_coef=0.0,
+                                  peer=peer, peer_opt=popt, peer_bc_coef=1.0, align_coef=1.0,
+                                  align_kind="infonce")
+    g1 = gap()
+    moved = max(float((peer.state_dict()[k] - before[k]).abs().max()) for k in before)
+    bad = []
+    print("\nmutual alignment (both networks trainable, infonce)")
+    print(f"  encoder cosine similarity: {g0:+.4f} -> {g1:+.4f}")
+    print(f"  peer parameters moved by at most {moved:.4f}   peer action accuracy {100 * st.get('peer_acc', float('nan')):.1f}%")
+    print(f"  alignment loss {st.get('align', float('nan')):.4f}")
+    if g1 <= g0:
+        bad.append(f"encodings did not become more similar ({g0:+.4f} -> {g1:+.4f})")
+    if moved < 1e-6:
+        bad.append("the peer never changed -- its optimiser was not stepped, so this is a frozen teacher")
+    if st.get("peer_acc", 0) < 0.5:
+        bad.append(f"peer accuracy collapsed to {100 * st.get('peer_acc', 0):.0f}% -- alignment overwhelmed its BC loss")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
 
 
 if __name__ == "__main__":

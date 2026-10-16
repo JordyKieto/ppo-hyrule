@@ -88,6 +88,30 @@ def parse_args():
                     help="LATENT ALIGNMENT: MSE between this policy's GRU state and --bc-teacher's on the "
                          "demonstration frames. Aligns the representation instead of the action, which "
                          "matters because v15 and the human agree on only 3%% of actions while both winning")
+    ap.add_argument("--bc-peer", default=None, metavar="CKPT",
+                    help="MUTUAL alignment: load this checkpoint as a SECOND TRAINABLE network (normally the "
+                         "BC clone). It keeps training on the demonstrations while both encoders are pulled "
+                         "into a common representation space -- nothing is frozen, unlike --bc-teacher. "
+                         "Needs --align-coef > 0")
+    ap.add_argument("--align-coef", type=float, default=0.0,
+                    help="weight on the mutual alignment term between this policy and --bc-peer")
+    ap.add_argument("--align-kind", choices=["mse", "infonce"], default="infonce",
+                    help="`mse` forces the two encodings to be numerically equal; `infonce` (default) only "
+                         "requires each encoder to IDENTIFY the state in the other's space, which is "
+                         "scale- and basis-free and is the contrastive form used by arXiv 2605.28372")
+    ap.add_argument("--peer-bc-coef", type=float, default=1.0,
+                    help="weight on the peer's OWN behaviour-cloning loss, so it stays a clone of the human "
+                         "while it moves toward the shared space")
+    ap.add_argument("--peer-lr", type=float, default=1e-4,
+                    help="the peer's own learning rate; lower than the policy's by default so the shared "
+                         "space is not dragged by a network with no return signal")
+    ap.add_argument("--bc-latent-site", choices=["gru", "proj"], default="gru",
+                    help="WHAT to align: `gru` the recurrent state, `proj` the pre-GRU encoding of the "
+                         "observation (a pure function of the obs, no episode history in it)")
+    ap.add_argument("--bc-latent-states", choices=["demo", "rollout"], default="demo",
+                    help="WHERE to align: `demo` the human's frames, `rollout` the states this policy "
+                         "actually visits. Aligning on demo frames shapes the representation where the "
+                         "demonstrator went; aligning on rollout states shapes it where the policy is scored")
     ap.add_argument("--bc-teacher", default=None,
                     help="frozen policy for --bc-latent-coef, normally the BC checkpoint")
     ap.add_argument("--kl-anchor", default=None,
@@ -283,8 +307,9 @@ def main():
     # ---- KL anchor: a frozen known-good policy. Its log-probs are recorded DURING the rollout so its GRU
     # carries its own hidden state; reusing the trainee's state would be a different network's memory.
     anchor = None
-    bc = bc_teacher = None
-    if args.bc_data and (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0):
+    bc = bc_teacher = peer = peer_opt = None
+    if args.bc_data and (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0
+                         or args.align_coef > 0):
         from zelda_rl.bc_demos import coef_at, describe, load_bc_chunks
         bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions,
                             qfilter_steps=args.bc_qfilter)
@@ -299,8 +324,21 @@ def main():
             for q in bc_teacher.parameters():
                 q.requires_grad_(False)
             bc_teacher.eval()
-            LOGGER.info("latent alignment to %s (coef %.3f), teacher frozen", args.bc_teacher,
-                        args.bc_latent_coef)
+            LOGGER.info("latent alignment to %s (coef %.3f) at the %s latent on %s states, teacher frozen",
+                        args.bc_teacher, args.bc_latent_coef, args.bc_latent_site, args.bc_latent_states)
+        if args.bc_peer:
+            if args.align_coef <= 0:
+                raise SystemExit("--bc-peer needs --align-coef > 0")
+            from zelda_rl.policy_io import load_policy
+            peer, p_cfg, _ = load_policy(Path(args.bc_peer))
+            if p_cfg.get("obs_dim") != obs_dim or p_cfg.get("n_actions") != n_actions:
+                raise SystemExit(f"--bc-peer spec mismatch: peer obs {p_cfg.get('obs_dim')} / "
+                                 f"{p_cfg.get('n_actions')} actions vs this run's {obs_dim} / {n_actions}")
+            peer.train()
+            peer_opt = torch.optim.Adam(peer.parameters(), lr=args.peer_lr)
+            LOGGER.info("MUTUAL alignment with %s: peer is TRAINABLE (lr %.1e, own BC coef %.2f), "
+                        "alignment %s at coef %.3f on the proj latent",
+                        args.bc_peer, args.peer_lr, args.peer_bc_coef, args.align_kind, args.align_coef)
         if args.bc_adaptive_frac > 0:
             LOGGER.info("ADAPTIVE BC weight: holding the BC term at %.3f of |policy loss| (--bc-coef ignored)",
                         args.bc_adaptive_frac)
@@ -340,7 +378,8 @@ def main():
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
            f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
            + ("   bcL   bcA    bcC" if bc is not None else "")
-           + ("   bcZ" if bc_teacher is not None else ""))
+           + ("   bcZ" if bc_teacher is not None else "")
+           + ("   algn  peerA" if peer is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -436,7 +475,12 @@ def main():
                                              kl_coef=(args.kl_coef if anchor is not None else 0.0),
                                              bc=bc, bc_coef=bc_coef_now,
                                              bc_adaptive_frac=args.bc_adaptive_frac,
-                                             bc_teacher=bc_teacher, bc_latent_coef=args.bc_latent_coef)
+                                             bc_teacher=bc_teacher, bc_latent_coef=args.bc_latent_coef,
+                                             bc_latent_site=args.bc_latent_site,
+                                             bc_latent_states=args.bc_latent_states,
+                                             peer=peer, peer_opt=peer_opt,
+                                             peer_bc_coef=args.peer_bc_coef,
+                                             align_coef=args.align_coef, align_kind=args.align_kind)
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -572,6 +616,8 @@ def main():
                         + (f" {stats.get('bc_loss', float('nan')):>5.2f} {100 * stats.get('bc_acc', float('nan')):>4.0f}%"
                            f" {stats.get('bc_coef_applied', bc_coef_now):>6.4f}" if bc is not None else "")
                         + (f" {stats.get('bc_latent', float('nan')):>5.2f}" if bc_teacher is not None else "")
+                        + (f" {stats.get('align', float('nan')):>6.3f} {100 * stats.get('peer_acc', float('nan')):>5.0f}%"
+                           if peer is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:
