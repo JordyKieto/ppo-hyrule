@@ -51,6 +51,32 @@ mechanism and nothing else.
 | 6 | **Q-filter** | `--bc-coef 0.1 --bc-qfilter 30` | 4 | `gohma-bc3` ranks 4-7 | is it better to imitate only the 12% of frames that damage her within 3 s? | | U |
 | 7 | **latent alignment** | `--bc-coef 0 --bc-latent-coef 0.05 --bc-teacher checkpoints/kept/bc_human.pt` | 4 | `gohma-bc3` ranks 8-11 | can the clone's REPRESENTATION transfer without its actions? | | U |
 
+## The inverse: the clone as the student, v15 as the teacher
+
+Arms 1-7 all ask "do the human's demonstrations help v15". These ask the opposite question: **is v15's
+REPRESENTATION the transferable part, and can it be poured into the clone?** The student starts at
+`bc_human.pt` and is pulled toward v15's GRU state on the human's own frames.
+
+Calibration, so "strong" means something: the measured GRU-state gap between v15 and the clone on the corpus
+is **MSE 0.94 with mean |h| 0.56** -- near-maximal. A latent coefficient of 1.0 therefore adds ~0.94 to a loss
+whose policy term runs 0.01-0.10, i.e. it dominates by 10-90x; 5.0 adds ~4.7.
+
+| # | arm | flags beyond the common set | ranks | question | result | class |
+|---|---|---|---|---|---|---|
+| 8 | **strong latent, inverse** | `--init-from checkpoints/kept/bc_human.pt --bc-teacher checkpoints/kept/gohma-kl-v15-r4_latest.pt --bc-latent-coef 1.0 --bc-coef 0` | 4 | does v15's representation lift the clone? | | U |
+| 9 | **ridiculous latent, inverse** | same, `--bc-latent-coef 5.0` | 4 | is the strength axis the thing, or does it saturate? | | U |
+| 10 | **both, hard** | same as 8 plus `--bc-coef 1.0` | 4 | maximal action AND representation pressure together | | U |
+
+**What would make these interesting, stated before they run (AGENTS 1, 9).** They start from a policy that
+takes 0.14 of her HP, so beating v15's 3.275 is not the near-term test. The test is the CLIMB: the clone under
+plain PPO rose +0.028/update (0.21 -> 0.35 over 6 updates) and from-scratch v10 started at 0.38. An arm here
+is interesting if its slope is several times +0.028 with |t| > 2, which would say the representation is what
+transfers. If all three track the clone's own +0.028, representation transfer buys nothing either and the
+corpus is not a route into this task by any of the five mechanisms tried.
+
+**The Q-filter arm (6) is parked, not dropped**: the pods were redirected to these three. It remains the one
+untested idea that attacks the measured cause -- that 80-94% of the human's frames never damage her.
+
 ## RETRACTION: the decay-vs-constant comparison was first read on an unmatched window
 
 `python -m fleet ppo` prints only the **last 8** fleet-mean rows unless `--last N` is passed. The first
