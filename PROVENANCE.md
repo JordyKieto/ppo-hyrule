@@ -1385,6 +1385,92 @@ size.
 
 ---
 
+### TRAINING LENGTH, and the six-seed replicate that came free with it (M)
+
+Three arms at 40 epochs and three at 160, identical corpus (rvs_M5's shape: 100 human wins + 200 PPO wins +
+~495 losses, win class solved to 30% of the gradient), differing only in epochs and seed.
+
+**The first half of that run is a six-seed replicate of ONE configuration**, because the `--epochs` flag only
+decides when an arm stops: until epoch 40 every arm is the same experiment. That accident produced the
+cleanest seed-floor measurement of the session, and it is the number every other claim here has to clear:
+
+| group (identical configs) | pooled dmgB | per-seed |
+|---|---|---|
+| "40-epoch" seeds at epoch ≤20 | 1.24 ± 0.10 | 1.53 / 1.18 / 1.08 |
+| "160-epoch" seeds at epoch ≤20 | 1.49 ± 0.06 | 1.60 / 1.36 / 1.50 |
+
+**Two groups of three identical runs differ by 0.25 ± 0.12, t=2.1.** That reading crossed |t|>2 while being
+pure seed noise, and it is the fourth independent measurement of the floor today (0.43 between two Dyna
+seeds, 0.97 across five PPO controls, 0.25 across the size curve). **A three-seed group mean carries ±0.1
+here, so nothing below ~0.3 is visible with this design.**
+
+At their own full lengths: 160 epochs reaches **1.44 ± 0.06 with kills 44/1104 = 3.99%** — the highest kill
+rate any RvS configuration has produced, above `rvs_M5`'s 3.33%, while its damage (1.44) is below M5's 1.76.
+Damage and defeats continue to rank the arms differently, which is why both are reported.
+
+The 40-epoch arms were then **continued to 400 epochs with `--resume`** rather than restarted (AGENTS 39), so
+their epoch-41-onward evals extend the same runs. The clean test for them is within-arm — evals before epoch
+40 against evals after epoch 200 — which removes the seed entirely.
+
+### THE COLLECTION, and why it stopped (M)
+
+Nine collectors produced **22,214 episodes, 452 wins (2.0%)** into `s3://zelda-rl/zelda/ppo/gohma_steps2/`,
+with every episode uploaded within 90 s of being played and deleted only after the upload succeeded. Stopped
+on instruction once the size curve (R87) said corpus size was worth `+0.17 ± 0.14` — the yield is winning
+episodes, and at 2.0% collection raises the win supply by ~200/hour against a corpus that already had 495.
+
+### THE GOHMA WORLD MODEL (U — training), and why it could not reuse anything (M)
+
+Every piece of the WM track is Deku Baba's, which cost most of a session to establish:
+
+| artefact | why it cannot be used for Gohma |
+|---|---|
+| `scripts/collect_transitions.py` | refused Gohma savestates: "no live Deku Baba". Now takes `--profile` |
+| `s3://zelda-rl/zelda/packed/v5/` (53 GB, 91.6M frames) | `n_actions 63` vs Gohma's 108; `link_dim 36`, `actor_dim 14`, 9 rows; nav grid over the Baba room |
+| `configs/wm_prep_v4.json` | that task's per-field scales and slot split |
+| `checkpoints/wm_tokens/wm.pt` | `n_actions = 63` |
+| `checkpoints/dynamics/event_head.pt` | trained on `datasets/transitions/deku-baba/...` |
+
+So the model is trained on the only Gohma data that exists: **6,504 full episodes, 4,703,423 transitions** of
+the 1033-d policy observation (PPO play + all 100 human wins). `scripts/train_wm_obs.py`, 120 epochs, batch
+72, stage 1 teacher-forced to epoch 8 then **autoregressive on its own output** with the 60%/geometric depth
+mixture to depth 600, drift-correcting targets, half-life step decay, per-field scale = std of the non-zero
+deltas, **event-gated loss with 5× weight on ticks where boss HP or Link HP changes**, and the action's
+geometry as `(sin, cos)` beside its index. The delta head is zero-initialised, so it starts exactly at
+persistence.
+
+**It reports its own verdict every epoch** — H20 skill against persistence, and the **shuffled-action
+penalty** with an explicit "ACTION-CONDITIONED" or "action is DECORATION". That ablation is what the MOBA
+study used to prove movement was learned, and `docs/WM_MOTION.md` records our token WM failing it
+(the action bought **+0.002** on position). The local smoke at epoch 1 correctly reads skill **−0.262** and
+penalty **×1.00**: a zero-init model has learned nothing and the control says so.
+
+Choosing the OBSERVATION space was not a shortcut: the policy that dreams in this model is the same
+`RecurrentEntityActorCritic` that plays the real game, so a Gohma policy initialises into the dream with no
+conversion (`zelda_rl.rvs.Conditioned` appends the prompt itself).
+
+### THE DYNA LOOP (U — written, gated on the WM)
+
+`scripts/dyna_loop.py` implements the architecture of the author's own paper (arXiv 2610.08033): real games
+with the **anchor** policy → WM (resumed, prep bundle fitted once from our data) → event head → dream-PPO
+**resumed from the anchor** → real eval → accept or roll back. Anchoring is at the loop level because the
+paper's unanchored runs collapsed within a few updates **with no in-dream metric detecting it**.
+
+The online half runs continuously, not as a batch phase: `eval_fleet --watch` on the snapshot directory while
+dream-PPO drops a snapshot every 5 updates, so the policy is scored in the real game *while* it learns in the
+dream. `scripts/dyna_board.py` separates the four questions a single number cannot: is the WM improving on
+pure transitions, is the policy improving in the dream, is it improving in REAL life, and is the loop
+accepting or rolling back.
+
+`scripts/train_dream_obs_ppo.py` is the dream half for this WM: episodes start from **real episode-start
+frames**, reward is read from the predicted boss-HP and Link-HP columns with GOHMA_SIMPLE's own coefficients
+(+4.0/HP, +60 defeat, hurt penalty) so it cannot drift from what the real task pays for, the horizon is
+bounded, and snapshots feed the watcher. **It is deliberately unrun until the WM beats persistence** — a
+dream inside a model that has not cleared its own control is not an experiment.
+
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and

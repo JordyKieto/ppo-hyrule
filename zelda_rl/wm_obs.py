@@ -24,7 +24,13 @@ def load_episodes(dirs, limit=0, min_steps=120):
     if limit:
         files = files[:limit]
     fields = None
-    for f in files:
+    import time as _t
+    _t0 = _t.time()
+    for i, f in enumerate(files, 1):
+        if i % 500 == 0:
+            el = _t.time() - _t0
+            print(f"  loading {i}/{len(files)}  {i/max(el,1e-9):.0f} files/s  "
+                  f"eta {(len(files)-i)/max(i/max(el,1e-9),1e-9)/60:.1f} min", flush=True)
         try:
             z = np.load(f, allow_pickle=False)
             if "obs" not in z.files or "action" not in z.files:
