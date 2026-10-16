@@ -66,7 +66,15 @@ def parse_args():
                          "human windows, so the policy is regularised against the DEMONSTRATIONS for the whole "
                          "run instead of only starting near them (--init-from decays within a few updates)")
     ap.add_argument("--bc-coef", type=float, default=0.0,
-                    help="weight on the BC loss. 0 = off. Report bcL/bcA in the log line to see it bite")
+                    help="weight on the BC loss at update 1. 0 = off. Report bcL/bcA in the log line to see "
+                         "it bite, and bcC for the coefficient actually applied this update")
+    ap.add_argument("--bc-coef-final", type=float, default=None,
+                    help="decay --bc-coef linearly to this FLOOR by --bc-coef-updates, then hold it there "
+                         "forever (DAPG: anchor early, let PPO take over, but keep a long tail). Decaying to "
+                         "0 would leave --init-from-only behaviour, which is what the term exists to avoid. "
+                         "Default: no decay, the coefficient is constant")
+    ap.add_argument("--bc-coef-updates", type=int, default=50,
+                    help="updates over which --bc-coef reaches --bc-coef-final")
     ap.add_argument("--kl-anchor", default=None,
                     help="path to a KNOWN-GOOD checkpoint. Adds a KL penalty from the training policy toward "
                          "it, bounding the DISTANCE TRAVELLED rather than the step size. --target-kl only "
@@ -262,9 +270,13 @@ def main():
     anchor = None
     bc = None
     if args.bc_data and args.bc_coef > 0:
-        from zelda_rl.bc_demos import describe, load_bc_chunks
+        from zelda_rl.bc_demos import coef_at, describe, load_bc_chunks
         bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions)
-        LOGGER.info("BC regulariser %s (coef %.3f): %s", args.bc_data, args.bc_coef, describe(bc))
+        if args.bc_coef_final is not None:
+            LOGGER.info("BC regulariser %s: coef %.3f -> %.3f over %d updates, then held (long tail): %s",
+                        args.bc_data, args.bc_coef, args.bc_coef_final, args.bc_coef_updates, describe(bc))
+        else:
+            LOGGER.info("BC regulariser %s (coef %.3f, constant): %s", args.bc_data, args.bc_coef, describe(bc))
     elif args.bc_data or args.bc_coef > 0:
         raise SystemExit("--bc-data and --bc-coef must be given together (coef > 0), or neither")
 
@@ -295,7 +307,7 @@ def main():
     hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
            f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
-           + ("   bcL   bcA" if bc is not None else ""))
+           + ("   bcL   bcA    bcC" if bc is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -381,12 +393,15 @@ def main():
                 if anc_buf is not None:
                     rbatch["anchor_logp"] = anc_buf
                 n_chunks = N * (T // args.chunk)
+                bc_coef_now = 0.0 if bc is None else (
+                    args.bc_coef if args.bc_coef_final is None
+                    else coef_at(update, args.bc_coef, args.bc_coef_final, args.bc_coef_updates))
                 stats = ppo_update_recurrent(model, opt, rbatch, chunk=args.chunk, epochs=args.epochs,
                                              chunks_per_mb=max(1, n_chunks // args.minibatches), clip=args.clip,
                                              ent_coef=args.ent_coef, vf_coef=args.vf_coef,
                                              max_grad_norm=args.max_grad_norm, target_kl=args.target_kl,
                                              kl_coef=(args.kl_coef if anchor is not None else 0.0),
-                                             bc=bc, bc_coef=(args.bc_coef if bc is not None else 0.0))
+                                             bc=bc, bc_coef=bc_coef_now)
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -520,7 +535,7 @@ def main():
                         + (f" klA {stats['kl_anchor']:>6.3f}" if stats.get("kl_anchor") == stats.get("kl_anchor")
                            and "kl_anchor" in stats else "")
                         + (f" {stats.get('bc_loss', float('nan')):>5.2f} {100 * stats.get('bc_acc', float('nan')):>4.0f}%"
-                           if bc is not None else "")
+                           f" {bc_coef_now:>6.4f}" if bc is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:

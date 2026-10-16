@@ -70,6 +70,34 @@ def run(bc_coef: float, iters: int = 25):
     return accs, float(np.mean(hits))
 
 
+def schedule_checks() -> list[str]:
+    """The decay must hold a FLOOR forever, be monotone, and start where the flag says.
+
+    A coefficient that decays to 0 leaves `--init-from`-only behaviour -- the demonstrations shape a few early
+    updates and nothing after -- which is the thing the regulariser exists to avoid. So "never reaches 0" is
+    asserted, not trusted to the arithmetic.
+    """
+    from zelda_rl.bc_demos import coef_at
+    bad = []
+    start, final, n = 0.1, 0.02, 50
+    if coef_at(1, start, final, n) != start:
+        bad.append("update 1 is not --bc-coef")
+    if coef_at(n, start, final, n) != final:
+        bad.append("the floor is not exact at --bc-coef-updates")
+    for u in (n, n + 1, 200, 10_000):
+        if coef_at(u, start, final, n) != final:
+            bad.append(f"floor not held at update {u}")
+    if any(coef_at(u, start, final, n) < coef_at(u + 1, start, final, n) for u in range(1, 2 * n)):
+        bad.append("not monotone")
+    if min(coef_at(u, start, final, n) for u in range(1, 10_000)) <= 0.0:
+        bad.append("decays to zero -- the tail is gone")
+    print(f"\ndecay schedule {start} -> {final} over {n} updates, then held")
+    for u in (1, 10, 25, 50, 100, 400):
+        print(f"  update {u:>3}  coef {coef_at(u, start, final, n):.4f}")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
+
+
 def main() -> int:
     fails = []
     on_accs, on_final = run(1.0)
@@ -91,11 +119,15 @@ def main() -> int:
     if not (on_accs[-1] > on_accs[0]):
         fails.append("bc_acc did not rise over the iterations")
 
+    fails += schedule_checks()
+
     print()
     for f in fails:
         print("  FAIL " + f)
     print("ALL PASS" if not fails else f"{len(fails)} FAILED")
     return 1 if fails else 0
+
+
 
 
 if __name__ == "__main__":

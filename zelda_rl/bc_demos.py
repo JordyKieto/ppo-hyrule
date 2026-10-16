@@ -59,3 +59,21 @@ def describe(bc: dict) -> str:
     m = bc["meta"]
     return (f"{m['files']} episodes ({m['wins']} wins, {m['steps']:,} steps) -> {m['chunks']} windows "
             f"of {m['chunk']}")
+
+
+def coef_at(update: int, start: float, final: float, updates: int) -> float:
+    """DAPG-style decay with a FLOOR: `start` at update 1, reaching `final` at `updates`, then held there.
+
+    The floor is the point. Decaying to 0 removes the anchor entirely and the policy is free to drift back
+    wherever PPO's gradient takes it -- the demonstrations then only shaped the early updates, which is the
+    `--init-from`-only behaviour this term exists to avoid. A long tail at a small coefficient keeps paying a
+    little attention to the human corpus for the whole run.
+
+    Linear rather than exponential so the coefficient at any update is readable from the flags alone.
+    """
+    if updates <= 1:
+        return float(final)
+    f = min(1.0, max(0.0, (update - 1) / float(updates - 1)))
+    if f >= 1.0:
+        return float(final)              # exact, so the floor is comparable and not start + delta*1.0
+    return float(start + (final - start) * f)
