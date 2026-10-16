@@ -53,12 +53,29 @@ install_deps() {
   # Build tooling + the deps Dolphin does NOT vendor on Linux (wiki "Building for Linux", 2026-09):
   # Qt6 (DolphinQt), OpenGL/EGL + X11 headers, udev/evdev, systemd, ALSA/Pulse. Runtime-only extras:
   # qt6-qpa-plugins (offscreen platform plugin), xvfb/xauth (fallback display), procps/psmisc.
-  $SUDO apt-get install -y --no-install-recommends \
-    build-essential git cmake ninja-build pkg-config ca-certificates gettext \
-    qt6-base-dev qt6-base-private-dev qt6-svg-dev qt6-qpa-plugins libqt6svg6 \
+  # One missing package used to abort the WHOLE install, and with it the rest of the bootstrap: the GPU
+  # image is Ubuntu 22.04, where the Qt SVG dev package is libqt6svg6-dev, not qt6-svg-dev (24.04's name).
+  # The H100 pod ended up with no Dolphin and no venv because of that single name (2026-10-16). So: try the
+  # full set, and if apt refuses, install package-by-package and report what is missing instead of dying.
+  local PKGS="build-essential git cmake ninja-build pkg-config ca-certificates gettext \
+    qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libqt6svg6 \
     libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxrandr-dev libxi-dev \
     libudev-dev libevdev-dev libsystemd-dev libasound2-dev libpulse-dev \
-    xvfb xauth procps psmisc
+    xvfb xauth procps psmisc"
+  # the SVG dev package, whichever name this release uses
+  local SVG=""
+  for cand in qt6-svg-dev libqt6svg6-dev; do
+    if apt-cache show "$cand" >/dev/null 2>&1; then SVG="$cand"; break; fi
+  done
+  [[ -n "$SVG" ]] && log "Qt SVG dev package on this release: $SVG" || log "no Qt SVG dev package found"
+  if ! $SUDO apt-get install -y --no-install-recommends $PKGS $SVG; then
+    log "bulk install failed; falling back to one-by-one so a single missing name cannot abort the bootstrap"
+    local missing=""
+    for p in $PKGS $SVG; do
+      $SUDO apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1 || missing="$missing $p"
+    done
+    [[ -n "$missing" ]] && log "NOT INSTALLED (may be fine for a prebuilt Dolphin):$missing"
+  fi
   # 2603a's CMakeLists.txt requires GCC >= 12 and C++23. Ubuntu 24.04 ships 13; 22.04 ships 11
   # but has g++-12 in its archive.
   local gccv

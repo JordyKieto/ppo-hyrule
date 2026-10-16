@@ -250,7 +250,7 @@ def cmd_bootstrap(a) -> None:
         elif DOLPHIN_TARBALL.exists():
             log(f"rank{r}: push cached Dolphin build ({DOLPHIN_TARBALL.stat().st_size / 1e6:.0f} MB)")
             rsync(pod, [str(DOLPHIN_TARBALL)], f"{R_DOLPHIN}/")
-            run(pod, f"cd {R_DOLPHIN} && tar xzf {DOLPHIN_TARBALL.name} && rm {DOLPHIN_TARBALL.name}")
+            run(pod, f"cd {R_DOLPHIN} && tar --no-same-owner -xzf {DOLPHIN_TARBALL.name} && rm {DOLPHIN_TARBALL.name}")
         else:
             log(f"rank{r}: building Dolphin 2603a from source (tmux 'dolphin_build', log {R_DOLPHIN}/build.log)")
             run(pod, f"tmux kill-session -t dolphin_build 2>/dev/null; tmux new-session -d -s dolphin_build "
@@ -282,7 +282,7 @@ def cmd_bootstrap(a) -> None:
             url = _s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": VENV_KEY},
                                              ExpiresIn=6 * 3600)
             run(pod, f"cd /workspace && curl -sfL --retry 5 -o venv.tgz {shlex.quote(url)} && "
-                     f"rm -rf {R_VENV} && tar xzf venv.tgz && rm venv.tgz && "
+                     f"rm -rf {R_VENV} && tar --no-same-owner -xzf venv.tgz && rm venv.tgz && "
                      f"{R_VENV}/bin/python -c 'import torch,boto3'")
         else:
             log(f"rank{r}: python venv (pip; no prebuilt tarball in S3)")
@@ -373,8 +373,13 @@ def s3_pull_assets(pod: dict, only_states: bool = False) -> None:
         url = s3.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=6 * 3600)
         lines.append(f"curl -sfL --retry 5 -o {shlex.quote(dest)}.part {shlex.quote(url)} && mv {shlex.quote(dest)}.part {shlex.quote(dest)} &")
     lines += ["wait",
-              f"tar -C {R_REPO}/assets/dolphin_user -xzf {R_REPO}/assets/dolphin_user/nand-Wii.tgz" if not only_states else "true",
-              f"cd {R_DOLPHIN} && tar xzf {DOLPHIN_TARBALL.name} && rm {DOLPHIN_TARBALL.name}" if not only_states else "true",
+              # --no-same-owner: the NAND tarball carries the Mac's uid 501, which does not exist on a pod, so tar
+              # fails chown on EVERY entry and exits non-zero. The files extract fine, but the non-zero status
+              # aborted the rest of the bootstrap -- the H100 pod ended up with no Dolphin, no venv and no
+              # savestates while the log looked like a NAND problem (2026-10-16).
+              f"tar --no-same-owner -C {R_REPO}/assets/dolphin_user -xzf "
+              f"{R_REPO}/assets/dolphin_user/nand-Wii.tgz" if not only_states else "true",
+              f"cd {R_DOLPHIN} && tar --no-same-owner -xzf {DOLPHIN_TARBALL.name} && rm {DOLPHIN_TARBALL.name}" if not only_states else "true",
               f"ls {R_REPO}/assets/states | wc -l"]
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
         f.write("\n".join(lines) + "\n")

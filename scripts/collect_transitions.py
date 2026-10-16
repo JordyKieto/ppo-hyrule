@@ -27,7 +27,10 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from zelda_rl.combat import BABA_STATES, DEKU_BABA, CombatState, read_combat_state  # noqa: E402
+from zelda_rl.combat import BABA_STATES, DEKU_BABA, GOHMA_ID, CombatState, read_combat_state  # noqa: E402
+from zelda_rl.gohma import GOHMA_STATES  # noqa: E402
+
+STATE_VOCAB = BABA_STATES          # replaced by --profile before any row is built
 from zelda_rl.state_layout import (ENEMY_FIELDS as ENEMY_FIELDS_,  # noqa: E402
                                     LINK_FIELDS_V3, MAX_ENEMIES as MAX_ENEMIES_)
 from zelda_rl.env import EnvError, action_name  # noqa: E402
@@ -139,9 +142,12 @@ LINK_DIM, ENEMY_DIM = len(LINK_FIELDS), len(ENEMY_FIELDS)
 STATE_DIM = LINK_DIM + MAX_ENEMIES * ENEMY_DIM
 
 
-def check_slots(slots_dir: str, slots: list[int]) -> dict[int, int]:
-    """Deku Babas per slot, read straight from the savestate files. Guards against pointing at the wrong states
-    (the live Dolphin StateSaves were overwritten with Gohma savestates on 2026-09-14)."""
+def check_slots(slots_dir: str, slots: list[int], target_ids=(DEKU_BABA,), label="Deku Baba") -> dict[int, int]:
+    """Live TARGET actors per slot, read straight from the savestate files.
+
+    `target_ids` comes from the profile, not from a constant: this guard exists to catch pointing at the
+    wrong savestates, and hard-coding Deku Baba made it reject a perfectly good set of GOHMA states with
+    "no live Deku Baba" -- which is what stopped the Dyna loop collecting (2026-10-16)."""
     from zelda_rl.savestate import decompress_state, find_n64_ram
     counts = {}
     for k in slots:
@@ -152,7 +158,7 @@ def check_slots(slots_dir: str, slots: list[int]) -> dict[int, int]:
         raw = decompress_state(f.read_bytes())
         base = find_n64_ram(raw)
         c = read_combat_state(memoryview(raw)[base:base + 0x400000])
-        counts[k] = sum(1 for e in c.enemies.values() if e.id == DEKU_BABA and e.hp > 0)
+        counts[k] = sum(1 for e in c.enemies.values() if e.id in target_ids and e.hp > 0)
     return counts
 
 
@@ -190,7 +196,8 @@ def encode_state(c: CombatState, rows: EnemyRows) -> np.ndarray:
         if j < 0:
             continue
         base = LINK_DIM + j * ENEMY_DIM
-        st = BABA_STATES.index(e.state) if e.state in BABA_STATES else BABA_STATES.index("other")
+        st = (STATE_VOCAB.index(e.state) if e.state in STATE_VOCAB
+              else STATE_VOCAB.index("other") if "other" in STATE_VOCAB else 0)
         out[base:base + ENEMY_DIM] = [1.0, e.id, e.hp, *e.pos, e.fn_rel, st, e.shape_yaw, e.yaw_to_player,
                                       e.timer, e.cat, e.params, e.yaw, *e.vel, *e.focus]
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
@@ -205,6 +212,10 @@ def main():
     ap.add_argument("--out", default=None, help="output dir (default datasets/transitions/deku-baba/<timestamp>)")
     ap.add_argument("--slots", default="1,2,3,4,5,6,7,8,9,10", help="start slots to cycle")
     ap.add_argument("--slots-dir", default=DEKU_STATES_DIR, help=f"default {DEKU_STATES_DIR}")
+    ap.add_argument("--profile", choices=("deku_baba", "gohma"), default="deku_baba",
+                    help="which TARGET the savestates and the enemy state column belong to. The env itself "
+                         "comes from the policy's own config, so this only picks the savestate guard and "
+                         "the behaviour-state vocabulary")
     ap.add_argument("--torch-threads", type=int, default=1, help="keep at 1: Dolphin needs the cores")
     ap.add_argument("--episode-seconds", type=float, default=None, help="override episode length (default 180)")
     ap.add_argument("--deterministic", action="store_true", help="argmax actions (default: sampled, more diverse)")
@@ -227,15 +238,17 @@ def main():
     torch.set_num_threads(args.torch_threads)
     mix = (json.loads(args.mix) if args.mix else (MIX_PRESETS[args.mix_preset] or DEFAULT_MIX))
     s3 = S3Streamer(args.s3_prefix, args.s3_workers, shard=args.s3_shard)
+    global STATE_VOCAB
+    STATE_VOCAB = GOHMA_STATES if args.profile == "gohma" else BABA_STATES
     scale = args.episodes / sum(n for _, _, n in mix)
     quota = [(p, g, max(1, round(n * scale))) for p, g, n in mix]
     slots = [int(s) for s in args.slots.split(",")]
-    babas = check_slots(args.slots_dir, slots)
-    if bad := [k for k, n in babas.items() if n == 0]:
-        raise SystemExit(f"slots {bad} in {args.slots_dir} have no live Deku Baba -> wrong savestates.\n"
-                         f"  per-slot babas: {babas}\n"
-                         f"  fetch the right ones: aws s3 sync s3://zelda-rl/zelda/combat/deku-baba/states/ "
-                         f"{DEKU_STATES_DIR}/ --profile race-wm")
+    TARGETS = {"deku_baba": ((DEKU_BABA,), "Deku Baba"), "gohma": ((GOHMA_ID,), "Gohma")}
+    tgt_ids, tgt_label = TARGETS[args.profile]
+    found = check_slots(args.slots_dir, slots, tgt_ids, tgt_label)
+    if bad := [k for k, n in found.items() if n == 0]:
+        raise SystemExit(f"slots {bad} in {args.slots_dir} have no live {tgt_label} -> wrong savestates "
+                         f"for --profile {args.profile}.\n  per-slot {tgt_label}: {found}")
     out = Path(args.out or f"datasets/transitions/deku-baba/{time.strftime('%Y%m%d-%H%M%S')}")
     (out / "episodes").mkdir(parents=True, exist_ok=True)
 
@@ -425,7 +438,8 @@ def main():
             "task": "deku_baba_combat", "episodes": ep_index, "transitions": n_trans,
             "outcomes": dict(tally), "wall_seconds": round(el, 1),
             "state_dim": STATE_DIM, "link_dim": LINK_DIM, "max_enemies": MAX_ENEMIES, "enemy_dim": ENEMY_DIM,
-            "link_fields": LINK_FIELDS, "enemy_fields": ENEMY_FIELDS, "baba_states": BABA_STATES,
+            "link_fields": LINK_FIELDS, "enemy_fields": ENEMY_FIELDS, "baba_states": STATE_VOCAB,
+            "profile": args.profile,
             "n_actions": cfg["n_actions"], "action_names": [action_name(a, "combat") for a in range(cfg["n_actions"])],
             "obs_dim": None if args.no_obs else cfg["obs_dim"],
             "obs_fields": None if args.no_obs else cfg["obs_fields"],

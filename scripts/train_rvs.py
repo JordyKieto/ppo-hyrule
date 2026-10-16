@@ -35,8 +35,40 @@ from zelda_rl.ppo import RecurrentEntityActorCritic  # noqa: E402
 from zelda_rl.rvs import COND_DIM, TARGET, conditioning, field_offsets  # noqa: E402
 
 
-def load_all(dirs, limit_per_dir=0):
+def _mem_limit() -> int | None:
+    """The limit that actually applies, from the cgroup -- not what `free` says (AGENTS 23).
+
+    ZRL_MEM_LIMIT_BYTES overrides it: needed to TEST the guard (a dev box has no cgroup, so the first
+    version of this skipped the check silently and its control reported "FAIL: no refusal"), and useful on
+    any host where the cgroup files cannot be read.
+    """
+    import os
+    env = os.environ.get("ZRL_MEM_LIMIT_BYTES")
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    try:
+        from zelda_rl.wm_data import host_mem_limit
+        return host_mem_limit()
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def load_all(dirs, limit_per_dir=0, mem_frac: float = 0.55):
+    """Load every episode, REFUSING before the OOM killer gets involved.
+
+    `la3` was OOM-killed at 8,345 episodes on 2026-10-16: each episode holds ~2.9 MB of float32
+    observations, the Dyna refresh reloads the whole corpus while the previous copy is still referenced,
+    and the pod's cgroup limit was 32 GB while `free` reported 503 GB. The run died with `Killed` -- no
+    traceback -- and the health check then reported it as "FINISHED (clean exit)". A silent death is worse
+    than a crash, so this aborts with a number and an instruction instead.
+    """
     eps = []
+    lim = _mem_limit()
+    budget = int(lim * mem_frac) if lim else None
+    used = 0
     for d in dirs:
         files = sorted(Path(d).glob("*.npz"))
         if limit_per_dir:
@@ -56,6 +88,15 @@ def load_all(dirs, limit_per_dir=0):
                 bad += 1
                 continue
             obs = z["obs"].astype(np.float32)
+            used += obs.nbytes + obs.shape[0] * COND_DIM * 4
+            if budget and used > budget:
+                g_ = 2 ** 30
+                raise SystemExit(
+                    f"CORPUS TOO LARGE FOR THIS POD: {len(eps)} episodes already hold "
+                    f"{used / g_:.1f} GiB and the cgroup limit is {lim / g_:.1f} GiB "
+                    f"(budget {mem_frac:.0%} = {budget / g_:.1f} GiB, and a Dyna refresh needs a second "
+                    f"copy). Reduce the corpus -- cap the directory, use --limit-per-dir, or lower "
+                    f"--dyna-dir's contents. Refusing rather than being OOM-killed with no traceback.")
             idx = field_offsets(str(z["obs_fields"]))
             won = bool(z["boss_defeated"]) if "boss_defeated" in z.files else False
             g = conditioning(obs, idx, won)
@@ -66,6 +107,7 @@ def load_all(dirs, limit_per_dir=0):
                         "n_actions": int(z["n_actions"]) if "n_actions" in z.files else 108,
                         "fields": json.loads(str(z["obs_fields"]))})
         load_all.skipped = getattr(load_all, "skipped", 0) + bad
+        load_all.gib = used / 2 ** 30
         if bad:
             print(f"  {d}: SKIPPED {bad} unreadable of {len(files)} file(s), kept "
                   f"{len(eps) - n_before}", flush=True)
@@ -192,6 +234,10 @@ def main() -> int:
         """
         eps = load_all(dirs, a.limit_per_dir)
         wins = [e for e in eps if e["win"]]
+        lim_ = _mem_limit()
+        print(f"corpus holds {getattr(load_all, 'gib', 0):.1f} GiB in RAM"
+              + (f" of a {lim_ / 2 ** 30:.0f} GiB cgroup limit" if lim_ else " (no cgroup limit visible)"),
+              flush=True)
         print(f"corpus: {len(eps)} episodes, {len(wins)} wins "
               f"({100*len(wins)/max(len(eps),1):.1f}%), {sum(len(e['act']) for e in eps):,} steps",
               flush=True)

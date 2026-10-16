@@ -301,9 +301,12 @@ def main():
         # resume silently restarts the counter at 1 and the wandb curve and snapshot names collide
         _h = resume_ck.get("history") or []
         start_update = resume_ck.get("update", _h[-1]["update"] if _h else 0) + 1
-        print(f"  resuming policy from update {start_update - 1}"
-              f"{' (optimizer state restored)' if 'optimizer' in resume_ck else ' (optimizer state NOT in the '
-               'checkpoint: Adam moments restart)'}")
+        # Built as a plain string, not a nested same-quote f-string: that syntax is 3.12+ (PEP 701) and
+        # the GPU pod's image ships python 3.11, where it is a SyntaxError -- so this file would not even
+        # import there, which is where it has to run (2026-10-16).
+        _opt = (" (optimizer state restored)" if "optimizer" in resume_ck
+                else " (optimizer state NOT in the checkpoint: Adam moments restart)")
+        print(f"  resuming policy from update {start_update - 1}{_opt}")
         hist_prev = resume_ck.get("history", [])
         print(f"resumed {run_name} from update {start_update - 1} "
               f"({(start_update - 1) * a.envs * a.steps:,} transitions)")

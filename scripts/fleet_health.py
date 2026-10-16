@@ -34,7 +34,10 @@ PROBE = (
     "L=$(ls -t logs/*.log 2>/dev/null | head -1); "
     "U=$(grep -cE '^[0-9:]+ INFO +[0-9]+ ' \"$L\" 2>/dev/null); "
     "F=$(find \"$L\" -mmin -8 2>/dev/null | wc -l); "
-    "X=$(grep -cE 'Traceback|No space left|Error:' \"$L\" 2>/dev/null); "
+    # `Killed` is what the OOM killer leaves -- no traceback, no "Error". la3 was OOM-killed at 8,345
+    # episodes and this check called it "FINISHED (clean exit)", which is a check lying in the most
+    # dangerous direction: it reported a dead arm as a completed one.
+    "X=$(grep -cE 'Traceback|No space left|Error:|^Killed|Killed$' \"$L\" 2>/dev/null); "
     # Leaked per-instance Dolphin user dirs. eval_fleet/record_human created /tmp/<prefix>_<pid> and never
     # removed it: 6.5 GB a run, five runs, 33 GB of a 40 GB overlay, and the next training arm died on
     # ENOSPC writing a savestate (gohma-s3, 2026-10-16). zelda_rl/tmpdirs.py now reaps them, and this
