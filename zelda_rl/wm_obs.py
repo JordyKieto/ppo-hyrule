@@ -20,7 +20,10 @@ N_DIRS = 9                      # 8 compass directions + neutral; the action ind
 
 def load_episodes(dirs, limit=0, min_steps=120):
     eps, bad = [], 0
-    files = [f for d in dirs for f in sorted(Path(d).glob("*.npz"))]
+    # RECURSIVE: the collectors write <out>/episodes/*.npz and the Dyna loop passes the parent of its
+    # per-iteration shards, so a one-level glob found 0 episodes and the loop died at its WM stage with
+    # "refusing to train a WM on that" while 60 freshly collected episodes sat two directories down.
+    files = [f for d in dirs for f in sorted(Path(d).rglob("*.npz"))]
     if limit:
         files = files[:limit]
     fields = None
@@ -59,7 +62,7 @@ def scan_meta(dirs, limit=0, min_steps=120):
     trainer's exact split alongside a live trainer without a second copy of the corpus in RAM (AGENTS 23).
     Returns the accepted files in the same order `load_episodes` would.
     """
-    files = [f for d in dirs for f in sorted(Path(d).glob("*.npz"))]
+    files = [f for d in dirs for f in sorted(Path(d).rglob("*.npz"))]   # see load_episodes
     if limit:
         files = files[:limit]
     out = []
@@ -97,13 +100,37 @@ def load_files(metas):
     return eps, fields
 
 
-def field_index(fields: dict) -> dict:
-    """name -> column, for the global block (where hp lives)."""
+def field_index(fields) -> dict:
+    """name -> column. Accepts BOTH layout shapes in this repo and must, or a lookup silently returns None.
+
+    The episode npz written by `train_combat.py` stores `{"global": [(name, width), ...], ...}`; a policy
+    checkpoint's `config["obs_fields"]` stores the FLAT list `[(name, width), ...]` of the whole 1033-d
+    vector. The global block comes first in both, so the offsets of the fields that matter agree -- but a
+    `fields["global"]` lookup raises on the flat form, and a loop over the dict yields its keys, so a
+    careless reader gets a wrong index rather than an error.
+    """
+    rows = fields["global"] if isinstance(fields, dict) else fields
     idx, off = {}, 0
-    for name, w in fields["global"]:
+    for name, w in rows:
         idx[name] = off
-        off += w
+        off += int(w)
     return idx
+
+
+def layout_width(fields) -> int:
+    """Total width the layout describes -- compare it to obs_dim before trusting any column (AGENTS 3)."""
+    rows = fields["global"] if isinstance(fields, dict) else fields
+    return sum(int(w) for _, w in rows)
+
+
+def fields_from_checkpoint(path) -> list:
+    """`config["obs_fields"]` out of a policy checkpoint, for corpora whose npz do not carry the layout."""
+    import torch
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    of = (ck.get("config") or {}).get("obs_fields")
+    if of is None:
+        raise SystemExit(f"{path} has no config['obs_fields']; cannot recover the observation layout")
+    return json.loads(of) if isinstance(of, str) else of
 
 
 # ---------------------------------------------------------------------------------------------------

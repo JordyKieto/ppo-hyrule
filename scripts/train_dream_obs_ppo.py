@@ -35,7 +35,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.policy_io import load_policy          # noqa: E402
 from zelda_rl.ppo import ppo_update_recurrent       # noqa: E402
-from zelda_rl.wm_obs import load_wm                 # noqa: E402
+from zelda_rl.wm_obs import field_index, load_wm                 # noqa: E402
 
 BOSS_HP = 10.0                     # Gohma's HP, so a frac delta becomes HP
 R_DMG = 4.0                        # GOHMA_SIMPLE: +4.0 per boss HP taken
@@ -46,7 +46,7 @@ R_HURT = 2.0                       # Link-damage penalty per heart
 def start_frames(dirs, want: int, obs_dim: int) -> np.ndarray:
     """Real episode-START observations: the only honest place to begin a dream."""
     out = []
-    files = [f for d in dirs for f in sorted(Path(d).glob("*.npz"))]
+    files = [f for d in dirs for f in sorted(Path(d).rglob("*.npz"))]
     rng = np.random.default_rng(0)
     rng.shuffle(files)
     for f in files:
@@ -94,10 +94,12 @@ def main() -> int:
     dev = torch.device(a.device if (a.device != "cuda" or torch.cuda.is_available()) else "cpu")
 
     wm, scales, wck = load_wm(a.wm, dev)
+    # ONE field lookup for the whole project (zelda_rl.wm_obs.field_index): the npz layout is
+    # {"global": [...]} and a policy checkpoint's is a flat [...], and this file's private copy only
+    # understood the first, so every dream on a loop-trained WM died with "no gohma_hp_frac in its fields"
+    # while the WM had resolved those very columns one stage earlier.
     fields = wck.get("fields") or {}
-    idx, off = {}, 0
-    for name, w in fields.get("global", []):
-        idx[name] = off; off += w
+    idx = field_index(fields) if fields else {}
     g_hp, l_hp = idx.get("gohma_hp_frac"), idx.get("link_hp_frac")
     if g_hp is None or l_hp is None:
         raise SystemExit("the WM checkpoint has no gohma_hp_frac/link_hp_frac in its fields -- the dream "
@@ -122,6 +124,10 @@ def main() -> int:
     sel = torch.randint(0, starts.shape[0], (N,), device=dev)
     obs = starts[sel].clone()
     h = model.init_hidden(N).to(dev)
+    # THE WORLD MODEL'S OWN recurrent state, carried across the dream and reset only when a dream ends.
+    # It was previously re-initialised to zeros on EVERY step, which made the dream a memoryless model:
+    # the GRU could not carry Gohma's phase, so nothing the policy learned there could depend on timing.
+    wmh = wm.init_hidden(N, dev)
     first = torch.ones(N, device=dev)
     t_start = time.time()
     for upd in range(1, a.updates + 1):
@@ -141,10 +147,10 @@ def main() -> int:
                 dist = torch.distributions.Categorical(logits=logits)
                 act = dist.sample()
                 A[t], LP[t], V[t] = act, dist.log_prob(act), val.squeeze(-1)
-                d, _ = wm.step(obs, act, torch.zeros(N, wm.gru.hidden_size, device=dev)) \
-                    if False else wm.step(obs, act, getattr(main, "_wmh", None)
-                                          if getattr(main, "_wmh", None) is not None
-                                          else wm.init_hidden(N, dev))
+                # hard=True: a field the gate does not believe changes is copied forward EXACTLY, so a
+                # dream cannot accumulate a per-step error on the ~1000 static columns (this is what took
+                # H100 rollout error from 18.71 to 1.19)
+                d, _, wmh = wm.step(obs, act, wmh, hard=True)
                 nxt = obs + d * scales
                 # reward from the PREDICTED fields the real reward reads
                 dmg_hp = (obs[:, g_hp] - nxt[:, g_hp]).clamp(min=0) * BOSS_HP
@@ -160,6 +166,7 @@ def main() -> int:
                     sel = torch.randint(0, starts.shape[0], (N,), device=dev)
                     nxt = torch.where(done[:, None] > 0, starts[sel], nxt)
                     h2 = torch.where(done[:, None] > 0, torch.zeros_like(h2), h2)
+                    wmh = torch.where(done[:, None] > 0, torch.zeros_like(wmh), wmh)
                 obs, h, first = nxt, h2, done
             _, last_v, _ = model.step(obs, h, first)
             last_v = last_v.squeeze(-1)

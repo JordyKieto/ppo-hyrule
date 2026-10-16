@@ -17,9 +17,9 @@ reason this orchestrator exists instead of a shell script:
 Phases per iteration, each resumable and each verified before the next starts:
 
     collect   scripts/collect_transitions.py with the ANCHOR policy   -> datasets/transitions/<run>/iterN
-    wm        scripts/train_wm_tokens.py (resume)                     -> runs/<run>/wm.pt
-    event     scripts/train_event_head.py                             -> runs/<run>/event.pt
-    dream     scripts/train_dream_ppo.py --resume <anchor>            -> runs/<run>/dream_iterN.pt
+    wm        scripts/train_wm_obs.py (resume)                        -> runs/<run>/wm.pt
+    verdict   scripts/wm_status.py (persistence + per-event)          -> runs/<run>/iterNN_wmstatus.json
+    dream     scripts/train_dream_obs_ppo.py --init <anchor>           -> runs/<run>/snaps/dream_iterN.pt
     eval      scripts/eval_fleet.py --ckpt <dream policy>             -> real boss damage + kills
     anchor    keep the better of (anchor, candidate) BY REAL EVAL
 
@@ -88,6 +88,13 @@ def main() -> int:
     ap.add_argument("--slots", default="3,4,5,6,7,8")
     ap.add_argument("--profile", default="gohma", choices=("gohma", "deku_baba"))
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--device", default="cuda", help="cpu on the 16-vCPU Dolphin pods")
+    ap.add_argument("--wm-hidden", type=int, default=256,
+                    help="the LOOP's world model width. Smaller than the fleet's 1024 on purpose: an "
+                         "iteration must finish on a CPU pod")
+    ap.add_argument("--wm-batch", type=int, default=8, help="episodes per WM batch")
+    ap.add_argument("--dream-envs", type=int, default=32)
+    ap.add_argument("--dream-horizon", type=int, default=64)
     a = ap.parse_args()
 
     run = ROOT / "runs" / a.run
@@ -101,7 +108,6 @@ def main() -> int:
 
     data_dir = ROOT / "datasets" / "transitions" / a.run
     wm = run / "wm.pt"
-    ev_head = run / "event.pt"
     snaps = run / "snaps"
     snaps.mkdir(exist_ok=True)
 
@@ -113,8 +119,8 @@ def main() -> int:
     # a damage slope with its SE.
     online_log = run / "online.jsonl"
     online = subprocess.Popen(
-        [PY_, "-u", "scripts/eval_fleet.py", "--watch", str(snaps), "--suite", "full",
-         "--episodes-per-slot", "4", "--episode-seconds", "120", "--num-envs", str(a.workers),
+        [PY_, "-u", "scripts/eval_fleet.py", "--watch", str(snaps), "--slots", a.slots,
+         "--episodes-per-slot", "1", "--episode-seconds", "120", "--num-envs", str(a.workers),
          "--slots-dir", "assets/states", "--video-backend", "Null",
          "--per-episode-out", str(online_log), "--out", str(run / "online.json"),
          "--fleet-world-size", "1", "--run-name", f"{a.run}_online",
@@ -145,49 +151,60 @@ def main() -> int:
             if n_npz == 0:
                 raise SystemExit(f"{tag}: collect produced no .npz -- refusing to train a WM on nothing")
 
-            # 2. WORLD MODEL, resumed so each iteration improves the same model rather than restarting it
-            # THE PREP BUNDLE carries the per-field scales, the nav-grid bounds and the train/val SLOT
-            # split. configs/wm_prep_v4.json is Deku Baba's (63 actions, that room's grid) and would be
-            # wrong for Gohma, so iteration 0 FITS one from our own data with --save-prep and every later
-            # iteration reuses it -- otherwise the normalisation drifts as the corpus grows and the
-            # metrics stop being comparable across iterations (AGENTS 25, same lesson as the packer).
-            prep = run / "prep.json"
-            prep_args = (["--prep", str(prep)] if prep.is_file() else ["--save-prep", str(prep)])
-            rc = sh([PY_, "-u", "scripts/train_wm_tokens.py", "--data", str(data_dir),
-                     "--epochs", str(a.wm_epochs), "--device", "cuda", "--amp", *prep_args,
-                     *(["--resume", str(wm)] if wm.is_file() else []),
+            # 2. WORLD MODEL over the policy's OWN observation, resumed so each iteration improves the
+            # same model rather than restarting it. This is the obs-space WM (zelda_rl/wm_obs.py), which
+            # carries its own per-field scales in the checkpoint and its own change gate -- so there is no
+            # prep bundle to drift and no separate event head to train. The gate is why it needs no
+            # decoded-HP reward: a field it does not believe changes is copied forward exactly.
+            #
+            # The loop's WM is deliberately SMALLER than the fleet's (--wm-hidden, default 256): a loop
+            # iteration has to finish on a 16-vCPU pod, and this model only has to be good enough for the
+            # dream segment the real eval then judges. It is not comparable to runs/wm_obs/wm.pt.
+            # --epochs is a TOTAL in the trainer, and the WM RESUMES, so it has to grow with the
+            # iteration: `--epochs 3` on a model already at epoch 4 trains nothing and saves instantly,
+            # which is exactly what iteration 0's rerun did.
+            rc = sh([PY_, "-u", "scripts/train_wm_obs.py", "--data", str(data_dir),
+                     "--epochs", str(a.wm_epochs * (i + 1)), "--device", a.device,
+                     "--hidden", str(a.wm_hidden), "--gru", str(a.wm_hidden),
+                     "--batch", str(a.wm_batch), "--chunk", "64", "--stage2-epoch", "2",
+                     "--max-roll", "20", "--roll-half-life", "6.6", "--event-every", "1",
+                     "--key-weight", "20", "--key-pos-weight", "50", "--key-halluc-weight", "5",
+                     "--death-weight", "50",
+                     "--fields-from", st["anchor"],      # fresh shards carry no obs_fields
+                     *(["--resume"] if wm.is_file() else []),
                      "--out", str(wm)], run / f"{tag}_wm.log")
             if rc != 0 or not wm.is_file():
                 raise SystemExit(f"{tag}: WM training failed rc={rc}; see {run / f'{tag}_wm.log'}")
-            if not prep.is_file():
-                raise SystemExit(f"{tag}: no prep bundle at {prep} -- the WM fitted no scales/split, so "
-                                 f"later iterations could not be compared with this one")
 
-            # 3. EVENT HEAD -- the dream's reward. Not decoded HP (see train_dream_ppo's docstring).
-            rc = sh([PY_, "-u", "scripts/train_event_head.py", "--data", str(data_dir),
-                     "--model", str(wm), "--out", str(ev_head), "--device", "cuda"],
-                    run / f"{tag}_event.log")
-            if rc != 0 or not ev_head.is_file():
-                raise SystemExit(f"{tag}: event head failed rc={rc}; see {run / f'{tag}_event.log'}")
+            # 2b. THE WM'S OWN VERDICT, every iteration, before anything is dreamed in it: does it beat
+            # persistence, and does it predict the four key events? A dream inside a model that loses to
+            # persistence produces a policy the real eval will reject, and without this line the loop
+            # cannot say WHY it rejected it (AGENTS 1, 2, 34).
+            sh([PY_, "-u", "scripts/wm_status.py", "--ckpt", str(wm), "--n-eps", "16",
+                "--max-steps", "400", "--device", a.device,
+                "--json", str(run / f"{tag}_wmstatus.json")], run / f"{tag}_wmstatus.log")
 
-            # 4. DREAM-PPO from the ANCHOR (finding 3), never from the newest policy
-            # snapshots are written as <out>.updNNNNN.pt beside --out, so --out goes in the WATCHED
-            # dir and the online evaluator picks up every snapshot as it lands. No new flag needed.
+            # 3. DREAM-PPO from the ANCHOR (the paper's finding 3), never from the newest policy.
+            # Snapshots land in the WATCHED dir, so the online evaluator scores the policy in the REAL
+            # game while it is still learning in the dream.
             cand = snaps / f"dream_{tag}.pt"
-            rc = sh([PY_, "-u", "scripts/train_dream_ppo.py", "--model", str(wm),
-                     "--event-head", str(ev_head), "--data", str(data_dir),
-                     "--transitions", str(a.dream_transitions), "--resume", st["anchor"],
-                     "--seed-mode", "frames", "--out", str(cand),
-                 "--snapshot-every", "5", "--snapshot-dir", str(snaps),
-                     "--run-name", f"{a.run}_{tag}", "--wandb-project", "zelda-rl-dyna"],
-                    run / f"{tag}_dream.log")
+            updates = max(1, a.dream_transitions // max(a.dream_envs * a.dream_horizon, 1))
+            rc = sh([PY_, "-u", "scripts/train_dream_obs_ppo.py", "--wm", str(wm),
+                     "--init", st["anchor"], "--data", str(data_dir),
+                     "--envs", str(a.dream_envs), "--horizon", str(a.dream_horizon),
+                     "--updates", str(updates), "--device", a.device,
+                     "--snapshot-dir", str(snaps), "--snapshot-every", "5",
+                     "--out", str(cand)], run / f"{tag}_dream.log")
             if rc != 0 or not cand.is_file():
                 raise SystemExit(f"{tag}: dream-PPO failed rc={rc}; see {run / f'{tag}_dream.log'}")
 
             # 5. REAL EVAL -- finding 4: this is part of the algorithm, not a progress report
             per_ep = run / f"{tag}_eval.jsonl"
-            rc = sh([PY_, "-u", "scripts/eval_fleet.py", "--ckpt", str(cand), "--suite", "full",
-                     "--episodes-per-slot", str(max(1, a.eval_episodes // 6)), "--episode-seconds", "120",
+            # the SAME slots the loop collects on and the anchor was scored on: accepting a candidate
+            # measured on a different start distribution is the AGENTS 29 error with extra steps
+            rc = sh([PY_, "-u", "scripts/eval_fleet.py", "--ckpt", str(cand), "--slots", a.slots,
+                     "--episodes-per-slot", str(max(1, a.eval_episodes // len(a.slots.split(",")))),
+                     "--episode-seconds", "120",
                      "--num-envs", str(a.workers), "--slots-dir", "assets/states",
                      "--video-backend", "Null", "--per-episode-out", str(per_ep),
                      "--out", str(run / f"{tag}_eval.json"), "--fleet-world-size", "1",

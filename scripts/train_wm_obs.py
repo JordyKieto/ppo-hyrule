@@ -50,7 +50,8 @@ import torch.nn.functional as F
 # repo cannot import zelda_rl without this -- which is how lifting ObsWM into the package broke the run.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.wm_obs import (N_DIRS, ObsWM, column_weight, field_index, gate_pos_weight,  # noqa: E402
-                             event_accuracy, key_event_masks, load_episodes, step_weight)
+                             event_accuracy, fields_from_checkpoint, key_event_masks,
+                             layout_width, load_episodes, step_weight)
 
 def fit_scales(eps, obs_dim: int) -> np.ndarray:
     """Per-field std of the NON-ZERO deltas, the MOBA normalisation."""
@@ -119,6 +120,10 @@ def main() -> int:
                          "happened: the penalty for HALLUCINATING damage")
     ap.add_argument("--death-weight", type=float, default=50.0,
                     help="per-TICK weight on a boss-death or Link-death tick (one per episode at most)")
+    ap.add_argument("--fields-from", default="",
+                    help="a policy checkpoint to take the observation layout from, for corpora whose npz "
+                         "do not carry obs_fields (the Dyna loop's fresh shards). The layout's total width "
+                         "is asserted against obs_dim")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -130,8 +135,26 @@ def main() -> int:
         raise SystemExit(f"only {len(eps)} episodes -- refusing to train a WM on that")
     obs_dim = eps[0]["obs"].shape[1]
     n_actions = 108
+    if not fields and a.fields_from:
+        fields = fields_from_checkpoint(a.fields_from)
+        print(f"observation layout from {a.fields_from} (the episodes carry none)", flush=True)
+    if fields:
+        # The layout enumerates a PREFIX of the vector (297 named columns of 1033; the rest are the
+        # per-actor rows, which are not named individually), so the test is "describes no more than the
+        # data" plus "every column we are about to index is in range" -- not equality. An equality check
+        # here would have refused every real run.
+        w = layout_width(fields)
+        if w > obs_dim:
+            raise SystemExit(f"the layout describes {w} columns but the observations are {obs_dim}-d -- "
+                             f"refusing to index HP columns from a layout wider than the data")
     idx = field_index(fields) if fields else {}
     g_hp = idx.get("gohma_hp_frac"); l_hp = idx.get("link_hp_frac")
+    if fields and (g_hp is None or l_hp is None):
+        raise SystemExit("the layout has no gohma_hp_frac/link_hp_frac: the key-event penalties and the "
+                         "event report would both be silently disabled")
+    for nm, c in (("gohma_hp_frac", g_hp), ("link_hp_frac", l_hp)):
+        if c is not None and not 0 <= c < obs_dim:
+            raise SystemExit(f"{nm} resolves to column {c}, outside a {obs_dim}-d observation")
     print(f"obs {obs_dim}, actions {n_actions}, gohma_hp col {g_hp}, link_hp col {l_hp}", flush=True)
 
     if a.fleet_world_size > 1:
@@ -404,7 +427,26 @@ def main() -> int:
         ab = h20["shuf"] / max(h20["model"], 1e-9)
         print(f"      Q4 is the ACTION used?         shuffled-action penalty x{ab:.2f} -> "
               f"{'ACTION-CONDITIONED' if ab > 1.1 else 'NO -- the action is decoration'}", flush=True)
-    print(f"\nsaved {out}", flush=True)
+    # A RESUME WITH NOTHING LEFT TO TRAIN still has to write the checkpoint, because the metadata may
+    # have changed -- and it did: the Dyna loop resumed a WM at epoch 4 with --epochs 3, ran zero epochs,
+    # printed "saved", wrote nothing, and every dream then died on the fields the run had just resolved.
+    # A success line is not evidence (AGENTS 16), so this prints what actually happened.
+    if start > a.epochs:
+        ck_m = {}
+        if out.is_file():
+            try:
+                ck_m = torch.load(out, map_location="cpu", weights_only=False).get("metrics", {}) or {}
+            except Exception:                                    # noqa: BLE001
+                ck_m = {}
+        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": start - 1,
+                    "scales": scales.cpu().numpy(), "obs_dim": obs_dim, "n_actions": n_actions,
+                    "hidden": a.hidden, "gru": a.gru, "fields": fields, "config": vars(a),
+                    "metrics": ck_m}, out)
+        print(f"\nNO EPOCHS RAN: the checkpoint is at epoch {start - 1} and --epochs is {a.epochs}. "
+              f"Metadata (fields, scales, config) refreshed at {out}; pass a larger --epochs to train.",
+              flush=True)
+        return 0
+    print(f"\nsaved {out} (epoch {a.epochs})", flush=True)
     return 0
 
 

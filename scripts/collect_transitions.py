@@ -344,6 +344,12 @@ def main():
                 "state": np.asarray(states, np.float32)}
         if not args.no_obs:
             arrs["obs"] = np.asarray(obss, np.float32)
+            # SELF-DESCRIBING: without the layout, a consumer cannot find gohma_hp_frac in 1033 columns.
+            # The Dyna loop's world model and dream both died on shards collected without this.
+            if cfg.get("obs_fields") is not None:
+                arrs["obs_fields"] = json.dumps(cfg["obs_fields"]) if not isinstance(
+                    cfg["obs_fields"], str) else cfg["obs_fields"]
+        arrs["boss_defeated"] = np.asarray(bool(ep.get("end") == "success"))
         with lock:
             ep_index += 1
             idx = ep_index

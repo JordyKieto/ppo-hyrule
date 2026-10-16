@@ -115,6 +115,22 @@ def test_event_accuracy_separates_missed_from_hallucinated():
     assert r2["boss_damage"]["precision"] < 0.1, r2["boss_damage"]
 
 
+def test_loaders_find_episodes_in_subdirectories():
+    """The Dyna loop passes the PARENT of its per-iteration shards; a one-level glob found nothing."""
+    import tempfile
+    from zelda_rl.wm_obs import load_episodes, scan_meta
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        deep = root / "iter00" / "episodes"
+        deep.mkdir(parents=True)
+        e = _episode(n=200)
+        np.savez(deep / "ep0.npz", obs=e["obs"], action=e["act"], boss_defeated=False)
+        np.savez(deep / "ep1.npz", obs=e["obs"], action=e["act"], boss_defeated=True)
+        eps, _ = load_episodes([str(root)])
+        assert len(eps) == 2, f"recursive load found {len(eps)}"
+        assert len(scan_meta([str(root)])) == 2, "scan_meta must agree with load_episodes"
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (test_masks_find_all_four_events,
@@ -122,10 +138,13 @@ if __name__ == "__main__":
                test_missing_boss_damage_costs_more_than_missing_a_normal_field,
                test_hallucinating_boss_damage_is_penalised,
                test_tiny_drift_is_not_counted_as_a_hallucinated_hit,
-               test_event_accuracy_separates_missed_from_hallucinated):
+               test_event_accuracy_separates_missed_from_hallucinated,
+               test_loaders_find_episodes_in_subdirectories):
         try:
             fn(); print(f"PASS {fn.__name__}")
         except Exception as e:                                # noqa: BLE001
             fails += 1; print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
     print("ALL PASS" if not fails else f"{fails} FAILED")
     raise SystemExit(1 if fails else 0)
+
+
