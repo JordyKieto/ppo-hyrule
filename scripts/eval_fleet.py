@@ -216,7 +216,18 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
                     break
             if time.time() > nxt:                     # AGENTS 24: no silent minutes
                 d = sum(1 for e in out if e.get("defeat"))
+                # BOSS DAMAGE IN THE PROGRESS LINE. Defeats are a 1-10% binary, so a progress line that
+                # shows only defeats reads "0" for ten minutes on a policy doing anything at all, and the
+                # one number with resolution (AGENTS 34) was visible only in the final summary -- which is
+                # fifteen minutes of watching a counter that cannot move.
+                dmg = [float(e.get("boss_damage", 0)) for e in out]
+                bal = {}
+                for e in out:
+                    bal.setdefault(e.get("slot"), []).append(float(e.get("boss_damage", 0)))
+                mix_inv = (sum(sum(v) / len(v) for v in bal.values()) / len(bal)) if bal else float("nan")
                 print(f"  {len(out)}/{episodes} done, {len(queue)} queued, {d} defeats, "
+                      f"dmg {(sum(dmg)/len(dmg)) if dmg else float('nan'):.2f} "
+                      f"(balanced {mix_inv:.2f} over {len(bal)} slots), "
                       f"{time.time()-t0:.0f}s", flush=True)
                 nxt = time.time() + 60.0
     finally:

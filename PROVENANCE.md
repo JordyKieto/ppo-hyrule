@@ -743,6 +743,47 @@ arm's updates 18-25 were compared against the constant arm's 1-8. The error move
 hypothesis under test. Series are now pulled with `--last 60` and the update range is printed beside every
 slope (AGENTS 12). The instrument gave no sign: both windows print identically.
 
+### Does MORE demonstration data win more? 100 games vs 13, measured online (M)
+
+The corpus grew from 13 to **100 human wins** (54,626 steps, 23 pre-fight starts, 9 slots) and a clone was
+trained on all of it -- 91 train / 9 validation episodes, one per slot, best-validation checkpoint at epoch 36
+of 80. Both corpus versions are pinned in `datasets/human/gohma/MANIFEST.json` with per-episode md5, slot,
+start state, start distance, outcome, `recorded_utc` and the recorder's git commit: **v1 = 13 episodes, digest
+`5663643e97f889748c1941b56a6b6eb9`; v2 = 100 episodes, digest `e57da6027a3043d9cd7cdb80ab688c15`**, v1 a
+prefix of v2 so v1's published numbers stay reproducible. Built by `scripts/dataset_manifest.py`.
+
+Both clones were scored on the SAME suite: 80 episodes, 8 per start, all 10 starts, 120 s cap.
+
+| | 13-game clone (v1) | 100-game clone (v2) |
+|---|---|---|
+| held-out action accuracy | 53.4% (floor 11.1%) | **74.5%** (floor 20.1%) |
+| boss damage, all starts | 0.14 | **0.33** |
+| defeats | **0** / 80 | **1** / 80 (1.25%) |
+| deaths | 83.8% | 81.2% |
+| **full-HP starts (the task)** | **0/24, dmg 0.12** | **0/24, dmg 0.12** |
+| near starts (<200u) | 0.46 | **1.08** |
+| mid 200-400u / far >400u | 0.00 / 0.00 | **0.00 / 0.00** |
+
+**7.7x the data bought 2.4x the damage and the clone's first kill ever -- and changed nothing on the task.**
+On full-HP starts the two clones are identical at 0.12 damage and 0 wins in 24. The single defeat came from
+**slot 7: 37.9 units away, 5 HP left** -- finishing a nearly-dead boss it was already standing on. All of the
+gain is in the near band (0.46 -> 1.08); mid and far range are **0.00 in both**.
+
+**So dataset size is not the binding constraint, and this is the measurement that says so.** Imitation
+accuracy scales with data (53.4% -> 74.5%) and barely converts into damage, because the clone is trained
+**teacher-forced**: every step conditions on the human's real observation sequence, so it never learns to
+recover from the states its own mistakes create. 81% of its episodes still end in death. The ceiling is the
+method, not the corpus -- which is the argument for using the clone as a REPRESENTATION source under PPO
+(the latent arms) rather than as a policy.
+
+Artefact: `results/eval/bc_human_100_online.jsonl` (full per-slot and per-band breakdown), pulled off the pod
+before it was terminated. Clone: `checkpoints/kept/bc_human_100.pt`, also in S3 via the automatic backup.
+
+**An instrument fix found here:** the evaluator's progress line printed only a defeat counter, which reads 0
+for fifteen minutes for any policy below ~10% win rate, so boss damage -- the one signal with resolution
+(AGENTS 34) -- was visible only in the final summary. It now prints damage every minute, episode-weighted and
+mix-invariant across slots.
+
 ### ARTEFACTS LOST: the whole fleet vanished at ~20:14 on 2026-10-15 (A)
 
 `python -m fleet list` returned **$0.00/hr and zero pods**, and RunPod's REST API confirmed **0 pods** on the

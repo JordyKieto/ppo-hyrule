@@ -35,12 +35,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 torch.set_num_threads(max(1, (torch.get_num_threads() or 2) // 2))
 
+from zelda_rl import ckpt_s3
 from zelda_rl.ppo import RecurrentEntityActorCritic  # noqa: E402
 
 
-def load(data: Path, wins_only: bool):
+def load(data: Path, wins_only: bool, max_episodes: int = 0):
+    """`max_episodes` takes the FIRST N in filename order -- deterministic, so a dataset-size ablation is
+    reproducible and each size is a prefix of the next rather than a different random draw."""
     eps = []
-    for f in sorted(data.glob("ep*.npz")):
+    files = sorted(data.glob("ep*.npz"))
+    if max_episodes:
+        files = files[:max_episodes]
+    for f in files:
         z = np.load(f, allow_pickle=False)
         if wins_only and not bool(z["boss_defeated"]):
             continue
@@ -57,44 +63,69 @@ def load(data: Path, wins_only: bool):
     return eps
 
 
-def chunks(ep, chunk: int):
-    """Contiguous (obs, act, first) windows. `first` marks the episode start so the GRU resets there."""
-    T = len(ep["act"])
-    for i in range(0, T, chunk):
-        o = ep["obs"][i:i + chunk]
-        a = ep["act"][i:i + chunk]
-        f = np.zeros(len(a), np.float32)
-        if i == 0:
-            f[0] = 1.0
-        yield o, a, f
+def batches(eps, batch_episodes: int):
+    """Group episodes into padded batches, longest-first so padding waste is small.
+
+    The GRU is stepped over the time axis with `batch_episodes` episodes IN PARALLEL, each carrying its own
+    hidden state, so per-episode continuity is preserved exactly -- this is still the instrument that measures
+    clone quality, not the windowed approximation the PPO regulariser uses (zelda_rl/bc_demos.py).
+
+    Why this shape: the previous version stepped ONE episode with BATCH SIZE 1, which is 54,626 sequential
+    Python calls per epoch on the 100-game corpus and took ~1 minute per epoch. The work per step is a few
+    small matmuls, so the cost is almost entirely per-call overhead, and batching 16 episodes removes 15/16ths
+    of it without changing the maths.
+    """
+    order = sorted(range(len(eps)), key=lambda i: -len(eps[i]["act"]))
+    for b0 in range(0, len(order), batch_episodes):
+        sel = [eps[i] for i in order[b0:b0 + batch_episodes]]
+        B, T = len(sel), max(len(e["act"]) for e in sel)
+        obs = np.zeros((T, B, sel[0]["obs"].shape[1]), np.float32)
+        act = np.zeros((T, B), np.int64)
+        valid = np.zeros((T, B), np.float32)
+        for j, e in enumerate(sel):
+            n = len(e["act"])
+            obs[:n, j] = e["obs"][:n]
+            act[:n, j] = e["act"][:n]
+            valid[:n, j] = 1.0
+        yield (torch.from_numpy(obs), torch.from_numpy(act), torch.from_numpy(valid))
 
 
-def run_split(model, eps, chunk, opt=None):
-    """One pass. With `opt`, trains; without, evaluates. Returns (loss, accuracy, n)."""
-    tot_loss = tot_ok = tot_n = 0
-    for ep in eps:
-        h = model.init_hidden(1)
-        for o, a, f in chunks(ep, chunk):
-            x = torch.from_numpy(o).unsqueeze(1)                 # (T, 1, obs)
-            y = torch.from_numpy(a)
-            first = torch.from_numpy(f).unsqueeze(1)
-            logits = []
-            hh = h
-            for t in range(len(y)):
-                lg, _, hh = model.step(x[t], hh, first[t])
-                logits.append(lg)
-            lg = torch.cat(logits, 0)
-            loss = F.cross_entropy(lg, y)
-            if opt is not None:
-                opt.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-                opt.step()
-            h = hh.detach()
-            tot_loss += float(loss.detach()) * len(y)
-            tot_ok += int((lg.argmax(-1) == y).sum())
-            tot_n += len(y)
-    return tot_loss / max(tot_n, 1), tot_ok / max(tot_n, 1), tot_n
+def run_split(model, eps, chunk, opt=None, batch_episodes: int = 16):
+    """One pass. With `opt`, trains; without, evaluates. Returns (loss, accuracy, n).
+
+    Backprop is truncated every `chunk` steps (the hidden state is detached), which is the same BPTT horizon
+    as before -- only the batch dimension changed.
+    """
+    tot_loss = tot_ok = tot_n = 0.0
+    for obs, act, valid in batches(eps, batch_episodes):
+        T, B = act.shape
+        h = model.init_hidden(B)
+        first = torch.zeros(B)
+        first[:] = 1.0                                  # every episode in the batch starts at t=0
+        seg_logits, seg_act, seg_valid = [], [], []
+        for t in range(T):
+            lg, _, h = model.step(obs[t], h, first)
+            first = torch.zeros(B)
+            seg_logits.append(lg); seg_act.append(act[t]); seg_valid.append(valid[t])
+            if len(seg_logits) == chunk or t == T - 1:
+                L = torch.stack(seg_logits, 0).reshape(-1, lg.shape[-1])
+                y = torch.stack(seg_act, 0).reshape(-1)
+                w = torch.stack(seg_valid, 0).reshape(-1)
+                ce = F.cross_entropy(L, y, reduction="none") * w
+                n = w.sum().clamp(min=1.0)
+                loss = ce.sum() / n
+                if opt is not None:
+                    opt.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                    opt.step()
+                with torch.no_grad():
+                    tot_loss += float(loss.detach()) * float(n)
+                    tot_ok += float((((L.argmax(-1) == y).float()) * w).sum())
+                    tot_n += float(n)
+                h = h.detach()
+                seg_logits, seg_act, seg_valid = [], [], []
+    return tot_loss / max(tot_n, 1), tot_ok / max(tot_n, 1), int(tot_n)
 
 
 def main() -> int:
@@ -108,11 +139,18 @@ def main() -> int:
     ap.add_argument("--gru", type=int, default=256)
     ap.add_argument("--val-episodes", type=int, default=2, help="held out BY EPISODE, never by frame")
     ap.add_argument("--wins-only", action="store_true", help="clone only the episodes that killed her")
+    ap.add_argument("--batch-episodes", type=int, default=16,
+                    help="episodes stepped IN PARALLEL. Each keeps its own hidden state, so this changes "
+                         "speed and not the maths; 1 reproduces the old one-episode-at-a-time loop")
+    ap.add_argument("--max-episodes", type=int, default=0,
+                    help="train on the FIRST N episodes only (0 = all). For the dataset-size ablation: each "
+                         "size is a prefix of the next, so the curve is not confounded by which episodes "
+                         "were drawn")
     ap.add_argument("--episode-seconds", type=float, default=120.0,
                     help="recorded in the checkpoint so an evaluator rebuilds the same fight; match the PPO run")
     a = ap.parse_args()
 
-    eps = load(Path(a.data), a.wins_only)
+    eps = load(Path(a.data), a.wins_only, a.max_episodes)
     fields = eps[0]["fields"]
     n_actors, actor_dim = fields["n_actors"], sum(w for _, w in fields["actor"])
     global_dim = eps[0]["obs_dim"] - n_actors * actor_dim
@@ -155,10 +193,10 @@ def main() -> int:
     print(f"{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val loss':>11}{'val acc':>9}")
     for ep_i in range(1, a.epochs + 1):
         model.train()
-        tl, ta, _ = run_split(model, tr, a.chunk, opt)
+        tl, ta, _ = run_split(model, tr, a.chunk, opt, a.batch_episodes)
         model.eval()
         with torch.no_grad():
-            vl, vacc, _ = run_split(model, va, a.chunk) if va else (float("nan"), float("nan"), 0)
+            vl, vacc, _ = run_split(model, va, a.chunk, None, a.batch_episodes) if va else (float("nan"), float("nan"), 0)
         print(f"{ep_i:>6}{tl:>12.4f}{100 * ta:>10.1f}%{vl:>11.4f}{100 * vacc:>8.1f}%")
         score = vacc if va else ta
         if score > best[0]:
@@ -172,7 +210,7 @@ def main() -> int:
             from dataclasses import asdict
             from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
             ccfg = CombatConfig(profile="gohma", max_seconds=a.episode_seconds, **GOHMA_SIMPLE)
-            torch.save({"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
+            ckpt = {"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
                         "episode_count": 0,
                         "config": {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
                                    "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden,
@@ -182,7 +220,9 @@ def main() -> int:
                                    "profile": "gohma", "run_name": "bc_human",
                                    "bc_source": str(a.data), "bc_episodes": len(eps), "bc_wins": wins,
                                    "bc_steps": steps, "bc_val_acc": float(vacc), "bc_epoch": ep_i,
-                                   "bc_wins_only": bool(a.wins_only)}}, out)
+                                   "bc_wins_only": bool(a.wins_only)}}
+            torch.save(ckpt, out)
+            ckpt_s3.upload(out, f"bc_human_n{len(eps)}", ep_i)
     print(f"\nbest {'val' if va else 'train'} accuracy {100 * best[0]:.1f}% at epoch {best[1]} -> {a.out}")
     print(f"  majority baseline was {100 * base:.1f}% -- beat that or the clone learned nothing")
     print(f"\nuse it:  fleet ckpt --experiment E --path {a.out}")

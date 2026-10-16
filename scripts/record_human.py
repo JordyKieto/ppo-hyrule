@@ -222,7 +222,10 @@ def build_env(slots, slots_dir, seconds, visible, pad_ini="", volume=100):
     states = {k: read_state_file_v2(f) for k, f in files.items()}
     cfg = EnvConfig(episode_vi=int(seconds * 60), vi_per_step=6,
                     video_backend="Metal" if visible else "Null", unlimited_speed=False,
-                    audio=visible, volume=volume, obs_version=7, task="combat", stall_timeout=600.0,
+                    # 600 s meant a frozen savestate looked like a ten-minute hang with no message. A bad
+                    # state should say so in half a minute: assets/mixed slot 10 (live s06) froze the
+                    # emulator with the pad dead, and the only way out was closing Dolphin by hand.
+                    audio=visible, volume=volume, obs_version=7, task="combat", stall_timeout=30.0,
                     human_pad_ini=pad_ini,
                     # room_radius / fall_drop MUST be the replay harness's values, not the trainer's.
                     # The trainer's 1400 / 150 are tuned for agents that start ALREADY ENGAGED and barely
@@ -515,6 +518,12 @@ def main() -> int:
                   f"{ep_info.get('boss_damage', 0)}/10, {'WIN' if won else 'no kill'}")
     except KeyboardInterrupt:
         print("\ninterrupted")
+    except Exception as e:                                                   # noqa: BLE001
+        # An emulation stall here is almost always a bad savestate: it reads as the pad going dead with the
+        # picture frozen. Name the slot so the state can be replaced instead of the session being re-run.
+        print(f"\n!! {type(e).__name__}: {e}")
+        print(f"   this happened on SLOT {slot} of {a.slots_dir} -- if the picture froze and the controller "
+              f"stopped responding, that savestate is bad. Drop the slot from --slots, or replace the file.")
     finally:
         try:
             env.close()
