@@ -1115,6 +1115,60 @@ This is the §13 failure — variants of an adopted method were run before the m
 
 ---
 
+### LATENT ALIGNMENT to the human clone, on the policy's OWN online states (M, in flight)
+
+`gohma-la`, 2026-10-16, 9 pods: 3 arms x 3 seeds, all from `gohma-kl-v15-r4_latest.pt`, teacher
+`bc_human_100_strat.pt` (the event-stratified clone of the 100 human wins, 0.53 online damage). The three
+checkpoints are architecturally identical (obs 1033, 108 actions, hidden/gru 256), so the alignment is a raw
+MSE with no projection.
+
+| arm | what it adds | seeds' slopes (dmgB per update) | dmgB |
+|---|---|---|---|
+| **A** | `--bc-latent-coef 1.0 --bc-latent-states rollout --bc-latent-site proj` | +0.032 (t=0.82, n=19), −0.066 (t=−1.64, n=8), +0.123 (t=0.74, n=6) | 1.07–3.67 |
+| **B** | A **+** `--kl-anchor <BC> --kl-coef 0.3` (the clone's ACTIONS on those same online states) | **−0.107 (t=−5.50, n=19)**, −0.038 (n=7), **−0.110 (t=−4.83, n=18)** | 0.91–2.32 |
+| **C** | nothing (control) | −0.063 (t=−2.26, n=17), +0.012 (n=17), −0.045 (n=22) | 1.53–2.67 |
+
+**B is harmful and it is not marginal**: two of three seeds at |t| > 4.8, both landing near dmgB 1.1 while the
+control sits at 1.53–2.67. **A is indistinguishable from the control on every seed.** Mechanism, consistent
+with §34's `g_approach` finding: pressing a 0.53-damage clone's action distribution onto a 3.275-damage policy
+pulls the policy toward the clone. Aligning the *representation* alone neither helps nor hurts so far.
+
+**Retracted within the same session:** `la_A_s0` was reported at **+0.393, t=3.46** on **6** updates. At 19
+updates it is **+0.032, t=0.82**. Six updates of a noisy arm is not a slope, and it was reported as one.
+
+### PURE RvS, five corpus mixes, with online eval INSIDE the arm (M, in flight)
+
+`gohma-rvs`, 5 pods (a sixth sat 330 s with no SSH port and was dropped by `fleet adopt`). `train_rvs.py`
+trains return-conditioned BC — **no PPO at all** — and every few epochs plays 24 episodes through
+`eval_fleet.evaluate`, so one pod is the whole loop. The win class is **the 100 human wins** by design; PPO
+losses supply the low-outcome labels; PPO wins enter one arm only. Headline `boss_damage_balanced`, three
+evals each:
+
+| arm | corpus | win share achieved | dmgB | slope / epoch |
+|---|---|---|---|---|
+| **M2** | human + 498 losses | 30.0% (mult 2.94) | **1.50** | **+0.1197 ± 0.0391, t=+3.06** |
+| M5 | M2 + 200 PPO wins | 30.0% (mult 1.16) | 1.33 | −0.026 ± 0.081, t=−0.32 |
+| M3 | human + 492 losses | 60.0% (mult 10.45) | 0.75 | +0.037 ± 0.045 |
+| M4 | human + 496 losses | 10.0% (mult 0.76) | 0.75 | −0.016 ± 0.015 |
+| M1 | human wins only | 100% (degenerate) | 0.33 | +0.0080 ± 0.0044, t=+1.83 |
+
+**M2 leads and is the only arm with a slope distinguishable from zero.** Two things look stable: training on
+wins ALONE is the worst configuration (M1, 0.33 — no contrast, nothing labels the fatal action), and
+return-conditioning on mostly-failures reaches **1.50 from pure supervised learning**, against the plain
+clone's 0.33 and the stratified clone's 0.53 on the same 100 games.
+
+**Retracted, one cycle after it was reported:** M5 read **2.00** at two evals and was called "the most
+promising" — it is **1.33** at three, with a flat slope, while M2 went 0.54 → 0.75 → 1.50. A 24-episode eval
+is the noise floor here, and the maximum of five arms read once is biased upward (§35). Nine pods were
+retooled onto an M5-shaped sweep on the strength of that two-eval maximum; the axis was corrected to include
+`ppo_wins = 0` (the M2 shape) before the arms had finished pulling their corpora.
+
+**In flight:** `gohma-la` retooled to a 9-cell M5-shape sweep — `ppo_wins ∈ {0, 100, 495} x win_share ∈
+{0.15, 0.3, 0.5}`, human wins and ~500 losses in every cell, each cell refusing to start unless its corpus
+is complete.
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and
