@@ -671,6 +671,31 @@ v15 already is, so the compute was reallocated after 15 minutes rather than afte
 action accuracy therefore buys **nothing** as an initialisation for this task: claim R42 is answered NO on the
 training-side evidence, pending the eval pod's held-out number.
 
+**The pure-BC policy measured head-on: 0 defeats in 80 held-out episodes (M).** The eval pod played
+`bc_human.pt` 8 episodes on each of the 10 starts, Null backend, 120 s cap:
+
+| band | n | defeat | death | boss HP taken |
+|---|---|---|---|---|
+| ALL | 80 | **0.00%** | 83.8% | **0.14** / 10 |
+| full_hp_10 (the task) | 24 | 0.00% | 70.8% | 0.12 |
+| mid_hp_6_8 | 16 | 0.00% | 62.5% | 0.00 |
+| half_hp_5 | 40 | 0.00% | 100.0% | 0.20 |
+| near_lt200 | 24 | 0.00% | 100.0% | 0.46 |
+| mid_200_400 | 24 | 0.00% | 75.0% | 0.00 |
+| far_gt400 | 32 | 0.00% | 78.1% | 0.00 |
+
+Per slot: 0.0% defeat on every one of the ten, death 100% on seven of them, mean episode length 41 s.
+
+**This is the number that makes the point of the whole corpus exercise.** The clone predicts the human's next
+action on 53.4% of held-out frames -- nearly 5x the majority floor -- and takes **1.4% of Gohma's HP**, against
+v15's 3.275 (23x more) and from-scratch v10's 0.38 start. Imitation accuracy on single frames is not
+competence in closed loop, and the gap is not small or arguable: it is 0 wins in 80 attempts. Claim R42 is
+answered **NO** with an artefact (`runs/eval_bc_baseline.jsonl` on rank 0, W&B group `gohma-v20-bc-eval`).
+
+Mechanically the reason is visible in the training logs of arm 2: v15 agrees with the human on **3%** of
+frames at update 1. Two policies that both beat Gohma (one human, one v15) share almost no frame-level
+behaviour, so action-matching is a weak proxy for the thing being learned.
+
 **Arm 2 -- v15's weights with the BC loss kept on (U).** `gohma-v20-v15bc`, launch id `20261015175011`:
 identical to arm 1 except `--init-from checkpoints/kept/gohma-kl-v15-r4_latest.pt`. v15 is an exact tensor
 match for the corpus (obs 1033, 108 actions, 256/256), so the mismatch is behavioural, not structural -- the
@@ -682,6 +707,30 @@ of the arm, which is what AGENTS 7 asks for. Fleet cost $8.40/hr.
 The question this arm answers, and the signature to read: v15 starts at 3.275. If `dmgB` rises, demonstrations
 help a competent policy; if it falls while `bcA` climbs, the term is overfitting 13 episodes and dragging the
 policy off a better strategy, and `--bc-coef` comes down.
+
+**RESULT, arm 2 at a CONSTANT coef 0.1 -- the regulariser works and costs damage (M).** 12 ranks over 8
+updates, with a 4-rank replicate group:
+
+| | update 1 | latest | slope +/- SE | t |
+|---|---|---|---|---|
+| 12-rank group, boss damage | 2.63 | 2.03 (u8) | **-0.0857 +/- 0.0172** | **-4.98** |
+| 4-rank replicate, boss damage | 2.92 | 2.33 (u6) | -0.1340 +/- 0.0886 | -1.51 |
+| rank 1 `bcA` (agreement with the human) | 3% | **23%** | rising | |
+| rank 1 `bcL` (BC cross-entropy) | 4.43 | 3.00 | falling | |
+
+Both groups decline and **every update of both sits below v15's 3.275**. The replicate is not individually
+significant at n=6 but agrees in direction, which is what a replicate is for (AGENTS 7). The term is doing
+exactly what it was built to do -- agreement up 8x, its own loss down -- and the headline it costs is damage.
+Success rate did NOT fall with damage (12-rank 5.9% -> 5.6% with a 9.2% peak; replicate 7.8% -> 11.0%), but
+AGENTS 34 says trust the graded signal over a 1-10% binary, so that is read as noise rather than a result.
+
+**Arm 3 -- the decaying coefficient with a floor (U).** `gohma-v20-v15bcd` launch `20261015180929` (12 ranks)
+and `gohma-v15bc-v15bcd` launch `20261015181013` (4 ranks): coef **0.1 -> 0.02 over 50 updates, then held
+at 0.02 forever**. Decaying to zero was rejected on the author's instruction and is asserted impossible in
+`tests/test_bc_regulariser.py`: a coefficient that reaches 0 leaves `--init-from`-only behaviour, where the
+demonstrations shape a few early updates and nothing after. 0.02 against the measured `bcL` ~3.0 contributes
+~0.06 to the loss, the same order as PPO's own policy loss (0.01-0.1), so the tail keeps real influence.
+`bc_demos.coef_at()` is the schedule and `bcC` in the log line is the value actually applied.
 
 ---
 
