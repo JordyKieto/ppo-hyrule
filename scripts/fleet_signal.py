@@ -158,9 +158,16 @@ def main() -> int:
         n1 = len(a1["u"])
         if not (comb == comb) or len(ranked[0][0]["u"]) < 3:
             verdict = f"NO VERDICT: {n1} eval(s) on the top arm, need 3+ to pool an SE"
-        elif gap > comb:
+        elif gap > 2 * comb:
             verdict = (f"LEADER {a1['name']} {m1:.2f} +- {e1:.2f} beats {a2['name']} {m2:.2f} +- {e2:.2f} "
-                       f"by {gap:.2f} > combined SE {comb:.2f}  (t={gap/comb:+.2f})")
+                       f"by {gap:.2f}, t={gap/comb:+.2f}")
+        elif gap > comb:
+            # The first threshold here was `gap > comb`, i.e. t > 1, taken from 35 rule 5's "more than the
+            # combined standard error". It printed LEADER at t=+1.80, which 34 rule 3 forbids calling an
+            # improvement at all ("|t|>2 or do not say improving"). t>1 is ~68% one-sided: a coin with a
+            # lean. LEADER now needs t>2 and this band is named for what it is.
+            verdict = (f"WEAK: {a1['name']} {m1:.2f} +- {e1:.2f} leads {a2['name']} {m2:.2f} +- {e2:.2f} "
+                       f"by {gap:.2f} but only t={gap/comb:+.2f} -- NOT separable at |t|>2, keep running")
         else:
             verdict = (f"TIE: {a1['name']} {m1:.2f} and {a2['name']} {m2:.2f} differ by {gap:.2f}, "
                        f"inside the combined SE {comb:.2f} -- NOT a ranking")

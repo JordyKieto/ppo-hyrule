@@ -1181,6 +1181,48 @@ axis corrected on eval 3. `scripts/fleet_signal.py` now prints `POOLED ± SE` pe
 `VERDICT` line that says `TIE ... NOT a ranking` unless the gap exceeds the combined SE, and `NO VERDICT`
 under three evals.
 
+### PURE RvS DEFEATS GOHMA — 8 kills in 240 episodes, where both BC clones scored 0 in 400 (M)
+
+The headline of the session. `rvs_M5` (100 human wins + 200 PPO wins + ~500 PPO losses, win class at 30% of
+the gradient), ten online evals of 24 episodes each:
+
+```
+e4:1.54  e8:2.00  e12:1.33  e16:1.50  e20:1.62  e24:1.71  e28:2.17  e32:1.38  e36:1.92  e40:2.42
+pooled 1.76 ± 0.11 | slope +0.0145 ± 0.0091 /epoch, t=+1.60 (flat) | kills 8/240 = 3.3%
+```
+
+**Pure supervised learning, no PPO anywhere, defeats the boss in 3.3% of episodes.** Both BC clones of the
+same 100 human games scored **0 defeats in 400 episodes** (R64), and the event-stratified clone's damage was
+0.53 against this 1.76. The other mixes' kill rates place the effect on the corpus, not on luck: M2 2/192,
+M4 2/168, M3 1/240, M1 1/240 — all ≈0.5–1%, against M5's 3.3%.
+
+The slope is **flat at |t|<2**, so the plateau stands: it saturates near 1.7–1.8, about half of v15's 3.275.
+
+**More PPO wins is NOT better past a couple of hundred.** `rvs_M5` uses 200 and the sweep's `w495_s0.3` cell
+uses all 495 at the same win share: **1.76 ± 0.11 vs 1.42 ± 0.08, t = +2.43**, favouring 200. The `w` axis
+matters for *having* PPO wins (w=0 cells sit at 0.67–0.95) but not monotonically in their number.
+
+**Baselines are captured to a file, not a message.** `scripts/rvs_baselines.py` reads every arm's `EVAL`
+lines off the pods into `results/rvs_baselines.json` with n_evals, pooled, SE and kills, refuses to let a
+re-capture shrink a recorded history, and scores a Dyna arm against its own static mix (`DYNA HELPS` /
+`HURTS` only at |t|>2, `NO VERDICT` under three evals). It was written because M1/M2/M4 were repurposed onto
+Dyna while their eval histories existed **only** in the logs on those same pods.
+
+### DYNA on the best mix (U — in flight), and one mechanical finding already
+
+Three arms: two seeds of M5 + Dyna and one of M4 + Dyna (M4 has no PPO wins, so if Dyna works by supplying
+winning examples the two must respond differently). The online evaluator **is** the collector: `eval_fleet`
+writes every episode it plays as a corpus-format `.npz`, those rejoin the corpus labelled by
+`rvs.conditioning()` with the outcome they actually produced, and the win multiplier is re-solved for the new
+composition. The static dirs reload every cycle, so the 100 human wins can never be evicted.
+
+**Already visible, and it bounds what Dyna can do here:** after the first refresh each arm had absorbed 24 of
+its own episodes and its **win count had not moved** (M5 300 → 300, M4 100 → 100). At a 0–4% defeat rate the
+refresh supplies almost pure failure data, which dilutes the win class rather than enriching it — the
+win-share re-solve preserves the configured weighting, but the mechanism that would make Dyna *help* is not
+firing. First Dyna numbers (2 evals, NO VERDICT): `dyna_M5_s0` 1.56 ± 0.19 (2 kills/48), `dyna_M5_s1`
+1.06 ± 0.02, `dyna_M4_s4` 0.84 ± 0.13.
+
 **In flight:** `gohma-la` retooled to a 9-cell M5-shape sweep — `ppo_wins ∈ {0, 100, 495} x win_share ∈
 {0.15, 0.3, 0.5}`, human wins and ~500 losses in every cell, each cell refusing to start unless its corpus
 is complete.

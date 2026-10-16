@@ -1,0 +1,171 @@
+{
+  "rvs_M1": {
+    "arm": "rvs_M1",
+    "rank": 0,
+    "evals": [
+      0.25,
+      0.125,
+      0.333,
+      0.292,
+      0.375,
+      0.333,
+      0.458,
+      0.375,
+      0.125,
+      0.458
+    ],
+    "wins": 1,
+    "episodes": 240,
+    "n_evals": 10,
+    "pooled": 0.3124,
+    "se": 0.03736195331557968
+  },
+  "dyna_M5_s0": {
+    "arm": "dyna_M5_s0",
+    "rank": 0,
+    "evals": [
+      1.375,
+      1.75
+    ],
+    "wins": 2,
+    "episodes": 48,
+    "n_evals": 2,
+    "pooled": 1.5625,
+    "se": 0.18749999999999997
+  },
+  "dyna_s0": {
+    "arm": "dyna_s0",
+    "rank": 0,
+    "evals": [],
+    "wins": 0,
+    "episodes": 0,
+    "n_evals": 0,
+    "pooled": NaN,
+    "se": NaN
+  },
+  "rvs_M2": {
+    "arm": "rvs_M2",
+    "rank": 1,
+    "evals": [
+      0.542,
+      0.75,
+      1.5,
+      0.75,
+      1.125,
+      1.042,
+      0.792,
+      0.542
+    ],
+    "wins": 2,
+    "episodes": 192,
+    "n_evals": 8,
+    "pooled": 0.8803749999999999,
+    "se": 0.11500775400877479
+  },
+  "dyna_M5_s1": {
+    "arm": "dyna_M5_s1",
+    "rank": 1,
+    "evals": [
+      1.042,
+      1.083
+    ],
+    "wins": 0,
+    "episodes": 48,
+    "n_evals": 2,
+    "pooled": 1.0625,
+    "se": 0.02049999999999996
+  },
+  "dyna_s1": {
+    "arm": "dyna_s1",
+    "rank": 1,
+    "evals": [],
+    "wins": 0,
+    "episodes": 0,
+    "n_evals": 0,
+    "pooled": NaN,
+    "se": NaN
+  },
+  "rvs_M3": {
+    "arm": "rvs_M3",
+    "rank": 3,
+    "evals": [
+      0.458,
+      0.917,
+      0.75,
+      0.667,
+      0.958,
+      1.042,
+      1.042,
+      0.833,
+      0.75,
+      0.75
+    ],
+    "wins": 1,
+    "episodes": 240,
+    "n_evals": 10,
+    "pooled": 0.8167,
+    "se": 0.05737150860836761
+  },
+  "rvs_M4": {
+    "arm": "rvs_M4",
+    "rank": 4,
+    "evals": [
+      0.875,
+      0.708,
+      0.75,
+      1.0,
+      1.125,
+      0.5,
+      0.792
+    ],
+    "wins": 2,
+    "episodes": 168,
+    "n_evals": 7,
+    "pooled": 0.8214285714285714,
+    "se": 0.07700706743782774
+  },
+  "dyna_M4_s4": {
+    "arm": "dyna_M4_s4",
+    "rank": 4,
+    "evals": [
+      0.708,
+      0.972
+    ],
+    "wins": 0,
+    "episodes": 47,
+    "n_evals": 2,
+    "pooled": 0.84,
+    "se": 0.132
+  },
+  "dyna_s4": {
+    "arm": "dyna_s4",
+    "rank": 4,
+    "evals": [],
+    "wins": 0,
+    "episodes": 0,
+    "n_evals": 0,
+    "pooled": NaN,
+    "se": NaN
+  },
+  "rvs_M5": {
+    "arm": "rvs_M5",
+    "rank": 5,
+    "evals": [
+      1.542,
+      2.0,
+      1.333,
+      1.5,
+      1.625,
+      1.708,
+      2.167,
+      1.375,
+      1.917,
+      2.417
+    ],
+    "wins": 8,
+    "episodes": 240,
+    "n_evals": 10,
+    "pooled": 1.7584,
+    "se": 0.11284839387425943
+  }
+}
