@@ -106,6 +106,11 @@ def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> floa
     bal = float(np.mean([np.mean(v) for v in per.values()]))
     pooled = float(np.mean([d for v in per.values() for d in v]))
     wins = sum(1 for e in eps if e.get("boss_defeated"))
+    # RETURN as well as damage. 34 says the headline is what the reward pays for, and the first version of
+    # this line printed damage and kills only -- so "what is the reward trend" could not be answered for an
+    # arm that had already run forty epochs. It is free: eval_fleet hands back each episode's return.
+    ret = float(np.mean([float(e.get("return", 0.0)) for e in eps]))
+    hurt = float(np.mean([float(e.get("hp_lost", 0.0)) for e in eps]))
     hist.append((ep_i, bal))
     trend = ""
     if len(hist) >= 3:
@@ -117,8 +122,8 @@ def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> floa
         t = beta[0] / se if se > 0 else float("nan")
         trend = (f" | slope {beta[0]:+.4f} +- {se:.4f} /epoch  t={t:+.2f}  "
                  f"{'RISING' if t > 2 else 'FALLING' if t < -2 else 'flat'} over {len(hist)} evals")
-    print(f"  EVAL epoch {ep_i}: dmgB(balanced) {bal:.3f} | pooled {pooled:.3f} | wins {wins}/{len(eps)} | "
-          f"slots {len(per)}{trend}", flush=True)
+    print(f"  EVAL epoch {ep_i}: dmgB(balanced) {bal:.3f} | pooled {pooled:.3f} | ret {ret:.1f} | "
+          f"hpLost {hurt:.2f} | wins {wins}/{len(eps)} | slots {len(per)}{trend}", flush=True)
     return bal
 
 
@@ -214,6 +219,7 @@ def main() -> int:
         return eps, tr, va, solved
 
     eps, tr, va, solved = prepare(list(a.data))
+    wins = [e for e in eps if e["win"]]          # read by the checkpoint config, below
 
     f0 = eps[0]["fields"]
     n_actors, actor_dim = f0["n_actors"], sum(w for _, w in f0["actor"])
@@ -267,6 +273,7 @@ def main() -> int:
                 print(f"  DYNA: absorbing {n_fresh} of the policy's own episodes from {a.dyna_dir}",
                       flush=True)
                 eps, tr, va, solved = prepare(list(a.data) + [a.dyna_dir])
+                wins = [e for e in eps if e["win"]]
             if ev is not None and ev > best_dmg[0]:
                 best_dmg = (ev, ep_i)
                 keep = Path(a.out).with_name(Path(a.out).stem + "_bestdmg.pt")

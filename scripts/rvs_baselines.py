@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fleet.cli import R_REPO, for_pods, load_state, run   # noqa: E402
 
 OUT = Path(__file__).resolve().parents[1] / "results" / "rvs_baselines.json"
-EV = re.compile(r"EVAL epoch (\d+): dmgB\(balanced\) ([\d.]+) \| pooled ([\d.]+) \| wins (\d+)/(\d+)")
+EV = re.compile(r"EVAL epoch (\d+): dmgB\(balanced\) ([\d.]+) \| pooled ([\d.]+) \|.*?wins (\d+)/(\d+)")
 
 
 def pooled(vals: list[float]) -> tuple[float, float]:
@@ -52,6 +52,7 @@ def capture(exp: str) -> dict:
             m = EV.search(line)
             if m and cur:
                 arms[cur]["evals"].append(float(m.group(2)))
+                arms[cur].setdefault("epochs", []).append(int(m.group(1)))
                 arms[cur]["wins"] += int(m.group(4))
                 arms[cur]["episodes"] += int(m.group(5))
     for a_ in arms.values():
@@ -81,6 +82,8 @@ def main() -> int:
               f"kills {v['wins']}/{v['episodes']}")
     if a.compare:
         print("\n=== DYNA vs its STATIC baseline (same mix) ===")
+        print("  (a fresh arm's first evals are its EARLY training curve; the static reference rose then\n"
+              "   flattened, so every comparison below is ALSO made at MATCHED epochs -- AGENTS 12)")
         for name in a.compare.split(","):
             name = name.strip()
             d = arms.get(name)
@@ -94,9 +97,52 @@ def main() -> int:
             comb = (d["se"] ** 2 + base["se"] ** 2) ** 0.5
             t = gap / comb if comb > 0 else float("nan")
             word = ("DYNA HELPS" if t > 2 else "DYNA HURTS" if t < -2 else "no effect")
-            print(f"  {name} {d['pooled']:.2f} +- {d['se']:.2f} (n={d['n_evals']}) vs "
+            print(f"  {name} DAMAGE {d['pooled']:.2f} +- {d['se']:.2f} (n={d['n_evals']}) vs "
                   f"rvs_{mix.group(1)} {base['pooled']:.2f} +- {base['se']:.2f} (n={base['n_evals']}): "
                   f"{gap:+.2f} +- {comb:.2f}  t={t:+.2f}  {word}")
+            # KILLS too, because damage and defeats rank the arms DIFFERENTLY: w495_s0.3 has the highest
+            # kill rate of any arm (4.76%) on damage of 1.40, while rvs_M5 has the highest damage (1.76)
+            # at 3.33%. Damage is what the reward pays for (34) but a defeat is the task, so both are
+            # reported. A two-proportion z on counts, which is the right test for a rate -- and 30 says to
+            # state the n it needs: separating 4% from 2% at p<0.05 needs ~1,200 episodes per arm.
+            k1, n1_ = d["wins"], d["episodes"]
+            k2, n2_ = base["wins"], base["episodes"]
+            # MATCHED EPOCHS: the same epoch numbers on both sides. Comparing a 3-eval arm's pooled mean
+            # to a 10-eval reference's charges the new arm for not having converged yet, and comparing its
+            # SLOPE to the reference's flat one credits it with the early rise every arm shows (rvs_M5's
+            # own first three evals were 1.54, 2.00, 1.33 before it flattened near 1.76).
+            de, be = d.get("epochs") or [], base.get("epochs") or []
+            # Exact epoch numbers do not line up -- the Dyna arms eval every 3 epochs and the static ones
+            # every 4, giving ZERO shared epochs. So match on the TRAINING BUDGET: take both arms' evals
+            # inside the epoch span the younger arm has reached. That is the comparison AGENTS 12 asks for
+            # (equal epochs), not equal eval indices.
+            span = max(de) if de else 0
+            shared = [e for e in de if e <= span]
+            bsel = [e for e in be if e <= span + 1]
+            if len(shared) >= 2 and len(bsel) >= 2:
+                dv = np.array([d["evals"][de.index(e)] for e in shared])
+                bv = np.array([base["evals"][be.index(e)] for e in bsel])
+                g2 = float(dv.mean() - bv.mean())
+                s2 = float(np.sqrt(dv.var(ddof=1) / len(dv) + bv.var(ddof=1) / len(bv))) if len(dv) > 1 \
+                    else float("nan")
+                t2 = g2 / s2 if s2 == s2 and s2 > 0 else float("nan")
+                w2 = ("DYNA HELPS" if t2 > 2 else "DYNA HURTS" if t2 < -2 else "no effect")
+                print(f"  {name} MATCHED to epoch {span} (dyna {shared} vs static {bsel}): "
+                      f"{dv.mean():.2f} vs {bv.mean():.2f} "
+                      f"= {g2:+.2f} +- {s2:.2f}  t={t2:+.2f}  {w2}")
+            else:
+                print(f"  {name} MATCHED: not enough evals inside the shared span yet "
+                      f"(dyna {len(shared)}, static {len(bsel)})")
+            if n1_ and n2_:
+                p1, p2 = k1 / n1_, k2 / n2_
+                pp = (k1 + k2) / (n1_ + n2_)
+                sd = (pp * (1 - pp) * (1 / n1_ + 1 / n2_)) ** 0.5
+                z = (p1 - p2) / sd if sd > 0 else float("nan")
+                need = int(2 * 7.85 * pp * (1 - pp) / max((p1 - p2) ** 2, 1e-9)) if p1 != p2 else -1
+                kw = ("MORE KILLS" if z > 2 else "FEWER KILLS" if z < -2 else "no effect")
+                print(f"  {name} KILLS  {k1}/{n1_} = {100*p1:.2f}% vs {k2}/{n2_} = {100*p2:.2f}%: "
+                      f"z={z:+.2f}  {kw}"
+                      + (f"  (needs ~{need} episodes/arm to separate this gap)" if need > 0 else ""))
     return 0
 
 
