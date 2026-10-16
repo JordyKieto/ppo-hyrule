@@ -242,7 +242,15 @@ def main() -> int:
             _, vwacc, _ = (tbh.run_split(model, vw, a.chunk, None, a.batch_episodes) if vw
                            else (0.0, float("nan"), 0))
         print(f"{ep_i:>6}{tl:>12.4f}{100*ta:>10.1f}%{100*vacc:>8.1f}%{100*vwacc:>12.1f}%")
-        score = vwacc if vwacc == vwacc else vacc        # accuracy ON WINNING play is what we want
+        # ACCURACY IS AN ANTI-SELECTOR HERE. Measured across 14 arms on 2026-10-16: val WIN accuracy vs
+        # pooled online damage r = -0.875 (t=-6.25), val acc r = -0.599, train acc r = -0.626, train loss
+        # r = +0.624. The arms that fit their corpus best have the EASIEST corpus -- rvs_M3 reaches 56.7%
+        # val-win accuracy and 0.82 damage, rvs_M5 reaches 27.4% and 1.76. Accuracy measures corpus
+        # homogeneity, and diversity is what produces damage. So accuracy is kept as a DIAGNOSTIC and the
+        # file this script promotes is chosen by ONLINE damage (AGENTS 30: select on a statistic that
+        # tracks the goal). Within one arm accuracy does track damage weakly (r=+0.44), which is why it is
+        # still printed -- it is a progress signal, not a selector.
+        score = vwacc if vwacc == vwacc else vacc        # DIAGNOSTIC only -- see above
         do_eval = a.eval_every and (ep_i % a.eval_every == 0 or ep_i == a.epochs)
         if do_eval or score > best[0]:
             if score > best[0]:
@@ -279,9 +287,14 @@ def main() -> int:
                 keep = Path(a.out).with_name(Path(a.out).stem + "_bestdmg.pt")
                 shutil.copy(Path(a.out), keep)
                 ckpt_s3.upload(keep, "rvs_bestdmg", ep_i)
-    print(f"\nbest val WIN accuracy {100*best[0]:.1f}% at epoch {best[1]} -> {a.out}")
+    print(f"\nbest val WIN accuracy {100*best[0]:.1f}% at epoch {best[1]} (DIAGNOSTIC: r=-0.875 against "
+          f"online damage across arms -- not a selector)")
     if best_dmg[1] > 0:
-        print(f"best ONLINE boss damage (balanced) {best_dmg[0]:.3f} at epoch {best_dmg[1]}")
+        keep = Path(a.out).with_name(Path(a.out).stem + "_bestdmg.pt")
+        print(f"SELECTED by ONLINE boss damage: {best_dmg[0]:.3f} at epoch {best_dmg[1]} -> {keep}")
+        print(f"  ({a.out} is the accuracy-selected file and is kept only for comparison)")
+    else:
+        print(f"no online eval ran, so nothing was selected on damage -> {a.out} is accuracy-selected")
     print(f"  inference prompt is g = {TARGET} (take all her HP, win, take no damage)")
     return 0
 
