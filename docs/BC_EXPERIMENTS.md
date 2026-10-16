@@ -45,11 +45,22 @@ mechanism and nothing else.
 |---|---|---|---|---|---|---|---|
 | 1 | **BC init** | `--bc-coef 0.1`, init from the clone | 12 | `gohma-v20` / `20261015173419` | is the clone a better start than v15? | **NO.** 0.21 -> 0.35 over 6 updates; ~100 updates to reach where v15 already is. Stopped. | **M** |
 | 2 | **constant 0.1** | `--bc-coef 0.1` | 12 + 4 | `gohma-v20` / `20261015175011` | does a fixed pull help v15? | **NO.** damage 2.63 -> 2.03, slope **-0.0857 +/- 0.0172, t=-4.98**; replicate -0.134 +/- 0.089 agrees in direction. `bcA` 3% -> 23%, `bcL` 4.43 -> 3.00, so the term worked and cost damage | **M** |
-| 3 | **decay + tail** | `--bc-coef 0.1 --bc-coef-final 0.02 --bc-coef-updates 50` | 12 + 4 | `gohma-v20` / `20261015180929`, `gohma-v15bc` / `20261015181013` | does anchoring early and releasing avoid the cost? | at u20: 2.37, slope over u1-11 **-0.0345 +/- 0.0204 (t=-1.69, flat)**; difference from arm 2 is +0.051 +/- 0.027, t=+1.92, **not yet distinguishable**. Coef only reaches 0.069 by u20 | U |
+| 3 | **decay + tail** | `--bc-coef 0.1 --bc-coef-final 0.02 --bc-coef-updates 50` | 12 + 4 | `gohma-v20` / `20261015180929`, `gohma-v15bc` / `20261015181013` | does anchoring early and releasing avoid the cost? | **NO.** 26 updates, **0 of 26 above v15's 3.275** (best 2.74 at u1, i.e. closest to v15's own weights). Matched u1-8 vs arm 2: difference +0.0256 +/- 0.0396, **t=+0.65, not distinguishable**. Its own second half, where the coef is lowest, DECLINES: -0.0239 +/- 0.0117, t=-2.05; the 4-rank replicate declines over all 29 updates, -0.0235 +/- 0.0070, **t=-3.37** | **M** |
 | 4 | **weak constant** | `--bc-coef 0.02` | 4 | `gohma-bcw` | is arm 3's floor itself safe? | | U |
 | 5 | **adaptive** | `--bc-adaptive-frac 1.0` | 4 | `gohma-bc3` ranks 0-3 | was DOMINATION the problem rather than imitation? the term is held at 1x \|policy loss\| instead of ~5-40x | | U |
 | 6 | **Q-filter** | `--bc-coef 0.1 --bc-qfilter 30` | 4 | `gohma-bc3` ranks 4-7 | is it better to imitate only the 12% of frames that damage her within 3 s? | | U |
 | 7 | **latent alignment** | `--bc-coef 0 --bc-latent-coef 0.05 --bc-teacher checkpoints/kept/bc_human.pt` | 4 | `gohma-bc3` ranks 8-11 | can the clone's REPRESENTATION transfer without its actions? | | U |
+
+## RETRACTION: the decay-vs-constant comparison was first read on an unmatched window
+
+`python -m fleet ppo` prints only the **last 8** fleet-mean rows unless `--last N` is passed. The first
+comparison of the decay arm against the constant one therefore took the decay arm's updates **18-25** and the
+constant arm's updates **1-8** and reported the difference as `+0.051 +/- 0.027, t=+1.92`, described to the
+author as "just under the bar". Recomputed on the matched window 1-8 it is `+0.0256 +/- 0.0396`, **t=+0.65**.
+
+The claim was wrong in the direction of the hypothesis being tested, which is the dangerous direction, and the
+instrument hid it: both windows print identically and nothing in the output says which updates are shown.
+Every series here is now pulled with `--last 60` and the update range is printed beside the slope (AGENTS 12).
 
 ## How to fill a result row
 

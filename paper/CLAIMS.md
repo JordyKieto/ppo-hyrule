@@ -56,7 +56,8 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R47 | A constant BC coefficient of 0.1 degrades v15 | **M** | 12 ranks x 8 updates: damage 2.63 -> 2.03, slope -0.0857 +/- 0.0172, t=-4.98; 4-rank replicate -0.134 +/- 0.089 agrees in direction. bcA 3% -> 23% confirms the term was working |
 | R43 | A BC loss on demonstrations regularises PPO toward them | **M** for the mechanism | `tests/test_bc_regulariser.py`: coef 1.0 drives agreement with the demonstrated action to 96.9% from an 11.1% chance floor; coef 0.0 reports no stats and reaches 0% |
 | R44 | BC init + BC regularisation beats v15 | **M -> NO** | arm stopped after 6 updates x 12 ranks: boss damage 0.21 -> 0.35, rising but from 1/15th of v15's 3.275 and below from-scratch v10's 0.38 start. ~100 updates to reach where v15 already is |
-| R45 | A BC loss on human wins improves our BEST policy (v15) | **U** | `gohma-v20-v15bc` launch 20261015175011, 12 ranks + `gohma-v15bc` 4 ranks as a second replicate. Read dmgB against v15's 3.275 with bcA beside it |
+| R45 | A BC loss on human wins improves our BEST policy (v15) | **M -> NO so far** | constant 0.1 declines (t=-4.98); decaying 0.1->0.02 is not distinguishable from it on the matched window (t=+0.65), declines in its own second half (t=-2.05) and in the replicate (t=-3.37). 0 of 26 updates above v15's 3.275. Filter / adaptive / latent variants untested |
+| R48 | The decay beats a constant coefficient | **M -> NO** | matched u1-8: +0.0256 +/- 0.0396, t=+0.65. First reported as t=+1.92 from an unmatched window (decay u18-25 vs constant u1-8) -- retracted, see PROVENANCE 3.3 |
 
 ## WM track
 

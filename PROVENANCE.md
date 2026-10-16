@@ -724,7 +724,26 @@ exactly what it was built to do -- agreement up 8x, its own loss down -- and the
 Success rate did NOT fall with damage (12-rank 5.9% -> 5.6% with a 9.2% peak; replicate 7.8% -> 11.0%), but
 AGENTS 34 says trust the graded signal over a 1-10% binary, so that is read as noise rather than a result.
 
-**Arm 3 -- the decaying coefficient with a floor (U).** `gohma-v20-v15bcd` launch `20261015180929` (12 ranks)
+**RESULT, arm 3 -- the decay does not buy the damage back, and the first comparison of it was wrong (M).**
+26 updates on 12 ranks plus a 29-update 4-rank replicate:
+
+| window | slope +/- SE | t | reading |
+|---|---|---|---|
+| matched u1-8 vs arm 2's constant 0.1 | **+0.0256 +/- 0.0396** | **+0.65** | NOT distinguishable from the constant coefficient |
+| decay, all 26 updates | -0.0086 +/- 0.0049 | -1.74 | flat |
+| decay, u14-26 (coefficient at its lowest) | -0.0239 +/- 0.0117 | **-2.05** | DECLINING |
+| 4-rank replicate, all 29 updates | -0.0235 +/- 0.0070 | **-3.37** | DECLINING |
+
+**0 of 26 updates reached v15's 3.275**, and the best single update was 2.74 at update 1 -- the point closest
+to v15's own weights. Lowering the coefficient does not recover the damage.
+
+**Retraction.** This comparison was first reported as `t=+1.92`, "just under the bar", and that number came
+from an unmatched window: `fleet ppo` prints only the last 8 fleet-mean rows without `--last N`, so the decay
+arm's updates 18-25 were compared against the constant arm's 1-8. The error moved the result toward the
+hypothesis under test. Series are now pulled with `--last 60` and the update range is printed beside every
+slope (AGENTS 12). The instrument gave no sign: both windows print identically.
+
+**Arm 3 as launched (config).** `gohma-v20-v15bcd` launch `20261015180929` (12 ranks)
 and `gohma-v15bc-v15bcd` launch `20261015181013` (4 ranks): coef **0.1 -> 0.02 over 50 updates, then held
 at 0.02 forever**. Decaying to zero was rejected on the author's instruction and is asserted impossible in
 `tests/test_bc_regulariser.py`: a coefficient that reaches 0 leaves `--init-from`-only behaviour, where the

@@ -31,6 +31,7 @@ import argparse
 import json
 import hashlib
 import os
+import re
 import struct
 import sys
 import time
@@ -376,13 +377,15 @@ def main() -> int:
                     pad_ini="" if a.selftest else a.pad_ini)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    # Parse ALL the digits after "ep", not two of them: at 100 episodes `int(name[2:4])` reads "ep100" as 10
+    # and the next session would overwrite ep011 onward. The corpus is heading for 100 (AGENTS 3: never
+    # compute a field width by hand).
     existing = sorted(out.glob("ep*.npz"))
     base = 0
     for f in existing:
-        try:
-            base = max(base, int(f.name[2:4]) + 1)
-        except ValueError:
-            pass
+        m = re.match(r"ep(\d+)", f.name)
+        if m:
+            base = max(base, int(m.group(1)) + 1)
     if existing:
         print(f"  {len(existing)} episode(s) already in {out}; numbering continues at ep{base:02d}")
     kept = []
