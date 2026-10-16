@@ -63,18 +63,25 @@ def main() -> int:
     a = ap.parse_args()
 
     exps = a.experiment or sorted(p.stem for p in STATE_DIR.glob("*.json") if "terminated" not in p.stem)
+    # A state file outlives its pods by weeks, so the API is the truth. `RunPod.list_pods` does not exist
+    # -- the first version called it, the exception was swallowed, and the fallback "trust the state files"
+    # then reported 64 live pods across 8 retired experiments. Same call fleet_health.py uses, and an empty
+    # answer now means SKIP, not "probe everything".
     live = set()
-    try:                                     # a state file outlives its pods; the API is the truth
+    try:
         from fleet.runpod_api import RunPod
-        live = {p["id"] for p in RunPod().list_pods() if p.get("desiredStatus") == "RUNNING"}
+        live = {p.get("id") for p in (RunPod()._req("GET", "/pods") or [])}
     except Exception as e:                   # noqa: BLE001
-        print(f"(could not reach the RunPod API: {e}; trusting the state files)")
+        print(f"(could not list live pods: {str(e)[:70]})")
+    if not live:
+        print("no live pods on the account")
+        return 0
     jobs = []
     for e in exps:
         for p in load_state(e)["pods"]:
             if not p.get("ip") or not p.get("port"):
                 continue                     # never bootstrapped, or already terminated
-            if live and p.get("id") not in live:
+            if p.get("id") not in live:
                 continue
             p = dict(p); p["_exp"] = e; jobs.append(p)
     if not jobs:
