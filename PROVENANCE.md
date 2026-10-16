@@ -1344,6 +1344,47 @@ against the same init. The 3e-4 pair had 37 updates; the ablation arms 6–17.
 
 ---
 
+### THE CORPUS-SIZE QUESTION: no detectable effect over 2.25x, and why the design could not have answered it (M)
+
+Three fresh arms, composition fixed at 37.5% winning episodes, each run to its own budget:
+
+| N | evals | pooled dmgB | slope | kills | gradient steps |
+|---|---|---|---|---|---|
+| 800 | 14 | 1.47 ± 0.08 | flat | 7/336 | ~1,320 |
+| 1,200 | 12 | 1.39 ± 0.09 | flat | 6/287 | ~840 |
+| **1,800** | 8 (**done**) | **1.64 ± 0.11** | flat | 3/192 | ~540 |
+
+**`1800 − 800 = +0.17 ± 0.14, t = 1.2` — not significant.** The ordering is non-monotone (1,200 is the
+lowest), and the entire spread across the range is **0.25**, against a measured seed floor of **0.43** for
+two identical arms and **0.97** for five identical PPO controls. **One seed per size cannot resolve an effect
+this small, and that was knowable before launch** — §30 rule 2 applied to seeds rather than episodes.
+
+Two confounds, both mine, both recorded rather than argued away:
+
+1. **Unequal step budgets.** `epochs = budget x batch / n_train` combined with `--steps-per-epoch 60` gave
+   1,320 / 840 / 540 steps. The largest corpus got the *least* training and still scored highest, which is
+   the one strand worth pulling — and it needs the matched-step rerun to mean anything.
+2. **Slopes that evaporated with n**, five times in one session. `N=800` read `+0.0515, t=+2.4 RISING` at 12
+   evals and `+0.0292, t=+1.5 flat` at 14. Every mid-run slope quoted today has done this.
+
+**The spout answered the same question from the other side and died of it.** `la4` grew to 7,729 episodes
+while its win fraction fell 37.7% → **6.1%** (collection yields ~2% wins) and scored **1.25** — worse than the
+1,800-episode arm at fixed composition. `la3` was **OOM-killed** at 8,345 episodes: `load_all` holds every
+episode's observations in RAM (~2.9 MB each) and reloads the whole corpus at every Dyna refresh, so ~8,300
+episodes is ~24 GB against the pod's **32 GB** `memory.max`. `free` reported 503 GB (§23 again — inside a
+container the tools that report the machine are lying). The design has a hard corpus ceiling that nothing in
+it checks.
+
+**So the standing answer:** between 800 and 1,800 episodes at fixed composition, corpus size is worth
+`+0.17 ± 0.14` — indistinguishable from zero — and 10× the episodes at a diluted win fraction is worth
+*less* than nothing. What moves the number is the **win share**, which is R72 and R77 from a third direction.
+`rvs_M5` remains the best policy of the session at **1.76 ± 0.11** on the *smallest* corpus of all (795
+episodes) with the *most* training (40 epochs), which is itself evidence for training length over corpus
+size.
+
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and
