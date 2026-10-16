@@ -592,6 +592,9 @@ def cmd_launch(a) -> None:
         run(pod, f"tmux kill-session -t train 2>/dev/null; pkill -x dolphin-emu; sleep 1; "
                  f"rm -rf {R_REPO}/runs/instances {R_REPO}/runs/*/instances {R_REPO}/wandb "
                  f"{R_REPO}/runs/*/wandb {R_REPO}/runs/*.snaps; "
+                 # leaked per-instance Dolphin user dirs from previous runs: 6.5 GB each, and the reason
+                 # five arms died on ENOSPC (AGENTS 36 / zelda_rl/tmpdirs.py)
+                 f"rm -rf /tmp/evalf_* /tmp/human_*; "
                  # a previous run's instance dirs are ~230 MB x envs and are never read again
                  f"find {R_REPO}/runs -maxdepth 2 -name instances -type d -exec rm -rf {{}} + 2>/dev/null; true")
         pod["run_name"], pod["_envs"] = run_name, envs

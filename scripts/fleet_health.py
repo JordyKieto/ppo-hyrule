@@ -35,7 +35,12 @@ PROBE = (
     "U=$(grep -cE '^[0-9:]+ INFO +[0-9]+ ' \"$L\" 2>/dev/null); "
     "F=$(find \"$L\" -mmin -8 2>/dev/null | wc -l); "
     "X=$(grep -cE 'Traceback|No space left|Error:' \"$L\" 2>/dev/null); "
-    "echo \"P=$P D=$D U=$U FRESH=$F X=$X LOG=$(basename \"$L\" 2>/dev/null)\""
+    # Leaked per-instance Dolphin user dirs. eval_fleet/record_human created /tmp/<prefix>_<pid> and never
+    # removed it: 6.5 GB a run, five runs, 33 GB of a 40 GB overlay, and the next training arm died on
+    # ENOSPC writing a savestate (gohma-s3, 2026-10-16). zelda_rl/tmpdirs.py now reaps them, and this
+    # reports any that are left so the leak cannot come back silently.
+    "T=$(du -sm /tmp/evalf_* /tmp/human_* 2>/dev/null | awk '{s+=$1} END {print int(s/1024)}'); "
+    "echo \"P=$P D=$D U=$U FRESH=$F X=$X TMP=${T:-0} LOG=$(basename \"$L\" 2>/dev/null)\""
 )
 
 
@@ -108,11 +113,16 @@ def main() -> int:
                              f"{kv.get('LOG','-')[:30]}")
                 if free < a.min_free_gb:
                     bad.append(f"{exp} r{rank}: finished, but DISK {free} GB FREE")
+                if int(kv.get("TMP") or 0) >= 5:
+                    bad.append(f"{exp} r{rank}: finished, but {kv['TMP']} GB LEAKED in /tmp")
                 continue
             elif not fresh:
                 flag = "STUCK (log not written in 8 min)"
             if free < a.min_free_gb:
                 flag = (flag + "; " if flag else "") + f"DISK {free} GB FREE"
+            if int(kv.get("TMP") or 0) >= 5:
+                flag = (flag + "; " if flag else "") + (f"{kv['TMP']} GB LEAKED in /tmp/evalf_*|human_* "
+                                                        f"(zelda_rl/tmpdirs.py reaps these)")
             if flag:
                 bad.append(f"{exp} r{rank}: {flag}")
             lines.append(f"  {exp} r{rank:<3} upd {upd:>4}  {free:>3} GB  {procs} proc  "

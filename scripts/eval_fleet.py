@@ -117,7 +117,8 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
     if seconds:
         cfg = {**cfg, "episode_seconds": seconds}
     envs_n = max(1, min(envs_n, episodes))
-    root = Path(os.environ.get("TMPDIR", "/tmp")) / f"evalf_{os.getpid()}"
+    from zelda_rl.tmpdirs import instance_root
+    root = instance_root("evalf")
     mk = lambda i: make_env(cfg, root / f"i{i}", slots=slots, slots_dir=slots_dir, video_backend="Null",
                             unlimited_speed=True, idx=i)[0]                            # noqa: E731
     from concurrent.futures import ThreadPoolExecutor

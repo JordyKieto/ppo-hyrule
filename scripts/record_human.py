@@ -236,7 +236,8 @@ def build_env(slots, slots_dir, seconds, visible, pad_ini="", volume=100):
                     combat=CombatConfig(profile="gohma", max_seconds=seconds, target_ids=(0x28, 0x55),
                                         room_radius=5000.0, fall_drop=1000.0,
                                         timeout_penalty_per_target=10.0, success_time_bonus=30.0))
-    root = Path(os.environ.get("TMPDIR", "/tmp")) / f"human_{os.getpid()}"
+    from zelda_rl.tmpdirs import instance_root
+    root = instance_root("human")
     return DolphinGoalEnv(0, root / "i0", files, states, states[min(slots)], cfg)
 
 
