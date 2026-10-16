@@ -89,6 +89,9 @@ def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> floa
     spec = _ilu.spec_from_file_location("eval_fleet", Path(__file__).with_name("eval_fleet.py"))
     ef = _ilu.module_from_spec(spec); spec.loader.exec_module(ef)
     slots = [int(x) for x in a.eval_slots.split(",") if x.strip()]
+    if getattr(a, "dyna_dir", None):
+        ef.LIVE["dump"] = a.dyna_dir          # every episode this eval plays joins the corpus
+        ef.LIVE["policy"] = str(ckpt)
     try:
         eps, _ = ef.evaluate(ckpt, slots, a.eval_episodes, a.eval_envs, a.slots_dir, a.episode_seconds)
     except Exception as e:  # noqa: BLE001
@@ -148,50 +151,69 @@ def main() -> int:
     ap.add_argument("--eval-envs", type=int, default=8)
     ap.add_argument("--eval-slots", default="3,4,5,6,7,8")
     ap.add_argument("--slots-dir", default="assets/states")
+    # DYNA: the online eval already plays the game with this policy, and eval_fleet writes every episode as
+    # a corpus-format .npz when its dump sink is set. So the evaluator IS the collector -- the arm absorbs
+    # its OWN current episodes, each labelled by rvs.conditioning() with the outcome it actually produced,
+    # and keeps training on the grown corpus. The static corpus dirs are never evicted, so the 100 human
+    # wins stay anchored (the self-imitation failure mode is a buffer that drops them).
+    ap.add_argument("--dyna-dir", default=None,
+                    help="absorb the online eval's own episodes from this directory into the corpus "
+                         "(Dyna). Off when unset.")
     a = ap.parse_args()
     if a.seed is not None:
         torch.manual_seed(a.seed); np.random.seed(a.seed)
 
-    eps = load_all(a.data, a.limit_per_dir)
-    wins = [e for e in eps if e["win"]]
-    print(f"{len(eps)} episodes, {len(wins)} wins ({100*len(wins)/len(eps):.1f}%), "
-          f"{sum(len(e['act']) for e in eps):,} steps")
-    if getattr(load_all, "skipped", 0):
-        print(f"  SKIPPED {load_all.skipped} unreadable .npz file(s)", flush=True)
-    for d in a.data:
-        sub = [e for e in eps if e["src"] == str(d)]
-        print(f"  {d}: {len(sub)} episodes, {sum(1 for e in sub if e['win'])} wins, "
-              f"{sum(len(e['act']) for e in sub):,} steps")
+    def prepare(dirs):
+        """Load the corpus, solve the win multiplier for THIS composition, and split train/val.
 
-    # Solve the multiplier so winning play lands at --win-share of the gradient. w = s(1-p)/(p(1-s)) where
-    # p is the winning fraction of STEPS, so the knob is the share we want and not a guess that only
-    # happens to be right for one corpus composition.
-    win_steps = sum(len(e["act"]) for e in eps if e["win"])
-    all_steps = sum(len(e["act"]) for e in eps)
-    p_ = win_steps / max(all_steps, 1)
-    if a.win_weight > 0:
-        solved = a.win_weight
-    elif 0.0 < a.win_share < 1.0 and 0.0 < p_ < 1.0:
-        solved = (a.win_share * (1 - p_)) / (p_ * (1 - a.win_share))
-    else:
-        solved = 1.0
-    print(f"  winning play is {100*p_:.1f}% of steps; multiplier {solved:.2f} to reach "
-          f"{100*a.win_share:.0f}% of the gradient")
-    tot_w = win_w = 0.0
-    for e in eps:
-        w = solved if e["win"] else 1.0
-        e["w"] = np.full(len(e["act"]), w, np.float32)
-        tot_w += w * len(e["act"])
-        win_w += (w * len(e["act"]) if e["win"] else 0.0)
-    print(f"  -> winning play is {100*win_w/max(tot_w,1e-9):.1f}% of the gradient")
+        Re-run whenever Dyna grows the corpus: the multiplier must be re-solved, because absorbing the
+        policy's own episodes changes the winning fraction of steps and a fixed multiplier would silently
+        drift away from --win-share (the whole reason solve_win_weight exists).
+        """
+        eps = load_all(dirs, a.limit_per_dir)
+        wins = [e for e in eps if e["win"]]
+        print(f"corpus: {len(eps)} episodes, {len(wins)} wins "
+              f"({100*len(wins)/max(len(eps),1):.1f}%), {sum(len(e['act']) for e in eps):,} steps",
+              flush=True)
+        if getattr(load_all, "skipped", 0):
+            print(f"  SKIPPED {load_all.skipped} unreadable .npz file(s) in total", flush=True)
+        for d in dirs:
+            sub = [e for e in eps if e["src"] == str(d)]
+            print(f"  {d}: {len(sub)} episodes, {sum(1 for e in sub if e['win'])} wins, "
+                  f"{sum(len(e['act']) for e in sub):,} steps")
 
-    rng = np.random.default_rng(0)
-    order = rng.permutation(len(eps))
-    n_val = max(2, int(a.val_frac * len(eps)))
-    val_idx = set(order[:n_val].tolist())
-    tr = [e for i, e in enumerate(eps) if i not in val_idx]
-    va = [e for i, e in enumerate(eps) if i in val_idx]
-    print(f"  train {len(tr)} / val {len(va)} (val wins: {sum(1 for e in va if e['win'])})")
+        # Solve the multiplier so winning play lands at --win-share of the gradient. w = s(1-p)/(p(1-s)) where
+        # p is the winning fraction of STEPS, so the knob is the share we want and not a guess that only
+        # happens to be right for one corpus composition.
+        win_steps = sum(len(e["act"]) for e in eps if e["win"])
+        all_steps = sum(len(e["act"]) for e in eps)
+        p_ = win_steps / max(all_steps, 1)
+        if a.win_weight > 0:
+            solved = a.win_weight
+        elif 0.0 < a.win_share < 1.0 and 0.0 < p_ < 1.0:
+            solved = (a.win_share * (1 - p_)) / (p_ * (1 - a.win_share))
+        else:
+            solved = 1.0
+        print(f"  winning play is {100*p_:.1f}% of steps; multiplier {solved:.2f} to reach "
+              f"{100*a.win_share:.0f}% of the gradient")
+        tot_w = win_w = 0.0
+        for e in eps:
+            w = solved if e["win"] else 1.0
+            e["w"] = np.full(len(e["act"]), w, np.float32)
+            tot_w += w * len(e["act"])
+            win_w += (w * len(e["act"]) if e["win"] else 0.0)
+        print(f"  -> winning play is {100*win_w/max(tot_w,1e-9):.1f}% of the gradient")
+
+        rng = np.random.default_rng(0)
+        order = rng.permutation(len(eps))
+        n_val = max(2, int(a.val_frac * len(eps)))
+        val_idx = set(order[:n_val].tolist())
+        tr = [e for i, e in enumerate(eps) if i not in val_idx]
+        va = [e for i, e in enumerate(eps) if i in val_idx]
+        print(f"  train {len(tr)} / val {len(va)} (val wins: {sum(1 for e in va if e['win'])})")
+        return eps, tr, va, solved
+
+    eps, tr, va, solved = prepare(list(a.data))
 
     f0 = eps[0]["fields"]
     n_actors, actor_dim = f0["n_actors"], sum(w for _, w in f0["actor"])
@@ -237,6 +259,14 @@ def main() -> int:
             ckpt_s3.upload(out, "rvs", ep_i)
         if do_eval:
             ev = online_eval(Path(a.out), a, ep_i, hist)
+            if a.dyna_dir and Path(a.dyna_dir).is_dir():
+                # DYNA refresh: the episodes just played are now on disk in corpus format. Reload with the
+                # static dirs FIRST (they are the anchor and are never dropped) plus the fresh dir, and
+                # re-solve the win multiplier for the new composition.
+                n_fresh = len(list(Path(a.dyna_dir).glob("*.npz")))
+                print(f"  DYNA: absorbing {n_fresh} of the policy's own episodes from {a.dyna_dir}",
+                      flush=True)
+                eps, tr, va, solved = prepare(list(a.data) + [a.dyna_dir])
             if ev is not None and ev > best_dmg[0]:
                 best_dmg = (ev, ep_i)
                 keep = Path(a.out).with_name(Path(a.out).stem + "_bestdmg.pt")
