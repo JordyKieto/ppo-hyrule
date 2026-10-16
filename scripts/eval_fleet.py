@@ -197,7 +197,11 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
                     o, r, term, trunc, info = envs[i].observe()
                     obs[i] = o
                     if term or trunc:
-                        out.append(dict(info["episode"], slot=cur[i]))
+                        _row = dict(info["episode"], slot=cur[i])
+                        out.append(_row)
+                        if LIVE["per_ep"] is not None:
+                            LIVE["per_ep"].write(json.dumps(_row, default=float) + "\n")
+                            LIVE["per_ep"].flush()          # a pod can die; an unflushed row is a lost row
                         start(i)                      # straight into the next episode, no round barrier
             except EnvError as err:
                 # A stalled Dolphin (10 s Null-backend timeout) now costs exactly the one episode that env
@@ -215,20 +219,7 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
                     print("  too many stalls; reporting what completed", flush=True)
                     break
             if time.time() > nxt:                     # AGENTS 24: no silent minutes
-                d = sum(1 for e in out if e.get("defeat"))
-                # BOSS DAMAGE IN THE PROGRESS LINE. Defeats are a 1-10% binary, so a progress line that
-                # shows only defeats reads "0" for ten minutes on a policy doing anything at all, and the
-                # one number with resolution (AGENTS 34) was visible only in the final summary -- which is
-                # fifteen minutes of watching a counter that cannot move.
-                dmg = [float(e.get("boss_damage", 0)) for e in out]
-                bal = {}
-                for e in out:
-                    bal.setdefault(e.get("slot"), []).append(float(e.get("boss_damage", 0)))
-                mix_inv = (sum(sum(v) / len(v) for v in bal.values()) / len(bal)) if bal else float("nan")
-                print(f"  {len(out)}/{episodes} done, {len(queue)} queued, {d} defeats, "
-                      f"dmg {(sum(dmg)/len(dmg)) if dmg else float('nan'):.2f} "
-                      f"(balanced {mix_inv:.2f} over {len(bal)} slots), "
-                      f"{time.time()-t0:.0f}s", flush=True)
+                _stream(out, episodes, queue, t0)
                 nxt = time.time() + 60.0
     finally:
         for e in envs:
@@ -264,6 +255,42 @@ def score(eps):
     out["full_hp_defeats"] = sum(1 for e in full if e.get("boss_defeated"))
     out["full_hp_defeat_rate"] = (out["full_hp_defeats"] / len(full)) if full else float("nan")
     return out
+
+
+LIVE = {"wb": None, "per_ep": None, "t0": None}
+
+
+def _stream(out, episodes, queue, t0):
+    """Per-minute live telemetry: boss damage (episode-weighted AND mix-invariant), outcome mix, pace.
+
+    The progress line used to print only a defeat counter, which reads 0 for a quarter of an hour on any
+    policy under ~10% win rate -- so the one signal with resolution (AGENTS 34) was visible only in the final
+    summary. These numbers also go to W&B as they accumulate, so a long eval is watchable instead of silent.
+    """
+    d = sum(1 for e in out if e.get("defeat"))
+    dmg = [float(e.get("boss_damage", 0)) for e in out]
+    bal = {}
+    for e in out:
+        bal.setdefault(e.get("slot"), []).append(float(e.get("boss_damage", 0)))
+    mix = (sum(sum(v) / len(v) for v in bal.values()) / len(bal)) if bal else float("nan")
+    ends = {}
+    for e in out:
+        ends[str(e.get("end", "?"))] = ends.get(str(e.get("end", "?")), 0) + 1
+    msg = (f"  {len(out)}/{episodes} done, {len(queue)} queued, {d} defeats, "
+           f"dmg {((sum(dmg)/len(dmg)) if dmg else float('nan')):.2f} "
+           f"(balanced {mix:.2f} over {len(bal)} slots), ends {ends}, {time.time()-t0:.0f}s")
+    print(msg, flush=True)
+    if LIVE["wb"] is not None:
+        try:
+            LIVE["wb"].log({"eval/episodes": len(out), "eval/defeats": d,
+                            "eval/boss_damage": (sum(dmg) / len(dmg)) if dmg else 0.0,
+                            "eval/boss_damage_balanced": mix if mix == mix else 0.0,
+                            "eval/slots_seen": len(bal),
+                            "eval/death_frac": ends.get("death", 0) / max(len(out), 1),
+                            "eval/timeout_frac": ends.get("timeout", 0) / max(len(out), 1),
+                            "eval/elapsed_s": time.time() - t0})
+        except Exception:                                                    # noqa: BLE001
+            pass
 
 
 def run_one(ckpt, a):
@@ -386,7 +413,7 @@ def main():
     p.add_argument("--episodes", type=int, default=None, help="(legacy) total episodes; --episodes-per-slot wins")
     p.add_argument("--envs", type=int, default=12,
                    help="12 on a 16-vCPU pod: ~2 threads per Dolphin and 12 envs saturated a 16-vCPU pod in "
-                        "the measurements in docs/RUNPOD.md. Measured episode length is ~109s (only 6.3% hit "
+                        "the measurements in docs/RUNPOD.md. Measured episode length is ~109s (only 6.3%% hit "
                         "the 300s cap), so 2 pods x 12 envs cover all 10 slots in ~6 min -- faster than the "
                         "~15 min between published policies, which is what makes the signal usable.")
     p.add_argument("--episode-seconds", type=float, default=None)
@@ -404,6 +431,9 @@ def main():
     p.add_argument("--fleet-world-size", type=int, default=1)
     p.add_argument("--wandb-project", default=None, help="log the HELD-OUT metrics beside the training curve")
     p.add_argument("--wandb-group", default=None)
+    p.add_argument("--per-episode-out", default=None, metavar="PATH",
+                   help="append EVERY episode's row as jsonl (end reason, hp lost, length, damage, slot). "
+                        "Needed for failure anatomy: the summary row cannot say how a policy dies")
     p.add_argument("--video-backend", default="Null", help="accepted for fleet compatibility; always Null here")
     p.add_argument("--fleet-experiment", default=None)
     p.add_argument("--fleet-launch-id", default=None)
@@ -435,6 +465,10 @@ def main():
         raise SystemExit("pass --ckpt, --watch or --watch-published")
     d = Path(a.watch) if a.watch else None
     seen, best = set(), None
+    if a.per_episode_out:
+        Path(a.per_episode_out).parent.mkdir(parents=True, exist_ok=True)
+        LIVE["per_ep"] = open(a.per_episode_out, "a")
+        print(f"per-episode rows -> {a.per_episode_out}")
     wb = None
     if a.wandb_project:
         try:
@@ -444,6 +478,7 @@ def main():
                             config={"slots": a.slots, "episodes": a.episodes, "envs": a.envs,
                                     "watch": str(d), "rank": a.fleet_rank})
             print(f"wandb: {wb.url}")
+            LIVE["wb"] = wb
         except Exception as e:
             print(f"wandb init failed ({str(e)[:60]}); continuing without it")
     print(f"watching {d} every {a.poll:.0f}s"

@@ -53,7 +53,7 @@ def load(data: Path, wins_only: bool, max_episodes: int = 0):
         eps.append({"file": f.name, "obs": z["obs"].astype(np.float32), "act": z["action"].astype(np.int64),
                     "win": bool(z["boss_defeated"]), "slot": int(z["slot"]),
                     "obs_dim": int(z["obs_dim"]), "n_actions": int(z["n_actions"]),
-                    "fields": json.loads(str(z["obs_fields"]))})
+                    "fields": json.loads(str(z["obs_fields"])), "z": f})
     if not eps:
         raise SystemExit(f"no episodes in {data}" + (" with a win" if wins_only else ""))
     dims = {e["obs_dim"] for e in eps}
@@ -61,6 +61,74 @@ def load(data: Path, wins_only: bool, max_episodes: int = 0):
     if len(dims) != 1 or len(nacts) != 1:
         raise SystemExit(f"inconsistent dataset: obs_dim {dims}, n_actions {nacts}")
     return eps
+
+
+def event_weights(z, obs, act, span: int, scale: float, only=None) -> tuple[np.ndarray, dict]:
+    """Per-step loss weights keyed on the DECISIONS that matter, so positioning cannot dominate the gradient.
+
+    Uniform imitation spends its gradient in proportion to how often something happens, and in this corpus
+    that means walking: the human's first damage lands at step 190 of a 546-step episode, and only 2.99 seeds
+    are fired per win. The classes below are the moments where the human chose something consequential --
+    measured, not guessed (scripts/mine_corpus.py, scripts/mine_slingshot.py) -- and each is up-weighted by
+    `scale x class factor` over a `span` leading up to it, which is where the decision was actually made.
+
+    Classes, highest first. A step takes the MAX of the classes covering it, so overlaps do not compound.
+
+      successful seed  1.5  fired and an impact followed within 1.2 s -- the skill the fight turns on
+      her HP falls    1.5  the payoff moment
+      stun onset      1.2  the window that permits sword damage (gates 100% of recorded hits)
+      sword swing     1.0  B pressed while she is stunned and within sword range
+      seed fired      0.8  any shot, landed or not
+      slingshot out   0.8  the equip decision that precedes every shot
+      larva hit       0.3  kept low on purpose: larva hits correlate -0.598 with damage dealt
+      everything else 0    positioning, approach, waiting -> weight 1.0
+    """
+    import json as _json
+    f = _json.loads(str(z["obs_fields"]))
+    off, idx = 0, {}
+    for name, w in f["global"]:
+        idx[name] = off
+        off += w
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from zelda_rl.env import COMBAT_ACTIONS_V5, COMBAT_BUTTONS_V5
+    btn = [set(COMBAT_BUTTONS_V5[b]) for _, b in COMBAT_ACTIONS_V5]
+
+    T = len(obs)
+    w = np.ones(T, np.float32)
+    ghp = obs[:, idx["gohma_hp_frac"]]
+    stun = (obs[:, idx["gohma_stunned"]] > 0.5).astype(np.int8)
+    dist = obs[:, idx["gohma_eye_dist"]] * 1000.0
+    sling = (obs[:, idx["held_slingshot"]] > 0.5).astype(np.int8)
+    fires = np.where((obs[:-1, idx["since_last_seed"]] > 0.05) &
+                     (obs[1:, idx["since_last_seed"]] <= 0.05))[0] + 1 if "since_last_seed" in idx else []
+    imps = set((np.where((obs[:-1, idx["since_last_impact"]] > 0.05) &
+                         (obs[1:, idx["since_last_impact"]] <= 0.05))[0] + 1).tolist()
+               ) if "since_last_impact" in idx else set()
+    larva = []
+    for n in ("larva0_hp", "larva1_hp", "larva2_hp"):
+        if n in idx:
+            c = obs[:, idx[n]]
+            larva += (np.where(c[:-1] - c[1:] > 1e-6)[0] + 1).tolist()
+
+    classes = {
+        "seed_hit": (1.5, [i for i in fires if any(i < j <= i + 12 for j in imps)]),
+        "boss_hp": (1.5, (np.where(ghp[:-1] - ghp[1:] > 1e-6)[0] + 1).tolist()),
+        "stun": (1.2, (np.where((stun[1:] == 1) & (stun[:-1] == 0))[0] + 1).tolist()),
+        "sword": (1.0, [t for t in range(T) if "B" in btn[int(act[t])] and stun[t] and dist[t] < 120]),
+        "seed_fire": (0.8, list(fires)),
+        "sling_out": (0.8, (np.where((sling[1:] == 1) & (sling[:-1] == 0))[0] + 1).tolist()),
+        "larva": (0.3, larva),
+    }
+    if only:
+        classes = {k: v for k, v in classes.items() if k in only}
+    share = {}
+    for name, (factor, marks) in sorted(classes.items(), key=lambda kv: kv[1][0]):
+        hit = np.zeros(T, bool)
+        for m in marks:
+            hit[max(0, m - span):m + 1] = True
+        w[hit] = np.maximum(w[hit], 1.0 + scale * factor)
+        share[name] = (len(marks), int(hit.sum()))
+    return w, share
 
 
 def batches(eps, batch_episodes: int):
@@ -86,7 +154,7 @@ def batches(eps, batch_episodes: int):
             n = len(e["act"])
             obs[:n, j] = e["obs"][:n]
             act[:n, j] = e["act"][:n]
-            valid[:n, j] = 1.0
+            valid[:n, j] = e.get("w", np.ones(n, np.float32))[:n]
         yield (torch.from_numpy(obs), torch.from_numpy(act), torch.from_numpy(valid))
 
 
@@ -139,6 +207,17 @@ def main() -> int:
     ap.add_argument("--gru", type=int, default=256)
     ap.add_argument("--val-episodes", type=int, default=2, help="held out BY EPISODE, never by frame")
     ap.add_argument("--wins-only", action="store_true", help="clone only the episodes that killed her")
+    ap.add_argument("--event-weight", type=float, default=1.0,
+                    help="EVENT STRATIFICATION: loss weight on steps in the damage chain -- within "
+                         "--event-span of a seed fire, a stun onset or one of her HP drops. 1.0 = uniform "
+                         "imitation, which spends most of its gradient on the two thirds of each episode "
+                         "that is walking around")
+    ap.add_argument("--event-classes", default="",
+                    help="comma list restricting WHICH decision classes are up-weighted: seed_hit, boss_hp, "
+                         "stun, sword, seed_fire, sling_out, larva. Empty = all of them. Use it to ask which "
+                         "events matter rather than assuming the whole set does")
+    ap.add_argument("--event-span", type=int, default=15,
+                    help="steps BEFORE a chain event that count as part of it (15 = 1.5 s)")
     ap.add_argument("--batch-episodes", type=int, default=16,
                     help="episodes stepped IN PARALLEL. Each keeps its own hidden state, so this changes "
                          "speed and not the maths; 1 reproduces the old one-episode-at-a-time loop")
@@ -151,6 +230,25 @@ def main() -> int:
     a = ap.parse_args()
 
     eps = load(Path(a.data), a.wins_only, a.max_episodes)
+    only = set(x.strip() for x in a.event_classes.split(",") if x.strip()) if a.event_classes else None
+    if a.event_weight != 1.0:
+        tot = chain = 0
+        if only:
+            print(f"  only up-weighting: {sorted(only)}")
+        agg = {}
+        for e in eps:
+            z = np.load(e["z"], allow_pickle=False)
+            e["w"], sh = event_weights(z, e["obs"], e["act"], a.event_span, a.event_weight, only)
+            tot += len(e["w"]); chain += int((e["w"] > 1.0).sum())
+            for k, (n, cov) in sh.items():
+                p0, p1 = agg.get(k, (0, 0))
+                agg[k] = (p0 + n, p1 + cov)
+        print(f"  event stratification at scale {a.event_weight}, span {a.event_span}: "
+              f"{chain:,}/{tot:,} steps up-weighted ({100*chain/max(tot,1):.1f}%); "
+              f"{100-100*chain/max(tot,1):.1f}% stays at 1.0 (positioning)")
+        for k in ("seed_hit", "boss_hp", "stun", "sword", "seed_fire", "sling_out", "larva"):
+            n, cov = agg.get(k, (0, 0))
+            print(f"    {k:<11}{n:>6} events  {cov:>7,} steps  {100*cov/max(tot,1):>5.1f}% of the corpus")
     fields = eps[0]["fields"]
     n_actors, actor_dim = fields["n_actors"], sum(w for _, w in fields["actor"])
     global_dim = eps[0]["obs_dim"] - n_actors * actor_dim
