@@ -743,6 +743,72 @@ arm's updates 18-25 were compared against the constant arm's 1-8. The error move
 hypothesis under test. Series are now pulled with `--last 60` and the update range is printed beside every
 slope (AGENTS 12). The instrument gave no sign: both windows print identically.
 
+### Event-stratified behaviour cloning: oversampling the decisions beats oversampling the frames (M)
+
+Uniform BC spends gradient in proportion to how often something happens, which in this corpus means walking
+(first damage at step 190 of 546; 2.99 seeds per win). `scripts/train_bc_human.py --event-weight` weights each
+step by the DECISION it belongs to -- seven classes defined and justified in `docs/BC_EVENT_CLASSES.md`, each
+marked from the recorded observations. Every arm below trained 60 epochs on the same 100-game corpus (v2,
+digest `e57da6027a30`) and was then scored on the SAME 80-episode suite (8 per start, all 10 starts), with the
+training and the eval **co-located on one pod** so a checkpoint is scored seconds after it is written.
+
+| arm | scale | classes | val acc | online damage | defeats | death | timeout |
+|---|---|---|---|---|---|---|---|
+| `s1.5` | 1.5 | all | 72.5% | **0.16** | 0 | 90.0% | 10.0% |
+| `s6` | 6.0 | all | 70.9% | **0.33** | 0 | 90.0% | 10.0% |
+| `s12` | 12.0 | all | 71.8% | **0.53** | 0 | 85.0% | 15.0% |
+| `nolarva` | 3.0 | no larva | 72.6% | **0.49** | 0 | 87.5% | 12.5% |
+| `chainonly` | 3.0 | chain only | 73.1% | **0.34** | 1 | 86.2% | 12.5% |
+| *13-game clone* | — | — | 53.4% | 0.14 | 0/80 | 83.8% | 16.2% |
+| *100-game clone, unstratified* | — | — | 74.5% | 0.33 | 1/80 | 81.2% | 17.5% |
+| *v15 (no human data at all)* | — | — | — | **3.275** | — | — | — |
+
+**The scale axis is monotone at matched n: 1.5 -> 6 -> 12 gives 0.16 -> 0.33 -> 0.53.** The best stratified
+clone takes **0.53** of her 10 HP, 1.6x the unstratified 100-game clone and 3.8x the original 13-game one.
+This is the first thing in the project that has moved BC's online damage at all.
+
+**Removing one class is worth quadrupling the scale.** `nolarva` at scale 3 reaches **0.49**, where the same
+scale with larva included sits near 0.26-0.33. The larva class correlates **-0.598** with damage dealt across
+the corpus, and the trained policy shows that correlation is causal in the training mix: capacity spent
+learning to fight larvae is capacity not spent on the boss. Engaging the larvae is what a human does when the
+fight is going badly, and imitating it uniformly teaches the failure.
+
+**But the chain alone is too narrow.** `chainonly` (seed/stun/HP only, no sword, no larva) scores **0.34** --
+clearly worse than `nolarva` at the same scale. The sword class, which is the largest at 3,975 events and is
+defined as B pressed while she is stunned AND within 120 u, carries real signal. So the lesson is not "fewer
+classes" but "drop the class the data says is counterproductive".
+
+**Validation accuracy does not predict online damage, measured rather than asserted.** Across these five arms
+the correlation between best validation accuracy and online damage is **r = -0.11**: `chainonly` has the
+HIGHEST accuracy (73.1%) and middling damage, `s12` has nearly the lowest (71.8%) and the best damage. A
+stratified arm stops optimising the uniform frame distribution by construction, so accuracy measures something
+the arm is deliberately not trying to do. Any future BC comparison that cites accuracy is citing the wrong
+number.
+
+**What has NOT changed: 0 defeats in 400 episodes** across these arms, with the single exception of
+`chainonly`'s one win (1.25%). Deaths are 85-90% everywhere. Damage is scaling; winning is not. At 0.53 the
+best clone is **16% of v15's 3.275** and 5.3% of a kill.
+
+**The extrapolation, and why its tail is not credible.** A log-log fit on the scale points gives
+`damage ~ 2^(-3.20 + 0.55 log2 scale)`, which needs scale ~59 for 1.0 damage, ~519 to match v15 and **~4,022
+for a kill**. The weight is `1 + scale x factor`, so by scale ~60 a positioning step already contributes
+nothing relative to a decision step and every larger scale is the same experiment. The curve must saturate far
+below those numbers; the expanded sweep (scales 12/24/48/1000 with larva removed, plus a wider span) exists to
+find the knee, not to chase 4,022.
+
+**Process failures tonight, each cheap and each repeated from a rule already written down:**
+
+- the pods had the trainer from BEFORE `--event-classes` existed, so exactly the two arms needing that flag
+  died on `unrecognized arguments` while the five that did not were unaffected. Pushing code is not the same
+  as pushing the code you just changed (AGENTS 16).
+- the first BC watch loop used the `aws` CLI, which the pods do not have (boto3 only), so it polled silently
+  and did nothing. It was replaced by co-locating the eval with the trainer, which removes the loop entirely.
+- the arm script piped training through `grep | tail -20`, which emits nothing until the process exits, so the
+  `uniform` control looked hung for twelve minutes while it was training normally. **That is AGENTS 24, in a
+  script written the same night it was cited.**
+- `set -- $VAR` inside a zsh loop does not word-split, which silently passed empty arguments three separate
+  times and launched two shards with no slots. Explicit commands, no reuse of that pattern.
+
 ### What is IN the 100-game corpus: the event chain, the slingshot, and the reward it earns (M)
 
 Mined from the recorded observations by field name (`scripts/mine_corpus.py`, `scripts/mine_slingshot.py`),
