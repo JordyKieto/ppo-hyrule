@@ -155,18 +155,21 @@ def main() -> int:
         for t0 in range(0, T - 1, a.chunk):
             t1 = min(t0 + a.chunk, T - 1)
             h = h.detach()
-            preds, tgts, ws = [], [], []
+            preds, tgts, ws, gates = [], [], [], []
             for t in range(t0, t1):
-                d, h = model.step(obs[:, t], aa[:, t], h)
-                preds.append(d)
+                d, g, h = model.step(obs[:, t], aa[:, t], h)
+                preds.append(d); gates.append(g)
                 tgts.append((obs[:, t + 1] - obs[:, t]) / scales)
                 ws.append(w[:, t])
             P = torch.stack(preds, 1); Tg = torch.stack(tgts, 1); W = torch.stack(ws, 1)[..., None]
+            G = torch.stack(gates, 1)
             # EVENT-GATED: a field's error counts on the ticks where it MOVES, plus a floor so a field
             # that never moves is still held to predicting no movement
             fired = (Tg.abs() > 1e-6).float()
             gate = 0.1 + 0.9 * fired
-            l = (F.smooth_l1_loss(P, Tg, reduction="none") * gate * W).sum()
+            # the GATE learns which fields change; the VALUE head only has to be right where they do
+            bce = F.binary_cross_entropy_with_logits(G, fired, reduction="none")
+            l = ((F.smooth_l1_loss(P, Tg, reduction="none") * gate + bce) * W).sum()
             den = (gate * W).sum().clamp(min=1.0)
             loss_num = loss_num + l; loss_den = loss_den + den
             if model.training:
@@ -186,14 +189,15 @@ def main() -> int:
         rep_n = rep_d = 0.0                       # reported loss, kept off the autograd graph
         w = ev_weight(obs, msk)
         for j in range(depth):
-            d, h = model.step(cur, act[:, j], h)
+            d, g, h = model.step(cur, act[:, j], h)
             nxt = cur + d * scales
             tgt = (obs[:, j + 1] - cur) / scales                 # drift-correcting
             dec = 0.5 ** (j / a.roll_half_life)
             fired = (tgt.abs() > 1e-6).float()
             gate = 0.1 + 0.9 * fired
             ww = (w[:, j][..., None] * dec)
-            step_l = (F.smooth_l1_loss(d, tgt, reduction="none") * gate * ww).sum()
+            bce = F.binary_cross_entropy_with_logits(g, fired, reduction="none")
+            step_l = ((F.smooth_l1_loss(d, tgt, reduction="none") * gate + bce) * ww).sum()
             step_d = (gate * ww).sum()
             num = num + step_l
             den = den + step_d
@@ -225,7 +229,7 @@ def main() -> int:
                 h = model.init_hidden(B, dev)
                 cur = obs[:, 0].clone()
                 for j in range(min(max(horizons), T - 1)):
-                    d, h = model.step(cur, aa[:, j], h)
+                    d, _, h = model.step(cur, aa[:, j], h, hard=True)
                     cur = cur + d * scales
                     if (j + 1) in res:
                         err = ((cur - obs[:, j + 1]).abs() / scales * msk[:, j + 1][..., None]).mean()

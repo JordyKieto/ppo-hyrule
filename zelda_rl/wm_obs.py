@@ -71,17 +71,32 @@ class ObsWM(nn.Module):
                                  nn.Linear(hidden, hidden), nn.SiLU())
         self.gru = nn.GRUCell(hidden, gru)
         self.head = nn.Linear(gru, obs_dim)
-        nn.init.zeros_(self.head.weight)         # start AT persistence: zero delta (AGENTS 1's identity)
-        nn.init.zeros_(self.head.bias)
+        # THE MODEL IS PERSISTENCE BY CONSTRUCTION, and has to learn what changes before it can move
+        # anything. `gate` predicts P(this field changes this step); the delta is gate * value, so with the
+        # gate closed the prediction is EXACTLY the previous observation. At init the value head is zero and
+        # the gate bias is -6 (sigmoid 0.0025), i.e. the model IS the identity.
+        #
+        # This is also the fix for rollout divergence. Most of the 1033 columns are static on any given
+        # step; a small per-step error on each compounds, which is how epoch 1 read H1 0.234 (level with
+        # persistence) but H100 18.71 against persistence's 0.67. Under rollout the gate is HARD: a field
+        # the model does not believe changes is copied forward unchanged and cannot drift at all.
+        self.gate = nn.Linear(gru, obs_dim)
+        nn.init.zeros_(self.head.weight); nn.init.zeros_(self.head.bias)
+        nn.init.zeros_(self.gate.weight); nn.init.constant_(self.gate.bias, -6.0)
 
     def act_feat(self, a: torch.Tensor) -> torch.Tensor:
         d = (a // self.n_btn).clamp(max=N_DIRS - 1).float() * (2 * math.pi / N_DIRS)
         return torch.stack([torch.sin(d), torch.cos(d)], -1)
 
-    def step(self, obs: torch.Tensor, a: torch.Tensor, h: torch.Tensor):
+    def step(self, obs: torch.Tensor, a: torch.Tensor, h: torch.Tensor, hard: bool = False):
+        """Returns (delta, gate_logits, h). `hard=True` copies un-gated fields forward EXACTLY."""
         x = torch.cat([obs, self.act_emb(a), self.act_feat(a)], -1)
         h = self.gru(self.enc(x), h)
-        return self.head(h), h
+        g = self.gate(h)
+        val = self.head(h)
+        p = torch.sigmoid(g)
+        keep = (p > 0.5).float() if hard else p
+        return val * keep, g, h
 
     def init_hidden(self, n: int, device) -> torch.Tensor:
         return torch.zeros(n, self.gru.hidden_size, device=device)
