@@ -43,9 +43,19 @@ def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weig
     files = n_win = n_ep = steps = 0
     w_steps = a_steps = 0
     loss_keep_every = max(1, int(len(files_all) * 8 / max(max_windows, 1)))   # ~8 windows per episode
+    bad_files: list[str] = []
     for fi, f in enumerate(files_all):
-        z = np.load(f, allow_pickle=False)
-        if "obs" not in z.files:
+        # A corpus is downloaded, and a download can be truncated -- the S3 pull in logs/sw.sh swallows its
+        # exceptions, so a partial .npz stays on disk. One of 619 files killed gohma-col r17 outright with
+        # `EOFError: No data left in file` (2026-10-16). A corpus loader skips the unreadable file and SAYS
+        # SO; it does not take the run down, and it does not hide it either.
+        try:
+            z = np.load(f, allow_pickle=False)
+            if "obs" not in z.files:
+                continue
+            z["obs"].shape, z["action"].shape        # force the read: lazy npz raises here, not above
+        except Exception as e:                       # noqa: BLE001
+            bad_files.append(f"{f.name}: {type(e).__name__} {str(e)[:60]}")
             continue
         obs = z["obs"].astype(np.float32)
         if obs.shape[1] + COND_DIM != obs_dim:
@@ -74,8 +84,12 @@ def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weig
     solved = win_weight if win_weight > 0 else solve_win_weight(w_steps, a_steps, win_share)
     wins_mask = np.array([float(w) < 0 for w in W], bool)
     W = [np.full(chunk, solved if m else 1.0, np.float32) for m in wins_mask]
+    if bad_files:
+        print(f"RvS corpus: SKIPPED {len(bad_files)} unreadable file(s) of {len(files_all)}: "
+              + "; ".join(bad_files[:5]) + ("; ..." if len(bad_files) > 5 else ""), flush=True)
     if not O:
-        raise SystemExit(f"--rvs-data {dirs}: no usable episodes")
+        raise SystemExit(f"--rvs-data {dirs}: no usable episodes "
+                         f"({len(bad_files)} of {len(files_all)} files unreadable)")
     if not (len(O) == len(A) == len(F) == len(W) == len(EP) == len(POS)):
         raise RuntimeError(f"RvS load ragged: obs {len(O)} act {len(A)} first {len(F)} keep {len(W)} "
                            f"ep {len(EP)} pos {len(POS)}")
