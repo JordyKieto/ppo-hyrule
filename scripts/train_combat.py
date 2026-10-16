@@ -28,6 +28,7 @@ from zelda_rl.combat import band_metrics, deficit_weights, COMBAT_DIM, COMBAT_FI
 from zelda_rl.env import N_COMBAT_ACTIONS, N_COMBAT_ACTIONS_V5, DolphinGoalEnv, EnvConfig, EnvError, action_name  # noqa: E402
 from zelda_rl.obs import (ACTOR_DIM_V2, ACTOR_FIELDS_V2, GLOBAL_DIM_V2, GLOBAL_FIELDS_V2, N_ACTORS,  # noqa: E402
                           read_state_file_v2)
+from zelda_rl import ckpt_s3
 from zelda_rl.ppo import build_model, gae, ppo_update, ppo_update_recurrent  # noqa: E402
 from zelda_rl.runlog import LOGGER, RunLogger  # noqa: E402
 
@@ -687,6 +688,10 @@ def main():
                       "episode_count": episode_count, "config": config}
                 torch.save(ck, run_dir / "checkpoints" / f"update_{update:05d}.pt")
                 torch.save(ck, latest)
+                # Back it up to S3 AS IT IS WRITTEN. A pod can vanish between two updates, and on
+                # 2026-10-15 one took fifteen arms' weights with it because syncing was a manual step.
+                ckpt_s3.upload(run_dir / "checkpoints" / f"update_{update:05d}.pt", args.run_name, update)
+                ckpt_s3.upload(latest, args.run_name, update)
     finally:
         for e in envs:
             e.close()

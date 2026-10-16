@@ -312,6 +312,42 @@ def probe(env, slot, seconds=10.0):
     return ok
 
 
+
+def record_row(out: Path, row: dict, s3: bool = True) -> None:
+    """Write the manifest row and push the episode to S3 THE MOMENT the episode is saved.
+
+    The manifest used to be written once, after the whole session. A session that was killed -- or simply
+    still running -- therefore left episodes with no md5 and nothing in S3: at 55 files on disk the manifest
+    held 26 rows, so 29 human wins were unverifiable as artefacts and un-backed-up. Per-episode is the only
+    version that survives an interruption, and an interruption is the normal case for a human recording for
+    an hour (AGENTS 21: a rule that needs remembering is not a rule).
+    """
+    mf = out / "MANIFEST.json"
+    prior = []
+    if mf.exists():
+        try:
+            prior = json.loads(mf.read_text()).get("episodes", [])
+        except Exception:                                                    # noqa: BLE001
+            prior = []
+    prior = [e for e in prior if e.get("file") != row["file"]] + [row]
+    mf.write_text(json.dumps({
+        "dataset": "human Gohma demonstrations with controller inputs",
+        "episodes": prior, "total": len(prior),
+        "wins": sum(1 for e in prior if e.get("win")),
+        "steps": sum(round(e.get("length_s", 0) * 10) for e in prior),
+    }, indent=1))
+    if not s3:
+        return
+    try:
+        import boto3
+        c = boto3.Session(profile_name="race-wm", region_name="us-west-1").client("s3")
+        for f in (out / row["file"], mf):
+            c.upload_file(str(f), "zelda-rl", f"zelda/human/gohma/{f.name}")
+        print(f"  -> S3 zelda/human/gohma/{row['file']}", flush=True)
+    except Exception as e:                                                   # noqa: BLE001
+        print(f"  !! S3 UPLOAD FAILED for {row['file']}: {str(e)[:140]}\n"
+              f"     the episode is on disk only; re-run the sync before trusting it", flush=True)
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--slots", default="1,2,3,4,5",
@@ -341,6 +377,10 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true",
                     help="prove the input offset with NO controller: drive the pad through the env's pipe and "
                          "read it back from gPlayState+0x14. Records nothing")
+    ap.add_argument("--no-s3", action="store_true",
+                    help="do NOT push each episode to s3://zelda-rl/zelda/human/gohma/ as it is recorded. "
+                         "The default is to push, because a session that is interrupted otherwise leaves "
+                         "episodes backed up nowhere")
     ap.add_argument("--volume", type=int, default=100,
                     help="Dolphin output volume 0-100. The fight is long and repetitive; 10-15 is audible "
                          "enough to hear her shriek and the seed impacts without filling the room")
@@ -461,8 +501,11 @@ def main() -> int:
             tag = ("KILLED HER" if won else "you died" if died else
                    f"ENDED EARLY: {end}" if end not in ("timeout", "success", "death") else "time up")
             print(f"  {'*' * 8} {tag} {'*' * 8}")
-            kept.append((f.name, won, ep_info.get("boss_damage", 0), len(A) / 10.0, slot,
-                         start_state, md5, f.stat().st_size))
+            row = {"file": f.name, "win": won, "boss_damage": int(ep_info.get("boss_damage", 0)),
+                   "length_s": len(A) / 10.0, "slot": slot, "start_gohma_state": start_state,
+                   "md5": md5, "bytes": f.stat().st_size}
+            kept.append(row)
+            record_row(out, row, s3=not a.no_s3)          # manifest + S3 now, not at session end
             if ep < a.episodes - 1 and a.settle > 0:
                 # Keep the emulator ticking so the animation plays, then reload. ready()/observe() are not
                 # used here: the episode is over and the tracker is done, so this is purely wall-clock.
@@ -478,23 +521,35 @@ def main() -> int:
         except Exception:                                                        # noqa: BLE001
             pass
     if kept:
-        wins = sum(1 for k in kept if k[1])
-        (out / "MANIFEST.json").write_text(json.dumps({
-            "dataset": "human Gohma demonstrations with controller inputs",
-            "episodes": [{"file": n, "win": w, "boss_damage": d, "length_s": s, "slot": sl,
-                          "start_gohma_state": ss, "md5": m, "bytes": by}
-                         for n, w, d, s, sl, ss, m, by in kept],
-            "total": len(kept), "wins": wins,
-            "steps": sum(round(k[3] * 10) for k in kept),
+        # Every row was already written to the manifest and pushed to S3 by record_row() as its episode
+        # finished. This pass only ADDS the session-level provenance fields and reports -- it must never be
+        # the first time the manifest is written, which is how 29 episodes ended up without an md5.
+        mf = out / "MANIFEST.json"
+        man = json.loads(mf.read_text()) if mf.exists() else {"episodes": []}
+        man.update({
             "obs_version": 7, "hz": 10.0,
             "action_space": "COMBAT_ACTIONS_V5", "n_actions": len(COMBAT_ACTIONS_V5),
             "pad_source": "gPlayState+0x14 Input[0] (docs/RAM_MAP.md section 4)",
             "git_commit": GIT,
             "recorded_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "verify": "scripts/verify_human_dataset.py <dir>  -- run BEFORE uploading to S3",
-        }, indent=2))
-        print(f"\n{len(kept)} episodes, {wins} wins, {sum(round(k[3]*10) for k in kept):,} steps -> {out}/")
-        print(f"  NEXT: .venv/bin/python scripts/verify_human_dataset.py {out}")
+            "verify": "scripts/verify_human_dataset.py <dir>",
+        })
+        man["total"] = len(man.get("episodes", []))
+        man["wins"] = sum(1 for e in man.get("episodes", []) if e.get("win"))
+        man["steps"] = sum(round(e.get("length_s", 0) * 10) for e in man.get("episodes", []))
+        mf.write_text(json.dumps(man, indent=1))
+        wins = sum(1 for k in kept if k["win"])
+        print(f"\nthis session: {len(kept)} episodes, {wins} wins, "
+              f"{sum(round(k['length_s'] * 10) for k in kept):,} steps")
+        print(f"corpus total: {man['total']} episodes, {man['wins']} wins, {man['steps']:,} steps -> {out}/")
+        if not a.no_s3:
+            try:
+                import boto3
+                boto3.Session(profile_name="race-wm", region_name="us-west-1").client("s3").upload_file(
+                    str(mf), "zelda-rl", "zelda/human/gohma/MANIFEST.json")
+                print("  manifest -> s3://zelda-rl/zelda/human/gohma/MANIFEST.json")
+            except Exception as e:                                           # noqa: BLE001
+                print(f"  !! manifest S3 upload failed: {str(e)[:120]}")
     return 0
 
 

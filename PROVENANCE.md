@@ -764,9 +764,21 @@ itself nearly failed -- `scripts/export_wandb.py` scanned three projects and **`
 of them**, which is where `fleet launch` sends combat runs. Fixed in the same commit; had the loss happened
 before that was noticed, the repo's own tooling could not have exported the day's work.
 
-**The rule this produces, and it is AGENTS 25 restated for training runs:** a running arm's checkpoints exist
-only on a pod, and a pod can vanish without warning. `fleet sync` belongs in the loop that reads the metrics,
-not at the end of a session. Sync when you read a number worth keeping.
+**THE FIX, because a rule that needs remembering is not a rule (AGENTS 21).** "Sync when you read a number"
+would have been another sentence in a document. Instead the write itself now backs itself up:
+
+- **`zelda_rl/ckpt_s3.py`** uploads every checkpoint to `s3://zelda-rl/fleet/ckpt_auto/<run>/` **at the moment
+  `torch.save` writes it**, from inside `train_combat.py`. No flag, no operator step, nothing to forget. Pods
+  already carry AWS credentials for this (`fleet/secrets.py` ships them so a pod can stream its dataset as it
+  collects), so there was nothing to plumb. Failure is logged as `CHECKPOINT BACKUP FAILED ... this run's
+  weights exist ONLY on this pod` and never raises -- a lost backup must not kill a run, and must not be
+  silent. Verified end to end: a probe checkpoint appeared in S3 and was then removed.
+- **`scripts/record_human.py`** writes the manifest row **and pushes the episode to S3 as each episode ends**
+  (`record_row`), not at session end. Verified by simulating a killed session: three episodes recorded with no
+  session end leave a complete manifest, every row with an md5. `--no-s3` opts out deliberately.
+
+The same bug produced both losses: state that exists only until something is interrupted. Fifteen arms' weights
+and 29 of the author's recorded wins were in that state at the same time.
 
 | arm | W&B group | run id | ranks | history rows |
 |---|---|---|---|---|
