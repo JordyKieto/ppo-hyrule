@@ -91,7 +91,7 @@ def run_split(model, eps, chunk, opt=None):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 opt.step()
             h = hh.detach()
-            tot_loss += float(loss) * len(y)
+            tot_loss += float(loss.detach()) * len(y)
             tot_ok += int((lg.argmax(-1) == y).sum())
             tot_n += len(y)
     return tot_loss / max(tot_n, 1), tot_ok / max(tot_n, 1), tot_n
@@ -108,6 +108,8 @@ def main() -> int:
     ap.add_argument("--gru", type=int, default=256)
     ap.add_argument("--val-episodes", type=int, default=2, help="held out BY EPISODE, never by frame")
     ap.add_argument("--wins-only", action="store_true", help="clone only the episodes that killed her")
+    ap.add_argument("--episode-seconds", type=float, default=120.0,
+                    help="recorded in the checkpoint so an evaluator rebuilds the same fight; match the PPO run")
     a = ap.parse_args()
 
     eps = load(Path(a.data), a.wins_only)
@@ -122,9 +124,22 @@ def main() -> int:
     if wins == 0:
         print("  WARNING: no winning episodes -- this will clone losing play")
 
-    # Split BY EPISODE. Prefer holding out a win so the val number means something.
-    order = sorted(range(len(eps)), key=lambda i: (not eps[i]["win"], i))
-    val_idx = set(order[:a.val_episodes]) if len(eps) > a.val_episodes else set()
+    # Split BY EPISODE, and across DIFFERENT START SLOTS. Taking the first N in file order held out both
+    # slot-1 episodes at once, so the model saw no slot-1 play and was scored only on slot 1 -- the val number
+    # then measures transfer to an unseen start rather than imitation quality. One episode per slot, from the
+    # slots that have a spare, keeps both sides representative.
+    by_slot: dict[int, list[int]] = {}
+    for i, e in enumerate(eps):
+        by_slot.setdefault(e["slot"], []).append(i)
+    val_idx = set()
+    for sl in sorted(by_slot, key=lambda k: (-len(by_slot[k]), k)):
+        if len(val_idx) >= a.val_episodes:
+            break
+        if len(by_slot[sl]) > 1:                       # never hold out a slot's ONLY episode
+            val_idx.add(by_slot[sl][-1])
+    if not val_idx:                                    # every slot has exactly one episode
+        order = sorted(range(len(eps)), key=lambda i: (not eps[i]["win"], i))
+        val_idx = set(order[:a.val_episodes]) if len(eps) > a.val_episodes else set()
     tr = [e for i, e in enumerate(eps) if i not in val_idx]
     va = [e for i, e in enumerate(eps) if i in val_idx]
     print(f"  train {len(tr)} episodes / val {len(va)} ({[e['file'] for e in va]})")
@@ -150,12 +165,20 @@ def main() -> int:
             best = (score, ep_i)
             out = Path(a.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            # `config` must carry what --init-from's spec check compares: global_dim, n_actions, actor_dim.
+            # `config` must carry what --init-from's spec check compares (global_dim, n_actions, actor_dim)
+            # AND what policy_io.make_env needs to rebuild the fight (combat_cfg, episode_seconds,
+            # vi_per_step). Without the second group the trainer loads the clone fine and the EVALUATOR dies
+            # on `KeyError: 'combat_cfg'` -- which is how the first eval of this checkpoint failed.
+            from dataclasses import asdict
+            from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
+            ccfg = CombatConfig(profile="gohma", max_seconds=a.episode_seconds, **GOHMA_SIMPLE)
             torch.save({"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
                         "episode_count": 0,
                         "config": {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
                                    "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden,
                                    "gru": a.gru, "recurrent": True, "obs_version": 7, "task": "combat",
+                                   "combat_cfg": asdict(ccfg), "episode_seconds": a.episode_seconds,
+                                   "vi_per_step": 6, "goal_slot": 3, "steps_per_rollout": 0,
                                    "profile": "gohma", "run_name": "bc_human",
                                    "bc_source": str(a.data), "bc_episodes": len(eps), "bc_wins": wins,
                                    "bc_steps": steps, "bc_val_acc": float(vacc), "bc_epoch": ep_i,

@@ -557,6 +557,104 @@ pods, 8 envs each, $10.32/hr, aggregator rank 4, one update = 8 × 3,000 = 24,00
 
 ---
 
+### 3.3 Human demonstrations and BC-regularised PPO — 2026-10-15
+
+**The corpus (M).** The author played Queen Gohma to death 9 times under `scripts/record_human.py`,
+which records at 10 Hz: the v7 observation the policy sees, the action index the human's input decodes to, the
+**raw pad** (button mask, stick x/y read from `gPlayState+0x14`), and the camera yaw used for that decode.
+Every `.npz` is self-describing -- `obs_fields`, `action_space`, `pad_bits`, `recorded_utc`, `git_commit` --
+so a remote trainer never reconstructs the layout from this repo's current source (AGENTS 25, 27).
+
+9 episodes, 6,738 steps, **9 wins out of 9**, 8 distinct start states, obs_dim 1033,
+n_actions 108, 93/108 actions used (86%). Mirrored to `s3://zelda-rl/zelda/human/gohma/` and pushed to every
+pod by presigned GET, verified by size at the path the trainer opens (AGENTS 16, 20).
+
+| File | md5 | Steps | Damage | Slot | Start state |
+|---|---|---|---|---|---|
+| `ep04_slot5_WIN.npz` | `adf411fe6829` | 759 | 10/10 | 5 | ceiling_eye_red |
+| `ep05_slot6_WIN.npz` | `7314e100c9fa` | 281 | 6/10 | 6 | floor_eye_red |
+| `ep06_slot7_WIN.npz` | `ad21a604335d` | 593 | 5/10 | 7 | stunned |
+| `ep07_slot8_WIN.npz` | `9edc30c1d70b` | 2379 | 10/10 | 8 | stunned |
+| `ep08_slot9_WIN.npz` | `199397154802` | 475 | 5/10 | 9 | ceiling_move |
+| `ep09_slot10_WIN.npz` | `784587c2af82` | 547 | 5/10 | 10 | ceiling_move |
+| `ep10_slot5_WIN.npz` | `5899fdfe1bff` | 1235 | 10/10 | 5 | ceiling_eye_red |
+| `ep11_slot6_WIN.npz` | `6521195a8dd7` | 307 | 6/10 | 6 | floor_eye_red |
+| `ep12_slot7_WIN.npz` | `5c54a7ce4d8c` | 162 | 5/10 | 7 | stunned |
+
+Gate before upload: `scripts/verify_human_dataset.py` rejects a corpus with constant pad input, fewer than
+three distinct actions, non-finite observations, out-of-range action indices, length mismatches or md5 drift.
+It printed the sync command only after all 9 rows passed.
+
+**Input decoding, verified rather than assumed (M).** The pad offset is proven two ways: `--selftest` drives
+the pad through the env's own pipe and reads it back (11 cases, all pass, no controller needed), and
+`tests/test_record_human.py` round-trips **every** action the policy can emit through the stick the env would
+send and requires the same index back at five camera yaws. The first version of that mapping treated the
+direction as an octant *index* rather than a world angle and ignored the camera -- it produced plausible
+recordings that were wrong for every non-neutral direction. `L = 0x2000` (Z-target) and `R = 0x0010` (shield)
+were confirmed **by effect** on the real controller, and `0x0020` is unmapped in OoT.
+
+**Two environment facts that each cost time, now checks (AGENTS 21).** Live RAM attach needs the signed
+interpreter `.venv/bin/python-dbg` (`docs/MAP.md` line 66) **and** `DOLPHIN_BIN` exported to
+`~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin` (line 73). With the `/Applications` build the game
+boots the **Wii System Menu**, `task_for_pid` is denied, and `attach_n64_ram` hides both behind
+`TimeoutError: N64 RAM not found in Dolphin process` for 60 s -- a message naming the emulator rather than
+either cause.
+
+**The clone (M, single run).** `scripts/train_bc_human.py` trains the same `RecurrentEntityActorCritic` the
+PPO trainer builds, split **by episode** across start slots, GRU state carried inside an episode.
+
+| | value |
+|---|---|
+| held-out action accuracy | **53.4%** (epoch 16) |
+| majority-action floor | **11.1%** (action 0, neutral) |
+| train accuracy at epoch 56 | 88.6% — overfits after ~16, so the best-val checkpoint is the kept one |
+| checkpoint | `checkpoints/kept/bc_human.pt`, md5 `531f2a012817`, 2,726,211 bytes |
+
+**n = 1 run and 2 held-out episodes** (AGENTS 7): this is a single measurement, not a range. The earlier split
+held out *both* slot-1 episodes, which measured transfer to an unseen start rather than imitation quality;
+fixed to one episode per slot from slots with a spare.
+
+**What 53.4% is NOT (Q).** It is frame-matching, not competence. The first closed-loop rollouts of the BC
+weights under PPO died at 20-50 s with 0 kills on every env -- compounding error into states the
+demonstrations never visited. The pure-BC policy's held-out boss damage is being measured on the eval pod and
+is the **M** number for this; until it lands, any claim that the clone can fight is **U**.
+
+**BC as a regulariser, not only an init (M for the mechanism, U for the outcome).** `--init-from` decays: PPO's
+gradient walks away from the demonstrations within a few updates. `zelda_rl/bc_demos.py` pre-chunks the corpus into
+168 windows of 60 and `zelda_rl/ppo.py` adds `bc_coef * cross_entropy` on an equal number of human windows per
+minibatch -- regularising against the **data**, where `--kl-anchor` regularises against a **policy**.
+`tests/test_bc_regulariser.py` is the control: coef 1.0 drives agreement with the demonstrated action to
+**96.9%** from an 11.1% chance floor, coef 0.0 reports no statistics and reaches **0%**, so the term provably
+trains and is provably off when disabled.
+
+**One self-inflicted incident worth recording.** The demonstration loader was first written to
+`zelda_rl/bc.py` with a shell redirect, which **overwrote the WM track's 858-line behaviour-cloned encoder**.
+Caught by reading `git diff --stat` before committing (855 deletions on a file that should have been new),
+restored with `git checkout`, and the loader moved to `zelda_rl/bc_demos.py`. The fleet was unaffected -- it
+had rsynced the code at launch -- and the new module was pushed to all 13 pods so a pod restart cannot import
+a file that is not there.
+
+**The run (U until numbers land).** `gohma-v20-bc`, launch id `20261015173419`, repo `b47cbf4`:
+
+| | v20 arms (concluded tie) | `gohma-v20-bc` |
+|---|---|---|
+| init | `gohma-kl-v15-r4_latest.pt` | `checkpoints/kept/bc_human.pt` |
+| BC term | none | `--bc-data datasets/human/gohma --bc-coef 0.1` |
+| observation | `--n-actors 4` (481) | 16 actors (1033), to match the recordings |
+| ranks | 13 training | 12 training (1,2,3,4,5,7,8,11,12,13,14,19) + **r0 pure eval** |
+| aggregator | rank 0 | rank 1 |
+| unchanged | `--reward simple`, 120 s episodes, slots 3-8 at v17 weights, gamma 0.995, gae-lambda 0.95, lr 3e-4, hidden/gru 256, death-scale 0 | same |
+
+`bc_coef 0.1` is the one free number: BC cross-entropy sits near 2.2 against a PPO policy loss of 0.01-0.1, so
+1.0 would swamp the objective and freeze the policy at the clone. `bcL`/`bcA` lead the trainer's log line so
+whether it bites is visible rather than assumed (AGENTS 34). The credit horizon was deliberately **not**
+changed in the same run, so the BC effect stays readable.
+
+The eval pod runs the pure-BC policy over all 10 starts (8 episodes each) and then `--watch-published
+gohma-v20`, logging held-out metrics to W&B group `gohma-v20-bc-eval` beside the training curve.
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and

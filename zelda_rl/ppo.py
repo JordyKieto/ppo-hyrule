@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions import Categorical
 
 
@@ -163,9 +164,13 @@ class RecurrentEntityActorCritic(nn.Module):
 
 
 def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, clip, ent_coef, vf_coef, max_grad_norm,
-                         target_kl=None, kl_coef=0.0):
+                         target_kl=None, kl_coef=0.0, bc=None, bc_coef=0.0):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
     batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
+
+    `bc_coef` > 0 adds a BEHAVIOUR-CLONING PENALTY on human demonstrations: `bc` is the dict from
+    `zelda_rl.bc_demos.load_bc_chunks` and each minibatch pays cross-entropy on an equal number of human windows.
+    It regularises against the DATA, where `kl_coef` regularises against a POLICY -- use both or either.
 
     `kl_coef` > 0 adds a KL PENALTY toward an anchor policy, using `batch["anchor_logp"]` (T, N, A): the
     anchor's full log-probabilities, recorded during the rollout so the anchor's GRU carries its OWN hidden
@@ -213,6 +218,23 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             pg = torch.max(-a * ratio, -a * ratio.clamp(1 - clip, 1 + clip)).mean()
             vl = 0.5 * ((v - ret) ** 2).mean()
             loss = pg - ent_coef * ent.mean() + vf_coef * vl
+            if bc_coef > 0 and bc is not None:
+                # Same number of human windows as rollout chunks in this minibatch, so the term's weight does
+                # not drift with the minibatch size. Fresh hidden per window (see zelda_rl/bc_demos.py).
+                j = torch.randint(0, bc["obs"].shape[0], (min(chunks_per_mb, bc["obs"].shape[0]),))
+                b_obs, b_act, b_first = bc["obs"][j], bc["act"][j], bc["first"][j]
+                bh = model.init_hidden(b_obs.shape[0])
+                b_logits = []
+                for k in range(b_obs.shape[1]):
+                    lg, _, bh = model.step(b_obs[:, k], bh, b_first[:, k])
+                    b_logits.append(lg)
+                b_lg = torch.stack(b_logits, 1)                                   # (B, L, A)
+                bc_loss = F.cross_entropy(b_lg.reshape(-1, b_lg.shape[-1]), b_act.reshape(-1))
+                loss = loss + bc_coef * bc_loss
+                with torch.no_grad():
+                    stats.setdefault("bc_loss", []).append(float(bc_loss))
+                    stats.setdefault("bc_acc", []).append(
+                        float((b_lg.argmax(-1) == b_act).float().mean()))
             if kl_anchor is not None:
                 loss = loss + kl_coef * kl_anchor
                 stats.setdefault("kl_anchor", []).append(float(kl_anchor.detach()))

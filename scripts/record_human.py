@@ -376,6 +376,15 @@ def main() -> int:
                     pad_ini="" if a.selftest else a.pad_ini)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    existing = sorted(out.glob("ep*.npz"))
+    base = 0
+    for f in existing:
+        try:
+            base = max(base, int(f.name[2:4]) + 1)
+        except ValueError:
+            pass
+    if existing:
+        print(f"  {len(existing)} episode(s) already in {out}; numbering continues at ep{base:02d}")
     kept = []
     try:
         if a.selftest:
@@ -416,7 +425,7 @@ def main() -> int:
             ep_info = info.get("episode", {})
             won = bool(ep_info.get("boss_defeated"))
             died = bool(st.bit(SF1_DEAD))
-            f = out / f"ep{ep:02d}_slot{slot}_{'WIN' if won else 'death' if died else 'timeout'}.npz"
+            f = out / f"ep{base + ep:02d}_slot{slot}_{'WIN' if won else 'death' if died else 'timeout'}.npz"
             # SELF-DESCRIBING, because this is going to S3 and being trained on remotely: the obs field
             # names, the action-space definition and the pad decoding all travel WITH the data, so a remote
             # job never has to reconstruct the layout from this repo's current source (AGENTS 25, 27).

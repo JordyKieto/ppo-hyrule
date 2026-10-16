@@ -48,6 +48,12 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R36 | 53% of the Gohma observation is dead weight | **M** | obs 1033 -> 481 (n_actors 16 -> 4) is within noise of the control across 22-36 updates per arm, with v15's weights loaded unchanged (missing=0). GOHMA_CREDIT_PLAN 10 |
 | R37 | Restoring Deku's params-per-input ratio unlocks learning | **M -> NO** | n4 sits AT that ratio (1,413 vs Deku's 1,275) and is the worst-trending arm, slope -0.0249 t=-2.65. Best vs control +0.193 +/- 0.104, t=+1.85, not significant |
 | R38 | The 120s episode cap and removed approach reward cost ~0.7 damage | **I** | every arm of every sweep on 2026-10-15, control included, sits below v15's 3.275 start |
+| R39 | A human can beat Queen Gohma repeatedly and it can be recorded with inputs | **M** | 13/13 wins, 10,532 steps, 8 start states, raw pad + decoded action + camera yaw per frame; md5s in `datasets/human/gohma/MANIFEST.json`, gated by `scripts/verify_human_dataset.py`. PROVENANCE 3.3 |
+| R40 | The recorded human action decoding is the exact inverse of what the env sends | **M** | `tests/test_record_human.py` round-trips every emittable action through the env's stick transform at 5 camera yaws; `--selftest` proves the pad offset through the pipe, 11 cases. An earlier version ignored the camera and was wrong for every non-neutral direction |
+| R41 | Behaviour cloning learns the human's action choices | **M**, n=1 | 53.4% held-out action accuracy vs an 11.1% majority floor, 108-way; split by episode across slots. Single run, 2 held-out episodes (AGENTS 7) |
+| R42 | The BC clone can fight Gohma | **U** | 53.4% is frame-matching. First closed-loop rollouts died at 20-50s with 0 kills on every env (**Q**). The eval pod's held-out boss damage on `bc_human.pt` is the M measurement; not yet landed |
+| R43 | A BC loss on demonstrations regularises PPO toward them | **M** for the mechanism | `tests/test_bc_regulariser.py`: coef 1.0 drives agreement with the demonstrated action to 96.9% from an 11.1% chance floor; coef 0.0 reports no stats and reaches 0% |
+| R44 | BC init + BC regularisation beats v15 on held-out boss damage | **U** | `gohma-v20-bc`, launch 20261015173419, 12 ranks + eval pod. Needs the pure-BC baseline AND a matched comparison against v15's 3.275 before any claim |
 
 ## WM track
 

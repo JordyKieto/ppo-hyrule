@@ -29,7 +29,24 @@ def attach_n64_ram(pid: int, timeout: float = 60.0) -> np.ndarray:
         except PermissionError:
             pass
         time.sleep(0.25)
-    raise TimeoutError("N64 RAM not found in Dolphin process")
+    # Naming the emulator here cost ~40 minutes of a hands-on session: the window, the controller, the NAND
+    # and a refactor were each blamed before docs/MAP.md lines 66 and 73 were re-read. Both causes below
+    # present IDENTICALLY as this timeout, so the message lists them (AGENTS 21, 23).
+    import os
+    hint = ""
+    if sys.platform == "darwin":
+        from pathlib import Path as _P
+        why = []
+        if _P(sys.executable).name != "python-dbg":
+            why.append(f"interpreter is {_P(sys.executable).name}, not .venv/bin/python-dbg -- task_for_pid "
+                       f"needs the signed one (docs/MAP.md line 66)")
+        if "/.cache/zelda-rl/" not in os.environ.get("DOLPHIN_BIN", ""):
+            why.append("DOLPHIN_BIN is not the cached build -- /Applications/Dolphin.app boots the Wii System "
+                       "Menu instead of the game and refuses memory reads "
+                       "(export DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin, "
+                       "docs/MAP.md line 73)")
+        hint = "".join(f"\n  - {w}" for w in why) or "\n  - both prerequisites look right; check the Dolphin window"
+    raise TimeoutError(f"N64 RAM not found in Dolphin process after {timeout:.0f}s{hint}")
 
 
 def be_u32(ram, addr): return struct.unpack_from(">I", ram, addr & 0x3FFFFF)[0]

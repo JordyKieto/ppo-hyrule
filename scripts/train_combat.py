@@ -60,6 +60,13 @@ def parse_args():
     ap.add_argument("--total-updates", type=int, default=200)
     ap.add_argument("--slots-dir", default=DEFAULT_SLOTS_DIR)
     ap.add_argument("--start-slots", default="1,2,3,4,5,6,7,8,9,10")
+    ap.add_argument("--bc-data", default=None,
+                    help="directory of human demonstrations (ep*.npz from scripts/record_human.py). With "
+                         "--bc-coef > 0, every PPO minibatch also pays cross-entropy on an equal number of "
+                         "human windows, so the policy is regularised against the DEMONSTRATIONS for the whole "
+                         "run instead of only starting near them (--init-from decays within a few updates)")
+    ap.add_argument("--bc-coef", type=float, default=0.0,
+                    help="weight on the BC loss. 0 = off. Report bcL/bcA in the log line to see it bite")
     ap.add_argument("--kl-anchor", default=None,
                     help="path to a KNOWN-GOOD checkpoint. Adds a KL penalty from the training policy toward "
                          "it, bounding the DISTANCE TRAVELLED rather than the step size. --target-kl only "
@@ -253,6 +260,14 @@ def main():
     # ---- KL anchor: a frozen known-good policy. Its log-probs are recorded DURING the rollout so its GRU
     # carries its own hidden state; reusing the trainee's state would be a different network's memory.
     anchor = None
+    bc = None
+    if args.bc_data and args.bc_coef > 0:
+        from zelda_rl.bc_demos import describe, load_bc_chunks
+        bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions)
+        LOGGER.info("BC regulariser %s (coef %.3f): %s", args.bc_data, args.bc_coef, describe(bc))
+    elif args.bc_data or args.bc_coef > 0:
+        raise SystemExit("--bc-data and --bc-coef must be given together (coef > 0), or neither")
+
     if args.kl_anchor:
         from zelda_rl.policy_io import load_policy
         anchor, a_cfg, _ = load_policy(Path(args.kl_anchor))
@@ -279,7 +294,8 @@ def main():
                 if args.profile == "gohma" else "")
     hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
-           f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else ""))
+           f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
+           + ("   bcL   bcA" if bc is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -369,7 +385,8 @@ def main():
                                              chunks_per_mb=max(1, n_chunks // args.minibatches), clip=args.clip,
                                              ent_coef=args.ent_coef, vf_coef=args.vf_coef,
                                              max_grad_norm=args.max_grad_norm, target_kl=args.target_kl,
-                                             kl_coef=(args.kl_coef if anchor is not None else 0.0))
+                                             kl_coef=(args.kl_coef if anchor is not None else 0.0),
+                                             bc=bc, bc_coef=(args.bc_coef if bc is not None else 0.0))
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -502,6 +519,8 @@ def main():
                         f"{stats['entropy']:>5.2f} {metrics['perf/env_steps_per_sec']:>5.0f}"
                         + (f" klA {stats['kl_anchor']:>6.3f}" if stats.get("kl_anchor") == stats.get("kl_anchor")
                            and "kl_anchor" in stats else "")
+                        + (f" {stats.get('bc_loss', float('nan')):>5.2f} {100 * stats.get('bc_acc', float('nan')):>4.0f}%"
+                           if bc is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:
