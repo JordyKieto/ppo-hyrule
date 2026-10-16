@@ -798,3 +798,44 @@ four times inside an hour.
 5. **Size the eval to the difference you need to see.** 24 episodes gives SE ≈ 0.3–0.4 on balanced boss
    damage, so differences under ~1.0 are invisible per-eval. Either raise the episodes per eval or pool —
    pooling is free and uses data already paid for, which is why it is the default now.
+
+## 39. A restart that silently discards training is an anti-pattern — make it impossible, not remembered
+
+**The incident.** `scripts/train_rvs.py` had no resume and wrote a checkpoint only when validation accuracy
+*improved*. In one session three arms were restarted to change a flag — twice `--eval-every`, once the corpus
+sizes — and **each one began again from a random init**, discarding every epoch already paid for. One had
+reached **1.54** online boss damage and went back to 0.75. The user's words: *"it reset training but why no
+checkpoints! wtf! why no resume!"*
+
+Then, asked to fix it, I added `--resume`, ran a four-episode toy that printed `RESUMED`, and called it done.
+That is not a test: it proved the *message* appeared, not that the *weights* continued. The user's words
+again: *"dont just add resume you fucking idiot test it!"*
+
+**What makes it impossible rather than remembered:**
+
+1. **Checkpoint every epoch, unconditionally** (`<out>.last.pt`), with the **optimiser state** — it used to be
+   saved as `None`, so even a hand-rolled resume would have restarted Adam cold. An interruption can now cost
+   at most one epoch.
+2. **One `save_ckpt()` writer** for the per-epoch file and the best-of files, so they cannot drift apart in
+   metadata or optimiser state.
+3. **`--resume` restores weights + Adam + epoch**, preferring `.last.pt` over the improvement file.
+4. **Starting on top of existing progress EXITS**: `"already holds training progress. Pass --resume to
+   continue from it, or --fresh to deliberately start over."` All three of this session's restarts would have
+   failed loudly instead of quietly wiping the run.
+5. **The eval cadence is in steps, not epochs** (`--steps-per-epoch`). With a growing corpus an "epoch" went
+   from 90 s to ~7 minutes, so `--eval-every 1` still meant one point every eight minutes. An interval defined
+   over a quantity you are deliberately growing is not an interval.
+
+**And the test is the point, so here is what a real one asserts** (`tests/test_rvs_resume.py`):
+
+- the resumed run's loss **continues the curve**: `1.726 → 1.415 → 1.393 → 1.391`, where a fresh init starts
+  at 1.726 — so a restart masquerading as a resume fails this;
+- the resumed **weights** are closer to the checkpoint they came from than to a fresh init
+  (`|after−checkpoint| 1.324 < |after−freshinit| 3.075`) — a vector norm, not a log line;
+- a silent overwrite is **refused** (positive control for the guard);
+- `--fresh` **overrides** the refusal (negative control — the first version of the guard ignored the flag and
+  this caught it).
+
+**The general rule, which §36 row 2 already stated and this broke again:** a fix is not shipped until a test
+fails without it. "It printed the thing I expected" is the weakest possible evidence, and it is what I
+submitted the first time.

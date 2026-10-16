@@ -165,6 +165,17 @@ def main() -> int:
     # its OWN current episodes, each labelled by rvs.conditioning() with the outcome it actually produced,
     # and keeps training on the grown corpus. The static corpus dirs are never evicted, so the 100 human
     # wins stay anchored (the self-imitation failure mode is a buffer that drops them).
+    ap.add_argument("--fresh", action="store_true",
+                    help="deliberately discard an existing checkpoint at --out and start from scratch")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue from --out if it exists (weights + optimiser + epoch). Without this a "
+                         "restart begins from a random init and every epoch already paid for is lost -- "
+                         "which happened three times on 2026-10-16, once costing an arm that had reached "
+                         "1.54 online damage")
+    ap.add_argument("--steps-per-epoch", type=int, default=0,
+                    help="cap optimiser steps per epoch, so the EVAL CADENCE stays constant while the "
+                         "corpus grows. With --dyna-dir the corpus went 792 -> 5,608 episodes and an "
+                         "'epoch' got 7x slower, so --eval-every 1 still meant one point every ~8 min")
     ap.add_argument("--dyna-dir", default=None,
                     help="absorb the online eval's own episodes from this directory into the corpus "
                          "(Dyna). Off when unset.")
@@ -235,11 +246,64 @@ def main() -> int:
 
     model = RecurrentEntityActorCritic(global_dim, n_actors, actor_dim, n_actions, hidden=a.hidden, gru=a.gru)
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
+    start_ep = 1
+    resume_from = None
+    for cand in (Path(str(a.out) + ".last.pt"), Path(a.out)):
+        if a.resume and cand.is_file():
+            resume_from = cand
+            break
+    if resume_from:
+        ck = torch.load(resume_from, map_location="cpu", weights_only=False)
+        model.load_state_dict(ck["model"])
+        if ck.get("optimizer"):
+            opt.load_state_dict(ck["optimizer"])
+        start_ep = int(ck.get("config", {}).get("rvs_epoch", 0)) + 1
+        print(f"RESUMED from {resume_from} at epoch {start_ep} "
+              f"(val-win acc was {100*float(ck.get('config', {}).get('rvs_val_win_acc', 0)):.1f}%)",
+              flush=True)
+    elif a.resume:
+        print(f"--resume given but no checkpoint at {a.out}[.last.pt]: starting fresh", flush=True)
+    elif not a.fresh and (Path(str(a.out) + ".last.pt").is_file() or Path(a.out).is_file()):
+        # A DESTRUCTIVE RESTART IS NOW IMPOSSIBLE BY ACCIDENT. Three arms were restarted on 2026-10-16 to
+        # change a flag, and each silently began from a random init, discarding every epoch already paid
+        # for -- one of them had reached 1.54 online damage. Pass --resume to continue or --fresh to
+        # deliberately discard.
+        raise SystemExit(f"{a.out} already holds training progress. Pass --resume to continue from it, "
+                         f"or --fresh to deliberately start over and overwrite it.")
+    from dataclasses import asdict
+    from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
+
+    def save_ckpt(path: Path, ep_i: int, score: float) -> None:
+        """One writer for every checkpoint this script produces, so the per-epoch file and the
+        'improved' file can never carry different metadata or a different optimiser state."""
+        cfg = {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
+               "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden, "gru": a.gru,
+               "recurrent": True, "obs_version": 7, "task": "combat", "profile": "gohma",
+               "run_name": "rvs", "episode_seconds": a.episode_seconds, "vi_per_step": 6,
+               "goal_slot": 3, "steps_per_rollout": 0,
+               "rvs_cond": True, "rvs_target": list(TARGET), "rvs_cond_dim": COND_DIM,
+               "rvs_win_weight": solved, "rvs_win_share": a.win_share, "rvs_episodes": len(eps),
+               "rvs_wins": len(wins), "rvs_val_win_acc": float(score), "rvs_epoch": ep_i,
+               "bc_seed": a.seed}
+        cfg["combat_cfg"] = asdict(CombatConfig(profile="gohma", max_seconds=a.episode_seconds,
+                                                **GOHMA_SIMPLE))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "update": 0,
+                    "global_step": 0, "episode_count": 0, "config": cfg}, path)
+        ckpt_s3.upload(path, "rvs", ep_i)
+
     best, best_dmg, hist = (0.0, -1), (0.0, -1), []
     print(f"\n{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val acc':>9}{'val WIN acc':>13}")
-    for ep_i in range(1, a.epochs + 1):
+    for ep_i in range(start_ep, a.epochs + 1):
         model.train()
-        tl, ta, _ = tbh.run_split(model, tr, a.chunk, opt, a.batch_episodes)
+        tr_ep = tr
+        if a.steps_per_epoch:
+            # a fixed number of episodes per epoch, resampled each time, so every episode is still
+            # eventually seen but the wall-clock between evals does not grow with the corpus
+            take = min(len(tr), a.steps_per_epoch * a.batch_episodes)
+            sel = np.random.default_rng(ep_i).permutation(len(tr))[:take]
+            tr_ep = [tr[i] for i in sel]
+        tl, ta, _ = tbh.run_split(model, tr_ep, a.chunk, opt, a.batch_episodes)
         model.eval()
         with torch.no_grad():
             _, vacc, _ = tbh.run_split(model, va, a.chunk, None, a.batch_episodes)
@@ -256,26 +320,17 @@ def main() -> int:
         # tracks the goal). Within one arm accuracy does track damage weakly (r=+0.44), which is why it is
         # still printed -- it is a progress signal, not a selector.
         score = vwacc if vwacc == vwacc else vacc        # DIAGNOSTIC only -- see above
+        # EVERY epoch, unconditionally, to <out>.last.pt. The only files written before this were
+        # "improved" ones, so killing a run between improvements threw away everything since the last one
+        # -- and a restart then began from a random init. An interruption must never cost more than one
+        # epoch (AGENTS 39).
+        save_ckpt(Path(str(a.out) + ".last.pt"), ep_i, score)
         do_eval = a.eval_every and (ep_i % a.eval_every == 0 or ep_i == a.epochs)
         if do_eval or score > best[0]:
             if score > best[0]:
                 best = (score, ep_i)
             out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
-            cfg = {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
-                   "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden, "gru": a.gru,
-                   "recurrent": True, "obs_version": 7, "task": "combat", "profile": "gohma",
-                   "run_name": "rvs", "episode_seconds": a.episode_seconds, "vi_per_step": 6,
-                   "goal_slot": 3, "steps_per_rollout": 0,
-                   "rvs_cond": True, "rvs_target": list(TARGET), "rvs_cond_dim": COND_DIM,
-                   "rvs_win_weight": solved, "rvs_win_share": a.win_share, "rvs_episodes": len(eps), "rvs_wins": len(wins),
-                   "rvs_val_win_acc": float(score), "rvs_epoch": ep_i, "bc_seed": a.seed}
-            from dataclasses import asdict
-            from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
-            cfg["combat_cfg"] = asdict(CombatConfig(profile="gohma", max_seconds=a.episode_seconds,
-                                                    **GOHMA_SIMPLE))
-            torch.save({"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
-                        "episode_count": 0, "config": cfg}, out)
-            ckpt_s3.upload(out, "rvs", ep_i)
+            save_ckpt(out, ep_i, score)
         if do_eval:
             ev = online_eval(Path(a.out), a, ep_i, hist)
             if a.dyna_dir and Path(a.dyna_dir).is_dir():
