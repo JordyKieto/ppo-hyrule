@@ -47,6 +47,13 @@ def section(title: str) -> None:
 
 def wm_section(text: str) -> None:
     section("1. WORLD MODEL -- pure transition training on the corpus")
+    # ONLY THE CURRENT RUN. Every launch appends to the same log, so the newest verdict line can belong to
+    # a run that is already dead: a killed ungated run's "-3.653" was reported as the live gated run's
+    # number. "device cuda" is printed once per launch, so everything before the LAST one is history.
+    marks = [i for i, l in enumerate(text.splitlines()) if l.startswith("device ")]
+    if marks:
+        text = "\n".join(text.splitlines()[marks[-1]:])
+        print(f"   (reading the current run only -- {len(marks) - 1} earlier run(s) in this log ignored)")
     eps = [m.groups() for m in (WM_EPOCH.match(l) for l in text.splitlines()) if m]
     vs = [m.groups() for m in (WM_VERDICT.search(l) for l in text.splitlines()) if m]
     corp = [l.strip() for l in text.splitlines() if l.startswith("loaded ") or l.startswith("corpus:")]

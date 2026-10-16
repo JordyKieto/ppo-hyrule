@@ -218,6 +218,17 @@ def main() -> int:
                     help="cap optimiser steps per epoch, so the EVAL CADENCE stays constant while the "
                          "corpus grows. With --dyna-dir the corpus went 792 -> 5,608 episodes and an "
                          "'epoch' got 7x slower, so --eval-every 1 still meant one point every ~8 min")
+    # DISTRIBUTED: one model across every pod, not N independent seeds. FleetLink.average_weights is the
+    # same aggregator-pattern sync train_combat uses -- every rank uploads, the aggregator averages what
+    # arrived within straggler_wait and publishes, followers load it. Six pods then give 6x the gradient
+    # throughput on ONE model, and their online evals pool into one kill-rate measurement instead of six
+    # under-powered ones (separating 3.78% from 2.64% needs ~2,900 episodes per group).
+    ap.add_argument("--fleet-experiment", default=None)
+    ap.add_argument("--fleet-rank", type=int, default=0)
+    ap.add_argument("--fleet-world-size", type=int, default=1)
+    ap.add_argument("--fleet-aggregator", type=int, default=0)
+    ap.add_argument("--fleet-launch-id", default="0")
+    ap.add_argument("--fleet-sync-every", type=int, default=4, help="average weights every N epochs")
     ap.add_argument("--dyna-dir", default=None,
                     help="absorb the online eval's own episodes from this directory into the corpus "
                          "(Dyna). Off when unset.")
@@ -233,6 +244,22 @@ def main() -> int:
         drift away from --win-share (the whole reason solve_win_weight exists).
         """
         eps = load_all(dirs, a.limit_per_dir)
+        # REAL DATA PARALLELISM, not an ensemble. Averaging weights across ranks that each train on the
+        # WHOLE corpus costs 6x the compute for ~1x the speed: every rank still does a full epoch. So the
+        # LOSING episodes -- the bulk -- are sharded by rank, and an epoch over the full corpus takes 1/N
+        # the wall clock with the average stitching it back together.
+        #
+        # The WINNING episodes are NOT sharded. 100 human wins are the scarce anchor and the win class is
+        # what drives damage (R72/R77/R88 from three directions); giving each rank ~17 of them would dilute
+        # the one thing that matters. Every rank keeps every win and 1/N of the failures.
+        if a.fleet_world_size > 1:
+            n_before = len(eps)
+            losses = [e for e in eps if not e["win"]]
+            kept_losses = losses[a.fleet_rank::a.fleet_world_size]
+            eps = [e for e in eps if e["win"]] + kept_losses
+            print(f"  shard {a.fleet_rank}/{a.fleet_world_size}: kept every win + "
+                  f"{len(kept_losses)}/{len(losses)} losses -> {len(eps)} of {n_before} episodes "
+                  f"(epoch is ~{a.fleet_world_size}x faster; the average recombines them)", flush=True)
         wins = [e for e in eps if e["win"]]
         lim_ = _mem_limit()
         print(f"corpus holds {getattr(load_all, 'gib', 0):.1f} GiB in RAM"
@@ -340,6 +367,16 @@ def main() -> int:
 
     best, best_dmg, hist = (0.0, -1), (0.0, -1), []
     print(f"\n{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val acc':>9}{'val WIN acc':>13}")
+    link = None
+    if a.fleet_experiment and a.fleet_world_size > 1:
+        try:
+            from zelda_rl.fleet_link import FleetLink
+            link = FleetLink(a.fleet_experiment, a.fleet_rank, a.fleet_world_size, a.fleet_launch_id)
+            print(f"fleet sync: {a.fleet_experiment} rank {a.fleet_rank}/{a.fleet_world_size}, "
+                  f"averaging every {a.fleet_sync_every} epoch(s)", flush=True)
+        except Exception as e:                                   # noqa: BLE001
+            print(f"fleet sync unavailable ({str(e)[:80]}): training alone", flush=True)
+
     for ep_i in range(start_ep, a.epochs + 1):
         model.train()
         tr_ep = tr
@@ -371,6 +408,17 @@ def main() -> int:
         # -- and a restart then began from a random init. An interruption must never cost more than one
         # epoch (AGENTS 39).
         save_ckpt(Path(str(a.out) + ".last.pt"), ep_i, score)
+        if link is not None and ep_i % a.fleet_sync_every == 0:
+            try:
+                sync = link.average_weights(model, ep_i, aggregator=a.fleet_aggregator)
+                if sync:
+                    print(f"  fleet sync @epoch {ep_i}: {sync}", flush=True)
+            except Exception as e:                               # noqa: BLE001
+                print(f"  fleet sync FAILED @epoch {ep_i}: {str(e)[:100]} -- training alone", flush=True)
+            try:
+                link.heartbeat({"epoch": ep_i, "val_win_acc": float(score)})
+            except Exception:                                    # noqa: BLE001
+                pass
         do_eval = a.eval_every and (ep_i % a.eval_every == 0 or ep_i == a.epochs)
         if do_eval or score > best[0]:
             if score > best[0]:

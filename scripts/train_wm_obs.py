@@ -81,10 +81,25 @@ def main() -> int:
                     help="extra weight on ticks where boss HP or Link HP changes")
     ap.add_argument("--stage2-epoch", type=int, default=10,
                     help="epoch at which autoregressive (own-output) rollout training starts")
-    ap.add_argument("--roll-half-life", type=float, default=200.0)
-    ap.add_argument("--max-roll", type=int, default=600, help="deepest rollout in stage 2")
+    # The reference (puffermoba-dyna/checkpoints/wm_multistep_k10/manifest.json) rolls k=10 with gamma 0.9.
+    # 600 with a 200-epoch half-life is ~60x deeper than it ever rolled, and WM_EXPERIMENT_REGIME.md item 4
+    # says not to extend the horizon mixture. Measured here: stage 2 at depth 600 drove H20 skill from
+    # -0.05 to -1.28 with the trend at t=-2.43.
+    ap.add_argument("--roll-half-life", type=float, default=10.0)
+    ap.add_argument("--max-roll", type=int, default=10, help="deepest rollout in stage 2 (reference: 10)")
     ap.add_argument("--out", default="runs/wm_obs/wm.pt")
     ap.add_argument("--resume", action="store_true")
+    # SCALE ACROSS GPU PODS, the way the reference does it (mobawm/fleet_link.py: "used by mobawm.wm.train
+    # on each pod (rank) of a fleet experiment"). Episodes are sharded by rank so an epoch over the full
+    # corpus takes 1/N the wall clock, and weights are averaged every --fleet-sync-every epochs. The 100
+    # HUMAN WINS are kept on every rank: they are the only clean kills in the corpus and a WM that has not
+    # seen one cannot dream one.
+    ap.add_argument("--fleet-experiment", default=None)
+    ap.add_argument("--fleet-rank", type=int, default=0)
+    ap.add_argument("--fleet-world-size", type=int, default=1)
+    ap.add_argument("--fleet-aggregator", type=int, default=0)
+    ap.add_argument("--fleet-launch-id", default="0")
+    ap.add_argument("--fleet-sync-every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     torch.manual_seed(a.seed); np.random.seed(a.seed)
@@ -100,6 +115,14 @@ def main() -> int:
     g_hp = idx.get("gohma_hp_frac"); l_hp = idx.get("link_hp_frac")
     print(f"obs {obs_dim}, actions {n_actions}, gohma_hp col {g_hp}, link_hp col {l_hp}", flush=True)
 
+    if a.fleet_world_size > 1:
+        n0 = len(eps)
+        wins = [e for e in eps if e.get("win")]
+        losses = [e for e in eps if not e.get("win")]
+        mine = losses[a.fleet_rank::a.fleet_world_size]
+        eps = wins + mine
+        print(f"shard {a.fleet_rank}/{a.fleet_world_size}: every win ({len(wins)}) + "
+              f"{len(mine)}/{len(losses)} losses -> {len(eps)} of {n0} episodes", flush=True)
     rng = np.random.default_rng(0)
     order = rng.permutation(len(eps))
     n_val = max(4, int(a.val_frac * len(eps)))
@@ -242,6 +265,16 @@ def main() -> int:
         model.train()
         return {h: {k: float(np.mean(v)) if v else float("nan") for k, v in d.items()} for h, d in res.items()}
 
+    link = None
+    if a.fleet_experiment and a.fleet_world_size > 1:
+        try:
+            from zelda_rl.fleet_link import FleetLink
+            link = FleetLink(a.fleet_experiment, a.fleet_rank, a.fleet_world_size, a.fleet_launch_id)
+            print(f"fleet sync: {a.fleet_experiment} rank {a.fleet_rank}/{a.fleet_world_size}, "
+                  f"averaging every {a.fleet_sync_every} epoch(s)", flush=True)
+        except Exception as e:                                   # noqa: BLE001
+            print(f"fleet sync unavailable ({str(e)[:70]}): training alone", flush=True)
+
     print(f"\n{'epoch':>5}{'stage':>7}{'train':>10}{'val':>10}   H1 model/persist/shuf   H20   H100", flush=True)
     for ep in range(start, a.epochs + 1):
         t0 = time.time()
@@ -254,7 +287,8 @@ def main() -> int:
                 tl += teacher_forced(obs, act, msk); n += 1
             else:
                 # 60% one-step, the rest geometric in depth to the full episode (the concluded mixture)
-                depth = 1 if np.random.rand() < 0.6 else int(min(a.max_roll, 2 ** np.random.uniform(1, 9)))
+                depth = (1 if np.random.rand() < 0.6
+                         else int(min(a.max_roll, 2 ** np.random.uniform(1, np.log2(max(a.max_roll, 2))))))
                 tl += (teacher_forced(obs, act, msk) if depth == 1
                        else rollout_loss(obs, act, msk, depth)); n += 1
         with torch.no_grad():
@@ -262,6 +296,17 @@ def main() -> int:
             vl = np.mean([teacher_forced(*pad(g)) for g in batches(val, min(8, len(val)))])
             model.train()
         m = evaluate(val)
+        if link is not None and ep % a.fleet_sync_every == 0:
+            try:
+                sync = link.average_weights(model, ep, aggregator=a.fleet_aggregator)
+                if sync:
+                    print(f"      fleet sync @epoch {ep}: {sync}", flush=True)
+                _h20 = m[20]
+                link.heartbeat({"epoch": ep,
+                                "h20_skill": 1 - _h20["model"] / max(_h20["persist"], 1e-9),
+                                "shuf_penalty": _h20["shuf"] / max(_h20["model"], 1e-9)})
+            except Exception as e:                               # noqa: BLE001
+                print(f"      fleet sync FAILED @epoch {ep}: {str(e)[:90]} -- training alone", flush=True)
         torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": ep,
                     "scales": scales.cpu().numpy(), "obs_dim": obs_dim, "n_actions": n_actions,
                     "hidden": a.hidden, "gru": a.gru, "fields": fields, "config": vars(a),

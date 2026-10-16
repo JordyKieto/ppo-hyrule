@@ -839,3 +839,41 @@ again: *"dont just add resume you fucking idiot test it!"*
 **The general rule, which §36 row 2 already stated and this broke again:** a fix is not shipped until a test
 fails without it. "It printed the thing I expected" is the weakest possible evidence, and it is what I
 submitted the first time.
+
+## 40. The reference implementation existed, and three of my choices were already answered in it
+
+`../puffermoba-dyna` is the code behind the author's own Dyna paper (arXiv 2610.08033). It was named to me
+only after I had built a Gohma world model from scratch, and reading it then settled three questions I had
+been deciding by argument:
+
+| decision | the reference | what I did | cost |
+|---|---|---|---|
+| start AT persistence | `mobawm/wm/model.py`: *"Output layers are zero-initialized, so an untrained model predicts 'nothing changes' (the persistence baseline)"* | zero-init head | none — matched |
+| per-field change gate | `gate=True: copy by default. Per delta field, a "does this field change"` | added, on the user's prompt | none — matched, but I would not have added it unprompted |
+| **rollout depth** | `checkpoints/wm_multistep_k10/manifest.json`: **`rollout_k: 10, gamma: 0.9`** | **`--max-roll 600`, half-life 200** | **the run** |
+| scale across pods | `mobawm/fleet_link.py`, per-rank weight averaging | same `FleetLink` | none — matched |
+
+**The depth was 60× too deep and it destroyed the model, measured:**
+
+| stage | H20 skill vs persistence |
+|---|---|
+| stage 1 (teacher-forced), gated | **−0.05** — tracking persistence, as intended |
+| stage 2 at depth 600 | −1.28, then **−2.46**; trend **−0.1675 ± 0.0562/epoch, t=−2.98** |
+| stage 2 at depth 10 (the reference's k) | −0.016 / −0.033 — stays at persistence |
+
+And `docs/WM_EXPERIMENT_REGIME.md` item 4 already said it in this repo's own words: *"Do not extend the
+horizon mixture further … paying more compute for H1800 is paying for noise."* I had read that document,
+and I still set 600 — because its narrative described a mixture reaching H=1800, which was that model's
+**measured regression**, not its recipe. A number that appears in a write-up of a failure is not a setting.
+
+**The rules.**
+
+1. **Ask for the reference implementation before building the thing it implements.** One `ls` of
+   `../puffermoba-dyna/checkpoints/` would have given me `rollout_k`, `gamma`, `batch`, `hidden` and
+   `layers` from a manifest, for free, before a GPU-hour was spent.
+2. **A hyperparameter quoted inside a post-mortem is not a recommendation.** Read what the document
+   CONCLUDED, which is usually in a section called "what to run next".
+3. **Averaging weights across ranks that each hold the whole corpus is an ENSEMBLE, not throughput.** Six
+   pods then cost 6× the compute for ~1× the speed. Throughput needs the DATA sharded — and the scarce
+   class (here the 100 human wins) stays whole on every rank, because sharding the anchor dilutes the only
+   thing that drives the metric.
