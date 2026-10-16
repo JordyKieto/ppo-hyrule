@@ -1,85 +1,277 @@
 {
-  "note": "Checkpoints are NOT committed (gitignored; up to 138 MB). This manifest identifies them by md5 so a file found later can be matched to a run. Provenance: PROVENANCE.md.",
   "artifacts": [
     {
+      "bytes": 7419801,
+      "description": "Deku Baba SOLVED policy, global update 150. obs v4 483d, 63 actions, GRU 256.",
+      "md5": "51cd69f624b82f12dc40ce89993420f5",
       "name": "rl/deku_baba_G150",
       "path": "checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt",
-      "present": true,
-      "bytes": 7419801,
-      "md5": "51cd69f624b82f12dc40ce89993420f5",
-      "description": "Deku Baba SOLVED policy, global update 150. obs v4 483d, 63 actions, GRU 256."
+      "present": true
     },
     {
+      "bytes": 8128749,
+      "description": "Gohma v10 rank 13 update 50; best of 18 ranks by late defeat rate (8.43%). The v11 starting point.",
+      "md5": "da49fba4a63ccbc6e6130626c1a72b94",
       "name": "rl/gohma_v10_r13_u50",
       "path": "checkpoints/inbox/gohma-r13_u00050.pt",
-      "present": true,
-      "bytes": 8128749,
-      "md5": "da49fba4a63ccbc6e6130626c1a72b94",
-      "description": "Gohma v10 rank 13 update 50; best of 18 ranks by late defeat rate (8.43%). The v11 starting point."
+      "present": true
     },
     {
+      "bytes": 8184493,
+      "description": "BEST Gohma policy to date: v13 rank 12 update 70, 7.4% defeat, 0.64% at full HP. Optimizer state intact.",
+      "md5": "49cf19963f4f0cedd7be575357f1f203",
       "name": "rl/gohma_v13_r12_u70",
       "path": "runs/gohma_v13/v13_r12_latest.pt",
-      "present": true,
-      "bytes": 8184493,
-      "md5": "49cf19963f4f0cedd7be575357f1f203",
-      "description": "BEST Gohma policy to date: v13 rank 12 update 70, 7.4% defeat, 0.64% at full HP. Optimizer state intact."
+      "present": true
     },
     {
+      "bytes": 2735530,
+      "description": "v14 (KL anchor to v13, no death penalty) rank 3 update 40, as published. Weights only, no optimizer: this is the published-policy format the eval fleet consumes.",
+      "md5": "8f2640cb3e87b08f4b2144863bac2afc",
       "name": "rl/gohma_v14_r3_u40",
       "path": "checkpoints/kept/gohma-kl_r3_u00040.pt",
-      "present": true,
-      "bytes": 2735530,
-      "md5": "8f2640cb3e87b08f4b2144863bac2afc",
-      "description": "v14 (KL anchor to v13, no death penalty) rank 3 update 40, as published. Weights only, no optimizer: this is the published-policy format the eval fleet consumes."
+      "present": true
     },
     {
+      "bytes": 8184685,
+      "description": "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2).",
+      "md5": "397e27b2beb688b9b14d6a260ec07a22",
       "name": "rl/gohma_v15_r4_u40",
       "path": "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
-      "present": true,
-      "bytes": 8184685,
-      "md5": "397e27b2beb688b9b14d6a260ec07a22",
-      "description": "v15 (v14 + g_approach) rank 4 (the aggregator) update 40, where the fleet was stopped. Optimizer state intact, so this is the resume point. FedAvg keeps all 20 ranks on one policy, so one rank is the fleet. Its result is UNPROVEN: 9/160 vs v14's 18/559, p=0.122 (PROVENANCE 3.2)."
+      "present": true
     },
     {
+      "bytes": 8184685,
+      "description": "v16 (approach coefficient 1.5) rank 4 update 20, where it was stopped. Its result is NEGATIVE: 0/5 bands improved over v15 at matched updates (PROVENANCE 3.2). Kept because a numbered attempt with a result is recoverable evidence.",
+      "md5": "0e11fcccb6f5dc8d08e92e7f8c12d487",
       "name": "rl/gohma_v16_r4_u20",
       "path": "checkpoints/kept/gohma-kl-v16-r4_latest.pt",
-      "present": true,
-      "bytes": 8184685,
-      "md5": "0e11fcccb6f5dc8d08e92e7f8c12d487",
-      "description": "v16 (approach coefficient 1.5) rank 4 update 20, where it was stopped. Its result is NEGATIVE: 0/5 bands improved over v15 at matched updates (PROVENANCE 3.2). Kept because a numbered attempt with a result is recoverable evidence."
+      "present": true
     },
     {
+      "bytes": 84319348,
+      "description": "Token WM, teacher-forced. Best one-step skill +0.188.",
+      "md5": "16419e8d337dae044a7b3b9811535faf",
       "name": "wm/token_v2_ck0080",
       "path": "runs/wm_v2/ck_0080.pt",
-      "present": true,
-      "bytes": 84319348,
-      "md5": "16419e8d337dae044a7b3b9811535faf",
-      "description": "Token WM, teacher-forced. Best one-step skill +0.188."
+      "present": true
     },
     {
+      "bytes": 84364980,
+      "description": "Token WM after autoregressive fine-tune; one-step skill went negative.",
+      "md5": "5ef096a872e3a1e42218d57091cabb0f",
       "name": "wm/token_v3_ck0085",
       "path": "runs/wm_v3/ck_0085.pt",
-      "present": true,
-      "bytes": 84364980,
-      "md5": "5ef096a872e3a1e42218d57091cabb0f",
-      "description": "Token WM after autoregressive fine-tune; one-step skill went negative."
+      "present": true
     },
     {
+      "bytes": 137650436,
+      "description": "Latent JEPA stage 1, teacher-forced.",
+      "md5": "cf2373f7535d3c96b35f37c89c0eef67",
       "name": "wm/jepa_v2_ck0045",
       "path": "runs/jepa_v2/ck_0045.pt",
-      "present": true,
-      "bytes": 137650436,
-      "md5": "cf2373f7535d3c96b35f37c89c0eef67",
-      "description": "Latent JEPA stage 1, teacher-forced."
+      "present": true
     },
     {
+      "bytes": 138565124,
+      "description": "Latent JEPA stage 2, autoregressive.",
+      "md5": "5023082962201f4e1d214fb63c9770b1",
       "name": "wm/jepa_v3_ck0070",
       "path": "runs/jepa_v3/ck_0070.pt",
-      "present": true,
-      "bytes": 138565124,
-      "md5": "5023082962201f4e1d214fb63c9770b1",
-      "description": "Latent JEPA stage 2, autoregressive."
+      "present": true
     }
-  ]
+  ],
+  "dyna_M4_s4.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 18,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "24a3d2655640132eacd6e877373caa0b",
+    "online_dmg_balanced_pooled": 1.1,
+    "online_dmg_se": 0.13,
+    "online_kill_rate": 0.0,
+    "online_kills": "0/119",
+    "rvs_cond": true,
+    "rvs_episodes": 700,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.1,
+    "rvs_wins": 100,
+    "s3": "fleet/ckpt_auto/rvs/dyna_M4_s4.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M4 + Dyna seed 4, 5 evals"
+  },
+  "dyna_M4_s4_bestdmg.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 12,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "181b2e568a6c8b66e0ab6133930fbac9",
+    "online_dmg_balanced_pooled": 1.1,
+    "online_dmg_se": 0.13,
+    "online_kill_rate": 0.0,
+    "online_kills": "0/119",
+    "rvs_cond": true,
+    "rvs_episodes": 663,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.1,
+    "rvs_wins": 100,
+    "s3": "fleet/ckpt_auto/rvs_bestdmg/dyna_M4_s4_bestdmg.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M4 + Dyna seed 4, best eval (1.46)"
+  },
+  "dyna_M5_s0.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 15,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "f9be337081c0013dd5c2eb56e0c3194d",
+    "online_dmg_balanced_pooled": 1.6,
+    "online_dmg_se": 0.1,
+    "online_kill_rate": 4.17,
+    "online_kills": "5/120",
+    "rvs_cond": true,
+    "rvs_episodes": 884,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 305,
+    "s3": "fleet/ckpt_auto/rvs/dyna_M5_s0.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M5 + Dyna seed 0, 5 evals"
+  },
+  "dyna_M5_s0_bestdmg.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 9,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "ec75ff743d8177f02d34fe9206c64a57",
+    "online_dmg_balanced_pooled": 1.6,
+    "online_dmg_se": 0.1,
+    "online_kill_rate": 4.17,
+    "online_kills": "5/120",
+    "rvs_cond": true,
+    "rvs_episodes": 842,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 302,
+    "s3": "fleet/ckpt_auto/rvs_bestdmg/dyna_M5_s0_bestdmg.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M5 + Dyna seed 0, best eval (1.83)"
+  },
+  "dyna_M5_s1.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 16,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "c164f7c91d4d53a476dfd3c2962b61fb",
+    "online_dmg_balanced_pooled": 1.5,
+    "online_dmg_se": 0.19,
+    "online_kill_rate": 1.67,
+    "online_kills": "2/120",
+    "rvs_cond": true,
+    "rvs_episodes": 906,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 303,
+    "s3": "fleet/ckpt_auto/rvs/dyna_M5_s1.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M5 + Dyna seed 1, 5 evals"
+  },
+  "dyna_M5_s1_bestdmg.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732213,
+    "epoch": 15,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "870b9251db36d3791f20432047ccf01c",
+    "online_dmg_balanced_pooled": 1.5,
+    "online_dmg_se": 0.19,
+    "online_kill_rate": 1.67,
+    "online_kills": "2/120",
+    "rvs_cond": true,
+    "rvs_episodes": 886,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 302,
+    "s3": "fleet/ckpt_auto/rvs_bestdmg/dyna_M5_s1_bestdmg.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "M5 + Dyna seed 1, best eval (1.96)"
+  },
+  "note": "Checkpoints are NOT committed (gitignored; up to 138 MB). This manifest identifies them by md5 so a file found later can be matched to a run. Provenance: PROVENANCE.md.",
+  "rvs_M5_s5.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732188,
+    "epoch": 40,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "b4aafda19665af9f90d070e60bbd561c",
+    "online_dmg_balanced_pooled": 1.76,
+    "online_dmg_se": 0.11,
+    "online_kill_rate": 3.33,
+    "online_kills": "8/240",
+    "rvs_cond": true,
+    "rvs_episodes": 795,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 300,
+    "s3": "fleet/ckpt_auto/rvs/rvs_M5_s5.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "rvs_M5 static, 10 evals"
+  },
+  "rvs_M5_s5_bestdmg.pt": {
+    "baselines": "results/rvs_baselines.json",
+    "bytes": 2732188,
+    "epoch": 40,
+    "eval": "24 episodes/eval on slots 3-8 via eval_fleet.evaluate, prompt g=(1,1,0)",
+    "md5": "b4aafda19665af9f90d070e60bbd561c",
+    "online_dmg_balanced_pooled": 1.76,
+    "online_dmg_se": 0.11,
+    "online_kill_rate": 3.33,
+    "online_kills": "8/240",
+    "rvs_cond": true,
+    "rvs_episodes": 795,
+    "rvs_target": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "rvs_win_share": 0.3,
+    "rvs_wins": 300,
+    "s3": "fleet/ckpt_auto/rvs_bestdmg/rvs_M5_s5_bestdmg.pt",
+    "session": "2026-10-16",
+    "track": "RL / pure RvS",
+    "what": "rvs_M5 best single eval (2.42 at epoch 40)"
+  }
 }

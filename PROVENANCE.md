@@ -1216,12 +1216,35 @@ writes every episode it plays as a corpus-format `.npz`, those rejoin the corpus
 `rvs.conditioning()` with the outcome they actually produced, and the win multiplier is re-solved for the new
 composition. The static dirs reload every cycle, so the 100 human wins can never be evicted.
 
-**Already visible, and it bounds what Dyna can do here:** after the first refresh each arm had absorbed 24 of
-its own episodes and its **win count had not moved** (M5 300 → 300, M4 100 → 100). At a 0–4% defeat rate the
-refresh supplies almost pure failure data, which dilutes the win class rather than enriching it — the
-win-share re-solve preserves the configured weighting, but the mechanism that would make Dyna *help* is not
-firing. First Dyna numbers (2 evals, NO VERDICT): `dyna_M5_s0` 1.56 ± 0.19 (2 kills/48), `dyna_M5_s1`
-1.06 ± 0.02, `dyna_M4_s4` 0.84 ± 0.13.
+**THE RESULT: Dyna does nothing.** Matched at equal training budget against the static reference's own
+first five evals, `dyna_M5_s0` is **identical**:
+
+| | pooled damage | kills |
+|---|---|---|
+| `dyna_M5_s0`, 5 evals | **1.60** | 5/120 = 4.17% |
+| `rvs_M5` static, evals 1–5 (1.54, 2.00, 1.33, 1.50, 1.62) | **1.60** | 4/120 = 3.33% |
+
+Its own slopes are dead flat: damage **−0.0126 ± 0.0834 /eval (t=−0.15)**, kill rate **+0.0000 ± 1.52
+(t=0.00)**. The kill gap needs ~7,700 episodes per arm to separate, so it is not evidence of anything.
+`dyna_M5_s1` 1.50 ± 0.19 (2/120 kills) and `dyna_M4_s4` 1.10 ± 0.13 (0/119) complete the picture; the two
+M5 seeds differ by 0.10–0.43 at identical settings, which is the seed floor for this comparison.
+
+**Retracted (mine, same session): "all three Dyna arms are rising".** They were 3-eval fits on fresh runs,
+compared against converged arms. `dyna_M5_s0` read **+0.0763, t=+2.72** at three evals and **−0.0126,
+t=−0.15** at five. The static reference's own first evals rose the same way (1.54 → 2.00) before flattening,
+so an early positive slope is the training curve, not an effect — §12, compare at matched budget, which
+`scripts/rvs_baselines.py --compare` now does automatically because exact epoch numbers never line up
+(the Dyna arms eval every 3 epochs, the static ones every 4: zero shared epochs).
+
+**Correction to the mechanical claim above:** the win count DID move — `300 → 305` over five refreshes,
+because the arm kills in 4–8% of its eval episodes and those are absorbed. So the mechanism works; the rate
+makes it irrelevant. **5 new wins against 300 already in the class is +1.7%.**
+
+**Checkpoints secured** (`artifacts/MANIFEST.json`, md5 + measured performance + S3 key for each):
+`rvs_M5_s5.pt` md5 `b4aafda19665af9f…` (1.76 ± 0.11, 8/240 kills, 795 episodes / 300 wins, epoch 40),
+`dyna_M5_s0.pt`, `dyna_M5_s1.pt`, `dyna_M4_s4.pt` and each arm's `_bestdmg` variant. All eight are in
+`s3://zelda-rl/fleet/ckpt_auto/rvs{,_bestdmg}/` — `zelda_rl/ckpt_s3.py` had been uploading them silently
+all along (149 objects), which is the one piece of infrastructure that worked without being asked today.
 
 **In flight:** `gohma-la` retooled to a 9-cell M5-shape sweep — `ppo_wins ∈ {0, 100, 495} x win_share ∈
 {0.15, 0.3, 0.5}`, human wins and ~500 losses in every cell, each cell refusing to start unless its corpus
