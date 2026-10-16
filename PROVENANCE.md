@@ -653,6 +653,36 @@ changed in the same run, so the BC effect stays readable.
 The eval pod runs the pure-BC policy over all 10 starts (8 episodes each) and then `--watch-published
 gohma-v20`, logging held-out metrics to W&B group `gohma-v20-bc-eval` beside the training curve.
 
+**RESULT, arm 1 -- BC init is a worse starting point than v15, and this arm was stopped (M).** 12 ranks,
+6 updates, 57,600 env steps per rank, fleet means:
+
+| update | boss damage | death | success |
+|---|---|---|---|
+| 1 | 0.21 | 61.2% | 0.0% |
+| 2 | 0.26 | 51.5% | 0.0% |
+| 3 | 0.26 | 58.8% | 0.4% |
+| 4 | 0.28 | 55.2% | 0.5% |
+| 5 | 0.33 | 54.7% | 1.0% |
+| 6 | **0.35** | 56.5% | 1.8% |
+
+It **is** learning -- damage rising, deaths falling, first wins appearing -- but from 0.21 against v15's
+**3.275**, and even from-scratch v10 *started* at 0.38. At ~+0.028/update it needs ~100 updates to reach where
+v15 already is, so the compute was reallocated after 15 minutes rather than after a session. The clone's 53.4%
+action accuracy therefore buys **nothing** as an initialisation for this task: claim R42 is answered NO on the
+training-side evidence, pending the eval pod's held-out number.
+
+**Arm 2 -- v15's weights with the BC loss kept on (U).** `gohma-v20-v15bc`, launch id `20261015175011`:
+identical to arm 1 except `--init-from checkpoints/kept/gohma-kl-v15-r4_latest.pt`. v15 is an exact tensor
+match for the corpus (obs 1033, 108 actions, 256/256), so the mismatch is behavioural, not structural -- the
+BC term pulls the best learned policy toward a human strategy it did not discover. 12 ranks, plus 4 pods
+created separately (`gohma-v15bc`, ranks 0-3) running the same config as a **second FedAvg group**: their
+ranks would collide with the big fleet's inside one namespace, and two independent groups give two replicates
+of the arm, which is what AGENTS 7 asks for. Fleet cost $8.40/hr.
+
+The question this arm answers, and the signature to read: v15 starts at 3.275. If `dmgB` rises, demonstrations
+help a competent policy; if it falls while `bcA` climbs, the term is overfitting 13 episodes and dragging the
+policy off a better strategy, and `--bc-coef` comes down.
+
 ---
 
 ## 4. WM track

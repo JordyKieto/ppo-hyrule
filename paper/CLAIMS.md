@@ -53,7 +53,8 @@ could not be defended six months later. Fill a row when the measurement happens,
 | R41 | Behaviour cloning learns the human's action choices | **M**, n=1 | 53.4% held-out action accuracy vs an 11.1% majority floor, 108-way; split by episode across slots. Single run, 2 held-out episodes (AGENTS 7) |
 | R42 | The BC clone can fight Gohma | **U** | 53.4% is frame-matching. First closed-loop rollouts died at 20-50s with 0 kills on every env (**Q**). The eval pod's held-out boss damage on `bc_human.pt` is the M measurement; not yet landed |
 | R43 | A BC loss on demonstrations regularises PPO toward them | **M** for the mechanism | `tests/test_bc_regulariser.py`: coef 1.0 drives agreement with the demonstrated action to 96.9% from an 11.1% chance floor; coef 0.0 reports no stats and reaches 0% |
-| R44 | BC init + BC regularisation beats v15 on held-out boss damage | **U** | `gohma-v20-bc`, launch 20261015173419, 12 ranks + eval pod. Needs the pure-BC baseline AND a matched comparison against v15's 3.275 before any claim |
+| R44 | BC init + BC regularisation beats v15 | **M -> NO** | arm stopped after 6 updates x 12 ranks: boss damage 0.21 -> 0.35, rising but from 1/15th of v15's 3.275 and below from-scratch v10's 0.38 start. ~100 updates to reach where v15 already is |
+| R45 | A BC loss on human wins improves our BEST policy (v15) | **U** | `gohma-v20-v15bc` launch 20261015175011, 12 ranks + `gohma-v15bc` 4 ranks as a second replicate. Read dmgB against v15's 3.275 with bcA beside it |
 
 ## WM track
 
