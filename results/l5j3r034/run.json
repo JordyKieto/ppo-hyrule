@@ -1,0 +1,28 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/l5j3r034",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/l5j3r034",
+  "name": "la_A_s1",
+  "group": "latent-align-A",
+  "state": "finished",
+  "created_at": "2026-10-16T10:13:42Z",
+  "heartbeat_at": "2026-10-16T10:14:00Z",
+  "representative_of_group": "aggregator",
+  "group_size": 6,
+  "group_run_ids": [
+    "l5j3r034",
+    "gwuxnj7k",
+    "9wwra22k",
+    "zepy30mj",
+    "uwtjj0gl",
+    "d7xv131b"
+  ],
+  "group_run_names": [
+    "la_A_s1",
+    "la_A_s2",
+    "la_A_s0",
+    "la_A_s1",
+    "la_A_s2",
+    "la_A_s0"
+  ],
+  "max_step_in_group": 18
+}

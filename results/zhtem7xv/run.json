@@ -1,0 +1,40 @@
+{
+  "entity_project_run": "drift-ai-models/zelda-rl-goal-ppo/zhtem7xv",
+  "url": "https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/zhtem7xv",
+  "name": "hybrid2-r0",
+  "group": "rvs-ppo-dyna2",
+  "state": "crashed",
+  "created_at": "2026-10-16T09:44:11Z",
+  "heartbeat_at": "2026-10-16T09:57:11Z",
+  "representative_of_group": "aggregator",
+  "group_size": 12,
+  "group_run_ids": [
+    "h25hjbmt",
+    "zhtem7xv",
+    "lidr5nmb",
+    "61rwayw4",
+    "deey1wzm",
+    "wm30f3zl",
+    "oiv89nyq",
+    "hhx9lvri",
+    "v23mbeze",
+    "ao5blyrz",
+    "2xlzn52y",
+    "4nphp5v4"
+  ],
+  "group_run_names": [
+    "hybrid2-r2",
+    "hybrid2-r0",
+    "hybrid2-r5",
+    "hybrid2-r3",
+    "hybrid2-r1",
+    "hybrid2-r4",
+    "hybrid2-r13",
+    "hybrid2-r15",
+    "hybrid2-r12",
+    "hybrid2-r11",
+    "hybrid2-r10",
+    "hybrid2-r14"
+  ],
+  "max_step_in_group": 4
+}

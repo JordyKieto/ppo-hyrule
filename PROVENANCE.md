@@ -1252,6 +1252,66 @@ is complete.
 
 ---
 
+### VERIFIED TRENDS at the end of the RvS phase, and the decision they produced (M)
+
+Every live arm, boss damage balanced and kill rate, each with its slope ± SE. This is the table the
+repurposing decision was made from, not an impression:
+
+| arm | n | damage | slope/unit | t | kill % | kills |
+|---|---|---|---|---|---|---|
+| **`ppo_rvs_s3`** (PPO from RvS) | 7 upd | **1.96 ± 0.17** | −0.035 | −0.4 | 2.87 | 8/389 |
+| **`ppo_rvs_s5`** (PPO from RvS) | 7 upd | **1.86 ± 0.18** | +0.088 | +1.0 | **5.03** | 20/344 |
+| `m5_w495_s0.15` | 5 | 1.74 ± 0.30 | +0.049 | 0.6 | 3.33 | 4/120 |
+| `dyna_M5_s1` | 8 | 1.58 ± 0.13 | +0.032 | 2.2 | 3.65 | 7/192 |
+| `m5_w495_s0.5` | 14 | 1.47 ± 0.10 | +0.014 | 1.9 | 3.27 | 11/336 |
+| `dyna_M5_s0` | 8 | 1.42 ± 0.11 | −0.030 | **−2.4** | 5.21 | 10/192 |
+| `m5_w495_s0.3` | 12 | 1.37 ± 0.08 | −0.005 | −0.7 | **4.86** | 14/288 |
+| `m5_w100_s0.15` | 7 | 1.18 ± 0.16 | −0.006 | −0.2 | 0.60 | 1/168 |
+| `m5_w100_s0.3` | 6 | 1.15 ± 0.11 | +0.043 | **3.7** | 0.00 | 0/144 |
+| `m5_w100_s0.5` | 14 | 1.14 ± 0.08 | +0.009 | 1.2 | 3.27 | 11/336 |
+| `dyna_M4_s4` | 8 | 0.89 ± 0.14 | −0.022 | −1.1 | 0.52 | 1/191 |
+| `m5_w0_s0.5` | 14 | 0.87 ± 0.07 | −0.000 | −0.0 | 0.89 | 3/336 |
+| `m5_w0_s0.15` | 14 | 0.86 ± 0.06 | +0.010 | 2.2 | 0.60 | 2/336 |
+| `m5_w0_s0.3` | 10 | 0.77 ± 0.08 | −0.002 | −0.2 | 1.25 | 3/240 |
+
+**Nothing is improving except the two PPO-from-RvS arms**, and the only significant slopes among the rest
+are two low-level arms (`m5_w100_s0.3` 1.15 at t=3.7, `m5_w0_s0.15` 0.86 at t=2.2) plus one *falling*
+(`dyna_M5_s0`, t=−2.4). The two Dyna seeds at identical settings sit at +0.032 (t=2.2) and −0.030 (t=−2.4)
+— opposite significant slopes, which is the plainest available statement that a single seed's slope is not
+a measurement here.
+
+### PPO INITIALISED FROM THE RvS POLICY (U — in flight, and the only live hypothesis)
+
+`--init-from rvs_M5_s5.pt` with `--rvs-data … --rvs-coef 0`: the data flag is what appends the 3
+conditioning columns so the weights load intact (global 300 → 300) and the rollout acts with the target
+prompt; the coefficient at 0 means the objective is **pure PPO**. Both pods md5-check the checkpoint
+(`b4aafda19665af9f`) and refuse to start on the wrong file. Same config as the sweep's `c=0` controls, so
+it is directly comparable to PPO-from-v15.
+
+At 7 updates: **1.96 ± 0.17 and 1.86 ± 0.18 damage with 2.87% and 5.03% kills**, i.e. *above* both the RvS
+policy it started from (1.76) and every pure-RvS cell. For contrast, PPO from v15 under this exact config
+read 2.512 ± sd 0.380 over updates 1–11 and **declined** to 1.33–2.27 by update 60 (R67). So this starts
+lower on damage and far higher on defeats. Slopes are flat at 7 updates; no claim yet.
+
+### COLLECTION PHASE: growing the corpus, because the corpus is the ceiling
+
+Ten flat arms repurposed as collectors (the 2 PPO arms kept). The reasoning is the sweep's own result: the
+`ppo_wins` axis is the only structure in it (`w495` 1.37–1.82 vs `w0` 0.77–0.87) and more than ~200 wins
+stops helping — so the binding constraint is **winning episodes**, and the existing PPO corpus has 495 in
+9,340 (5.3%).
+
+Each pod collects with **the best-killing checkpoint it already holds** (no transfers): `dyna_M5_s0` 5.21%,
+`m5_w495_s0.3` 4.86%, `dyna_M5_s1` 3.65%, `m5_w495_s0.15` 3.33%, `m5_w495_s0.5`/`m5_w100_s0.5` 3.27%; the
+six pods whose own policy kills under 1% were given `rvs_M5_s5.pt` by presigned GET. At 3–5% that is 3–5
+wins per 100 episodes, 12 pods × 12 envs.
+
+**Episodes go to S3 every 90 s and are deleted only after a successful upload** —
+`zelda/ppo/gohma_steps2/<shard>/` — because a pod volume dies with the pod, which is how a 20M-transition
+dataset was lost once already (§25).
+
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and
