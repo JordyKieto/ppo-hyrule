@@ -164,9 +164,14 @@ class RecurrentEntityActorCritic(nn.Module):
 
 
 def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, clip, ent_coef, vf_coef, max_grad_norm,
-                         target_kl=None, kl_coef=0.0, bc=None, bc_coef=0.0):
+                         target_kl=None, kl_coef=0.0, bc=None, bc_coef=0.0, bc_adaptive_frac=0.0,
+                         bc_teacher=None, bc_latent_coef=0.0):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
     batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
+
+    `bc_adaptive_frac` > 0 ignores `bc_coef` and sets the weight each minibatch so the BC term is that
+    fraction of |policy loss|. `bc_teacher` + `bc_latent_coef` > 0 adds an MSE between the student's GRU state
+    and a frozen BC policy's on the same frames. `bc["keep"]` filters which demonstration frames are paid for.
 
     `bc_coef` > 0 adds a BEHAVIOUR-CLONING PENALTY on human demonstrations: `bc` is the dict from
     `zelda_rl.bc_demos.load_bc_chunks` and each minibatch pays cross-entropy on an equal number of human windows.
@@ -218,23 +223,62 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
             pg = torch.max(-a * ratio, -a * ratio.clamp(1 - clip, 1 + clip)).mean()
             vl = 0.5 * ((v - ret) ** 2).mean()
             loss = pg - ent_coef * ent.mean() + vf_coef * vl
-            if bc_coef > 0 and bc is not None:
+            if (bc_coef > 0 or bc_adaptive_frac > 0 or bc_latent_coef > 0) and bc is not None:
                 # Same number of human windows as rollout chunks in this minibatch, so the term's weight does
                 # not drift with the minibatch size. Fresh hidden per window (see zelda_rl/bc_demos.py).
                 j = torch.randint(0, bc["obs"].shape[0], (min(chunks_per_mb, bc["obs"].shape[0]),))
                 b_obs, b_act, b_first = bc["obs"][j], bc["act"][j], bc["first"][j]
+                b_keep = bc["keep"][j] if "keep" in bc else torch.ones_like(b_act, dtype=torch.float32)
                 bh = model.init_hidden(b_obs.shape[0])
-                b_logits = []
+                th = bc_teacher.init_hidden(b_obs.shape[0]) if bc_teacher is not None else None
+                b_logits, s_hid, t_hid = [], [], []
                 for k in range(b_obs.shape[1]):
                     lg, _, bh = model.step(b_obs[:, k], bh, b_first[:, k])
                     b_logits.append(lg)
+                    if bc_teacher is not None:
+                        s_hid.append(bh)
+                        with torch.no_grad():
+                            _, _, th = bc_teacher.step(b_obs[:, k], th, b_first[:, k])
+                        t_hid.append(th)
                 b_lg = torch.stack(b_logits, 1)                                   # (B, L, A)
-                bc_loss = F.cross_entropy(b_lg.reshape(-1, b_lg.shape[-1]), b_act.reshape(-1))
-                loss = loss + bc_coef * bc_loss
+
+                # The FILTER: cross-entropy is paid only on kept frames. An unweighted mean would quietly
+                # include the dropped ones at weight 0 in the numerator and still divide by all of them,
+                # scaling the term down instead of focusing it.
+                w = b_keep.reshape(-1)
+                ce = F.cross_entropy(b_lg.reshape(-1, b_lg.shape[-1]), b_act.reshape(-1), reduction="none")
+                denom = w.sum().clamp(min=1.0)
+                bc_loss = (ce * w).sum() / denom
+
+                # ADAPTIVE weight: hold the BC term at a fixed fraction of the policy loss. At a constant 0.1
+                # the term contributed ~0.44 against a policy loss of 0.01-0.1 and dominated the objective,
+                # which is the measured cause of v15's decline (PROVENANCE 3.3, claim R47). This makes the
+                # ratio the thing that is chosen, instead of a weight whose effect depends on both losses.
+                coef_now = bc_coef
+                if bc_adaptive_frac > 0:
+                    with torch.no_grad():
+                        coef_now = float((bc_adaptive_frac * pg.detach().abs() /
+                                          bc_loss.detach().clamp(min=1e-6)).clamp(1e-5, 1.0))
+                if bc_coef > 0 or bc_adaptive_frac > 0:
+                    loss = loss + coef_now * bc_loss
                 with torch.no_grad():
                     stats.setdefault("bc_loss", []).append(float(bc_loss))
-                    stats.setdefault("bc_acc", []).append(
-                        float((b_lg.argmax(-1) == b_act).float().mean()))
+                    hit = ((b_lg.argmax(-1) == b_act).float() * b_keep).sum() / b_keep.sum().clamp(min=1.0)
+                    stats.setdefault("bc_acc", []).append(float(hit))
+                    stats.setdefault("bc_coef_applied", []).append(float(coef_now))
+                    stats.setdefault("bc_kept_frac", []).append(float(b_keep.mean()))
+
+                # LATENT ALIGNMENT: match the GRU state the frozen BC policy carries on the same frames,
+                # instead of forcing the same action. The two policies agree on 3% of actions (R46) while
+                # both beating her, so aligning the representation is a weaker constraint than aligning
+                # behaviour -- it shares what the clone encodes without overwriting what v15 decided to do.
+                if bc_teacher is not None and bc_latent_coef > 0:
+                    sh, tht = torch.stack(s_hid, 1), torch.stack(t_hid, 1)
+                    lat = ((sh - tht) ** 2).mean(-1)
+                    lat = (lat * b_keep).sum() / b_keep.sum().clamp(min=1.0)
+                    loss = loss + bc_latent_coef * lat
+                    with torch.no_grad():
+                        stats.setdefault("bc_latent", []).append(float(lat))
             if kl_anchor is not None:
                 loss = loss + kl_coef * kl_anchor
                 stats.setdefault("kl_anchor", []).append(float(kl_anchor.detach()))

@@ -98,6 +98,143 @@ def schedule_checks() -> list[str]:
     return bad
 
 
+
+def filter_checks() -> list[str]:
+    """The Q-filter must train on KEPT frames and ignore dropped ones.
+
+    Built so a no-op is impossible to miss: kept frames demand action TARGET, dropped frames demand a
+    different action DECOY. If the filter works the policy learns TARGET and not DECOY; if `keep` were
+    ignored it would see a 50/50 mixture and learn neither.
+    """
+    import torch
+    from zelda_rl.ppo import RecurrentEntityActorCritic, ppo_update_recurrent
+    DECOY = 7
+    torch.manual_seed(0)
+    r = np.random.default_rng(3)
+    M = 24
+    f = np.zeros((M, CH), np.float32); f[:, 0] = 1.0
+    keep = np.zeros((M, CH), np.float32); keep[:, : CH // 2] = 1.0        # first half kept
+    act = np.full((M, CH), DECOY, dtype=np.int64); act[:, : CH // 2] = TARGET
+    bc = {"obs": torch.from_numpy(r.standard_normal((M, CH, OBS)).astype(np.float32)),
+          "act": torch.from_numpy(act), "first": torch.from_numpy(f),
+          "keep": torch.from_numpy(keep)}
+    model = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+    for i in range(30):
+        ppo_update_recurrent(model, opt, rollout(seed=i), chunk=CH, epochs=1, chunks_per_mb=4, clip=0.2,
+                             ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, bc=bc, bc_coef=1.0)
+    with torch.no_grad():
+        h = model.init_hidden(M); pred = []
+        for k in range(CH):
+            lg, _, h = model.step(bc["obs"][:, k], h, bc["first"][:, k])
+            pred.append(lg.argmax(-1))
+        pred = torch.stack(pred, 1)
+    on_kept = float((pred[:, : CH // 2] == TARGET).float().mean())
+    decoy_learned = float((pred[:, CH // 2:] == DECOY).float().mean())
+    bad = []
+    print(f"\nQ-filter: kept frames demand action {TARGET}, dropped frames demand {DECOY}")
+    print(f"  kept frames predicted {TARGET}: {100 * on_kept:.1f}%   dropped frames predicted {DECOY}: "
+          f"{100 * decoy_learned:.1f}%")
+    if on_kept < 0.8:
+        bad.append(f"kept frames only reached {100 * on_kept:.0f}% -- the filter dropped what it should keep")
+    if decoy_learned > 0.5:
+        bad.append(f"learned the DECOY on {100 * decoy_learned:.0f}% of dropped frames -- keep was ignored")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
+
+
+def adaptive_checks() -> list[str]:
+    """The adaptive weight must track a fraction of |policy loss|, not sit at --bc-coef."""
+    import torch
+    from zelda_rl.ppo import RecurrentEntityActorCritic, ppo_update_recurrent
+    torch.manual_seed(0)
+    model = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+    bc = bc_data()
+    applied, accs = [], []
+    for i in range(20):
+        st = ppo_update_recurrent(model, opt, rollout(seed=i), chunk=CH, epochs=1, chunks_per_mb=4, clip=0.2,
+                                  ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5,
+                                  bc=bc, bc_coef=0.0, bc_adaptive_frac=0.1)
+        applied.append(st.get("bc_coef_applied", float("nan")))
+        accs.append(st.get("bc_acc", float("nan")))
+    bad = []
+    # BY CONSTRUCTION the BC term contributes `frac * |policy loss|`, so at frac 0.1 it is a tenth of the
+    # policy term and the resulting coefficient is TINY (policy loss ~1e-4 here / 0.01-0.1 in the real run,
+    # against a BC loss near 3). What must be asserted at this frac is the RATIO behaviour -- reported,
+    # non-zero, bounded, and moving with the losses -- not that it overwhelms PPO. A second arm at a strong
+    # frac asserts the term can still train, so "it is adaptive" cannot pass while "it does nothing" hides.
+    print("\nadaptive weight, frac 0.1 (--bc-coef is 0, so any report proves the adaptive path ran)")
+    print(f"  applied coef: first {applied[0]:.5f}  last {applied[-1]:.5f}  "
+          f"min {min(applied):.5f}  max {max(applied):.5f}")
+    print(f"  bc accuracy:  first {100 * accs[0]:.1f}%  last {100 * accs[-1]:.1f}%")
+    if not all(a == a for a in applied):
+        bad.append("no coefficient was reported")
+    elif min(applied) <= 0.0:
+        bad.append("applied coefficient hit zero")
+    elif len(set(round(a, 7) for a in applied)) < 2:
+        bad.append("applied coefficient never changed -- it is not adaptive")
+
+    torch.manual_seed(0)
+    strong = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+    opt2 = torch.optim.Adam(strong.parameters(), lr=3e-3)
+    s_acc, s_coef = [], []
+    for i in range(25):
+        st = ppo_update_recurrent(strong, opt2, rollout(seed=i), chunk=CH, epochs=1, chunks_per_mb=4, clip=0.2,
+                                  ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5,
+                                  bc=bc, bc_coef=0.0, bc_adaptive_frac=200.0)
+        s_acc.append(st.get("bc_acc", float("nan"))); s_coef.append(st.get("bc_coef_applied", float("nan")))
+    print(f"  frac 200: coef {s_coef[0]:.4f} -> {s_coef[-1]:.4f}, accuracy "
+          f"{100 * s_acc[0]:.1f}% -> {100 * s_acc[-1]:.1f}%")
+    if s_acc[-1] <= s_acc[0]:
+        bad.append("even at a strong frac the adaptive term does not train")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
+
+
+def latent_checks() -> list[str]:
+    """Latent alignment must pull the student's GRU state toward a frozen teacher's, and do nothing at coef 0."""
+    import torch
+    from zelda_rl.ppo import RecurrentEntityActorCritic, ppo_update_recurrent
+    bc = bc_data()
+
+    def arm(coef):
+        torch.manual_seed(0)
+        student = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+        torch.manual_seed(1)
+        teacher = RecurrentEntityActorCritic(G, NA, AD, A, hidden=16, gru=16)
+        for q in teacher.parameters():
+            q.requires_grad_(False)
+        teacher.eval()
+        opt = torch.optim.Adam(student.parameters(), lr=3e-3)
+        for i in range(25):
+            st = ppo_update_recurrent(student, opt, rollout(seed=i), chunk=CH, epochs=1, chunks_per_mb=4,
+                                      clip=0.2, ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, bc=bc,
+                                      bc_coef=0.0, bc_teacher=teacher, bc_latent_coef=coef)
+        with torch.no_grad():                        # measure the gap the same way for both arms
+            sh = student.init_hidden(bc["obs"].shape[0]); th = teacher.init_hidden(bc["obs"].shape[0])
+            gaps = []
+            for k in range(bc["obs"].shape[1]):
+                _, _, sh = student.step(bc["obs"][:, k], sh, bc["first"][:, k])
+                _, _, th = teacher.step(bc["obs"][:, k], th, bc["first"][:, k])
+                gaps.append(float(((sh - th) ** 2).mean()))
+        return st.get("bc_latent", float("nan")), float(np.mean(gaps))
+
+    on_reported, on_gap = arm(1.0)
+    off_reported, off_gap = arm(0.0)
+    bad = []
+    print("\nlatent alignment to a frozen teacher (random teacher, so the gap is meaningful)")
+    print(f"  coef 1.0: reported latent loss {on_reported:.4f}   final hidden-state gap {on_gap:.4f}")
+    off_r = "n/a" if off_reported != off_reported else f"{off_reported:.4f}"
+    print(f"  coef 0.0: reported latent loss {off_r:>14}   final hidden-state gap {off_gap:.4f}")
+    if on_gap >= off_gap:
+        bad.append(f"alignment did not reduce the gap ({on_gap:.4f} vs {off_gap:.4f} without it)")
+    if off_reported == off_reported:
+        bad.append("coef 0.0 reported a latent loss -- the term ran when switched off")
+    print(f"  {'PASS' if not bad else 'FAIL: ' + '; '.join(bad)}")
+    return bad
+
+
 def main() -> int:
     fails = []
     on_accs, on_final = run(1.0)
@@ -120,6 +257,9 @@ def main() -> int:
         fails.append("bc_acc did not rise over the iterations")
 
     fails += schedule_checks()
+    fails += filter_checks()
+    fails += adaptive_checks()
+    fails += latent_checks()
 
     print()
     for f in fails:

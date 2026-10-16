@@ -75,6 +75,21 @@ def parse_args():
                          "Default: no decay, the coefficient is constant")
     ap.add_argument("--bc-coef-updates", type=int, default=50,
                     help="updates over which --bc-coef reaches --bc-coef-final")
+    ap.add_argument("--bc-adaptive-frac", type=float, default=0.0,
+                    help="ADAPTIVE regularisation: ignore --bc-coef and set the weight each minibatch so the "
+                         "BC term is this fraction of |policy loss|. At a constant 0.1 the term contributed "
+                         "~0.44 against a policy loss of 0.01-0.1 and dominated; this chooses the RATIO")
+    ap.add_argument("--bc-qfilter", type=int, default=0, metavar="STEPS",
+                    help="Q-FILTER (outcome form): pay the BC loss only on demonstration frames where the "
+                         "boss loses HP within STEPS. Nair et al. 2018 compare Q(s,a_demo) vs Q(s,a_pi); this "
+                         "critic is a V head so there is no Q, and the human's realised damage is used "
+                         "instead. 30 steps = 3 s keeps ~12%% of frames, 60 keeps ~21%%")
+    ap.add_argument("--bc-latent-coef", type=float, default=0.0,
+                    help="LATENT ALIGNMENT: MSE between this policy's GRU state and --bc-teacher's on the "
+                         "demonstration frames. Aligns the representation instead of the action, which "
+                         "matters because v15 and the human agree on only 3%% of actions while both winning")
+    ap.add_argument("--bc-teacher", default=None,
+                    help="frozen policy for --bc-latent-coef, normally the BC checkpoint")
     ap.add_argument("--kl-anchor", default=None,
                     help="path to a KNOWN-GOOD checkpoint. Adds a KL penalty from the training policy toward "
                          "it, bounding the DISTANCE TRAVELLED rather than the step size. --target-kl only "
@@ -268,17 +283,34 @@ def main():
     # ---- KL anchor: a frozen known-good policy. Its log-probs are recorded DURING the rollout so its GRU
     # carries its own hidden state; reusing the trainee's state would be a different network's memory.
     anchor = None
-    bc = None
-    if args.bc_data and args.bc_coef > 0:
+    bc = bc_teacher = None
+    if args.bc_data and (args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0):
         from zelda_rl.bc_demos import coef_at, describe, load_bc_chunks
-        bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions)
+        bc = load_bc_chunks(args.bc_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions,
+                            qfilter_steps=args.bc_qfilter)
+        if args.bc_latent_coef > 0:
+            if not args.bc_teacher:
+                raise SystemExit("--bc-latent-coef needs --bc-teacher (the frozen policy to align to)")
+            from zelda_rl.policy_io import load_policy
+            bc_teacher, t_cfg, _ = load_policy(Path(args.bc_teacher))
+            if t_cfg.get("obs_dim") != obs_dim or t_cfg.get("n_actions") != n_actions:
+                raise SystemExit(f"--bc-teacher spec mismatch: teacher obs {t_cfg.get('obs_dim')} / "
+                                 f"{t_cfg.get('n_actions')} actions vs this run's {obs_dim} / {n_actions}")
+            for q in bc_teacher.parameters():
+                q.requires_grad_(False)
+            bc_teacher.eval()
+            LOGGER.info("latent alignment to %s (coef %.3f), teacher frozen", args.bc_teacher,
+                        args.bc_latent_coef)
+        if args.bc_adaptive_frac > 0:
+            LOGGER.info("ADAPTIVE BC weight: holding the BC term at %.3f of |policy loss| (--bc-coef ignored)",
+                        args.bc_adaptive_frac)
         if args.bc_coef_final is not None:
             LOGGER.info("BC regulariser %s: coef %.3f -> %.3f over %d updates, then held (long tail): %s",
                         args.bc_data, args.bc_coef, args.bc_coef_final, args.bc_coef_updates, describe(bc))
         else:
             LOGGER.info("BC regulariser %s (coef %.3f, constant): %s", args.bc_data, args.bc_coef, describe(bc))
-    elif args.bc_data or args.bc_coef > 0:
-        raise SystemExit("--bc-data and --bc-coef must be given together (coef > 0), or neither")
+    elif args.bc_data or args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0:
+        raise SystemExit("--bc-data needs one of --bc-coef / --bc-adaptive-frac / --bc-latent-coef > 0")
 
     if args.kl_anchor:
         from zelda_rl.policy_io import load_policy
@@ -307,7 +339,8 @@ def main():
     hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
            f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
-           + ("   bcL   bcA    bcC" if bc is not None else ""))
+           + ("   bcL   bcA    bcC" if bc is not None else "")
+           + ("   bcZ" if bc_teacher is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -401,7 +434,9 @@ def main():
                                              ent_coef=args.ent_coef, vf_coef=args.vf_coef,
                                              max_grad_norm=args.max_grad_norm, target_kl=args.target_kl,
                                              kl_coef=(args.kl_coef if anchor is not None else 0.0),
-                                             bc=bc, bc_coef=bc_coef_now)
+                                             bc=bc, bc_coef=bc_coef_now,
+                                             bc_adaptive_frac=args.bc_adaptive_frac,
+                                             bc_teacher=bc_teacher, bc_latent_coef=args.bc_latent_coef)
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -535,7 +570,8 @@ def main():
                         + (f" klA {stats['kl_anchor']:>6.3f}" if stats.get("kl_anchor") == stats.get("kl_anchor")
                            and "kl_anchor" in stats else "")
                         + (f" {stats.get('bc_loss', float('nan')):>5.2f} {100 * stats.get('bc_acc', float('nan')):>4.0f}%"
-                           f" {bc_coef_now:>6.4f}" if bc is not None else "")
+                           f" {stats.get('bc_coef_applied', bc_coef_now):>6.4f}" if bc is not None else "")
+                        + (f" {stats.get('bc_latent', float('nan')):>5.2f}" if bc_teacher is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:
