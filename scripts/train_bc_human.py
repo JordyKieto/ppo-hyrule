@@ -63,7 +63,12 @@ def load(data: Path, wins_only: bool, max_episodes: int = 0):
     return eps
 
 
-def event_weights(z, obs, act, span: int, scale: float, only=None) -> tuple[np.ndarray, dict]:
+FACTORS = {"kill": 3.0, "sword": 2.0, "seed_hit": 1.5, "boss_hp": 1.5, "stun": 1.2,
+           "seed_fire": 0.8, "sling_out": 0.8, "larva": 0.3}
+
+
+def event_weights(z, obs, act, span: int, scale: float, only=None,
+                  factors=None) -> tuple[np.ndarray, dict]:
     """Per-step loss weights keyed on the DECISIONS that matter, so positioning cannot dominate the gradient.
 
     Uniform imitation spends its gradient in proportion to how often something happens, and in this corpus
@@ -74,10 +79,12 @@ def event_weights(z, obs, act, span: int, scale: float, only=None) -> tuple[np.n
 
     Classes, highest first. A step takes the MAX of the classes covering it, so overlaps do not compound.
 
+      the KILL         3.0  her last two HP drops: the killing blow and the hit that set it up
+      sword swing      2.0  B pressed while she is stunned and within sword range -- offline accuracy on
+                            these steps is the only metric measured to track online damage (r = +0.83)
       successful seed  1.5  fired and an impact followed within 1.2 s -- the skill the fight turns on
-      her HP falls    1.5  the payoff moment
-      stun onset      1.2  the window that permits sword damage (gates 100% of recorded hits)
-      sword swing     1.0  B pressed while she is stunned and within sword range
+      her HP falls     1.5  the payoff moment
+      stun onset       1.2  the window that permits sword damage (gates 100% of recorded hits)
       seed fired      0.8  any shot, landed or not
       slingshot out   0.8  the equip decision that precedes every shot
       larva hit       0.3  kept low on purpose: larva hits correlate -0.598 with damage dealt
@@ -110,15 +117,26 @@ def event_weights(z, obs, act, span: int, scale: float, only=None) -> tuple[np.n
             c = obs[:, idx[n]]
             larva += (np.where(c[:-1] - c[1:] > 1e-6)[0] + 1).tolist()
 
-    classes = {
-        "seed_hit": (1.5, [i for i in fires if any(i < j <= i + 12 for j in imps)]),
-        "boss_hp": (1.5, (np.where(ghp[:-1] - ghp[1:] > 1e-6)[0] + 1).tolist()),
-        "stun": (1.2, (np.where((stun[1:] == 1) & (stun[:-1] == 0))[0] + 1).tolist()),
-        "sword": (1.0, [t for t in range(T) if "B" in btn[int(act[t])] and stun[t] and dist[t] < 120]),
-        "seed_fire": (0.8, list(fires)),
-        "sling_out": (0.8, (np.where((sling[1:] == 1) & (sling[:-1] == 0))[0] + 1).tolist()),
-        "larva": (0.3, larva),
+    hp_drops = (np.where(ghp[:-1] - ghp[1:] > 1e-6)[0] + 1).tolist()
+    # THE KILL: her last HP drops of the episode. Every episode in this corpus is a win, so the final drop is
+    # the killing blow and the one before it is the hit that set it up. They are weighted ABOVE everything
+    # else -- the reward already believes this asymmetry (`g_boss_hp_progress` pays 3x for late hits) and
+    # until now the clone did not: all 678 drops shared one factor, including the 100 that ended a fight.
+    kills = hp_drops[-2:] if len(hp_drops) >= 2 else hp_drops
+    F = dict(FACTORS, **(factors or {}))
+    marks = {
+        "kill": kills,
+        "sword": [t for t in range(T) if "B" in btn[int(act[t])] and stun[t] and dist[t] < 120],
+        "seed_hit": [i for i in fires if any(i < j <= i + 12 for j in imps)],
+        "boss_hp": hp_drops,
+        "stun": (np.where((stun[1:] == 1) & (stun[:-1] == 0))[0] + 1).tolist(),
+        "seed_fire": list(fires),
+        "sling_out": (np.where((sling[1:] == 1) & (sling[:-1] == 0))[0] + 1).tolist(),
+        "larva": larva,
     }
+    # A class whose factor is 0 contributes nothing, which is how a single class is isolated without also
+    # removing it from the event bookkeeping.
+    classes = {k: (F.get(k, 0.0), v) for k, v in marks.items() if F.get(k, 0.0) > 0}
     if only:
         classes = {k: v for k, v in classes.items() if k in only}
     share = {}
@@ -150,31 +168,36 @@ def batches(eps, batch_episodes: int):
         obs = np.zeros((T, B, sel[0]["obs"].shape[1]), np.float32)
         act = np.zeros((T, B), np.int64)
         valid = np.zeros((T, B), np.float32)
+        swm = np.zeros((T, B), np.float32)          # sword-step mask; `sel` above is the episode list
         for j, e in enumerate(sel):
             n = len(e["act"])
             obs[:n, j] = e["obs"][:n]
             act[:n, j] = e["act"][:n]
             valid[:n, j] = e.get("w", np.ones(n, np.float32))[:n]
-        yield (torch.from_numpy(obs), torch.from_numpy(act), torch.from_numpy(valid))
+            swm[:n, j] = e.get("sel", np.zeros(n, np.float32))[:n]
+        yield (torch.from_numpy(obs), torch.from_numpy(act), torch.from_numpy(valid),
+               torch.from_numpy(swm))
 
 
-def run_split(model, eps, chunk, opt=None, batch_episodes: int = 16):
+def run_split(model, eps, chunk, opt=None, batch_episodes: int = 16, want_sword: bool = False):
     """One pass. With `opt`, trains; without, evaluates. Returns (loss, accuracy, n).
 
     Backprop is truncated every `chunk` steps (the hidden state is detached), which is the same BPTT horizon
     as before -- only the batch dimension changed.
     """
     tot_loss = tot_ok = tot_n = 0.0
-    for obs, act, valid in batches(eps, batch_episodes):
+    sw_hit = sw_n = 0.0
+    for obs, act, valid, swmask in batches(eps, batch_episodes):
         T, B = act.shape
         h = model.init_hidden(B)
         first = torch.zeros(B)
         first[:] = 1.0                                  # every episode in the batch starts at t=0
-        seg_logits, seg_act, seg_valid = [], [], []
+        seg_logits, seg_act, seg_valid, seg_sel = [], [], [], []
         for t in range(T):
             lg, _, h = model.step(obs[t], h, first)
             first = torch.zeros(B)
             seg_logits.append(lg); seg_act.append(act[t]); seg_valid.append(valid[t])
+            seg_sel.append(swmask[t])
             if len(seg_logits) == chunk or t == T - 1:
                 L = torch.stack(seg_logits, 0).reshape(-1, lg.shape[-1])
                 y = torch.stack(seg_act, 0).reshape(-1)
@@ -189,11 +212,40 @@ def run_split(model, eps, chunk, opt=None, batch_episodes: int = 16):
                     opt.step()
                 with torch.no_grad():
                     tot_loss += float(loss.detach()) * float(n)
-                    tot_ok += float((((L.argmax(-1) == y).float()) * w).sum())
+                    ok = (L.argmax(-1) == y).float()
+                    tot_ok += float((ok * w).sum())
                     tot_n += float(n)
+                    if want_sword:
+                        sm = torch.stack(seg_sel, 0).reshape(-1)
+                        sw_hit += float((ok * sm).sum()); sw_n += float(sm.sum())
                 h = h.detach()
-                seg_logits, seg_act, seg_valid = [], [], []
+                seg_logits, seg_act, seg_valid, seg_sel = [], [], [], []
+    if want_sword:
+        return tot_loss / max(tot_n, 1), tot_ok / max(tot_n, 1), int(tot_n), sw_hit / max(sw_n, 1.0)
     return tot_loss / max(tot_n, 1), tot_ok / max(tot_n, 1), int(tot_n)
+
+
+def ckpt_payload(model, a, eps, global_dim, n_actors, actor_dim, n_actions, wins, steps, vacc, ep_i,
+                 vsw=float("nan")):
+    """What goes in a checkpoint: the architecture fields `--init-from` compares, the env fields
+    `policy_io.make_env` needs to rebuild the fight, and the provenance of this particular clone."""
+    from dataclasses import asdict
+    from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
+    ccfg = CombatConfig(profile="gohma", max_seconds=a.episode_seconds, **GOHMA_SIMPLE)
+    return {"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
+            "episode_count": 0,
+            "config": {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
+                       "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden,
+                       "gru": a.gru, "recurrent": True, "obs_version": 7, "task": "combat",
+                       "combat_cfg": asdict(ccfg), "episode_seconds": a.episode_seconds,
+                       "vi_per_step": 6, "goal_slot": 3, "steps_per_rollout": 0,
+                       "profile": "gohma", "run_name": "bc_human",
+                       "bc_source": str(a.data), "bc_episodes": len(eps), "bc_wins": wins,
+                       "bc_steps": steps, "bc_val_acc": float(vacc), "bc_sword_acc": float(vsw),
+                       "bc_epoch": ep_i, "bc_event_weight": a.event_weight, "bc_event_span": a.event_span,
+                       "bc_event_classes": a.event_classes, "bc_event_factors": a.event_factors,
+                       "bc_select_by": a.select_by, "bc_seed": a.seed,
+                       "bc_wins_only": bool(a.wins_only)}}
 
 
 def main() -> int:
@@ -212,6 +264,23 @@ def main() -> int:
                          "--event-span of a seed fire, a stun onset or one of her HP drops. 1.0 = uniform "
                          "imitation, which spends most of its gradient on the two thirds of each episode "
                          "that is walking around")
+    ap.add_argument("--snapshot-every", type=int, default=0, metavar="N",
+                    help="also save an UNCONDITIONAL checkpoint every N epochs to <out>.snaps/. Point "
+                         "`eval_fleet.py --watch <out>.snaps` at that directory and every snapshot is scored "
+                         "online as it lands, which answers whether more training keeps buying damage or "
+                         "only keeps buying validation accuracy")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="torch seed. Unset = nondeterministic, which is what every arm so far used, so "
+                         "repeated runs of one config are independent draws (AGENTS 7)")
+    ap.add_argument("--event-factors", default="",
+                    help="override per-class factors, e.g. 'sword=1.0,kill=0' -- the weight on a class is "
+                         "1 + scale x factor, so 0 switches a class off. Use it to isolate ONE class at a "
+                         "time; the defaults are in docs/BC_EVENT_CLASSES.md")
+    ap.add_argument("--select-by", choices=["sword", "acc"], default="sword",
+                    help="which validation metric keeps the checkpoint. `sword` is accuracy restricted to the "
+                         "steps where B is pressed while she is stunned and in range -- the only offline "
+                         "metric measured to track ONLINE damage (r=+0.83). `acc` is overall accuracy, which "
+                         "correlates -0.43 and is kept only to reproduce older runs")
     ap.add_argument("--event-classes", default="",
                     help="comma list restricting WHICH decision classes are up-weighted: seed_hit, boss_hp, "
                          "stun, sword, seed_fire, sling_out, larva. Empty = all of them. Use it to ask which "
@@ -229,8 +298,25 @@ def main() -> int:
                     help="recorded in the checkpoint so an evaluator rebuilds the same fight; match the PPO run")
     a = ap.parse_args()
 
+    if a.seed is not None:
+        torch.manual_seed(a.seed)
+        np.random.seed(a.seed)
     eps = load(Path(a.data), a.wins_only, a.max_episodes)
     only = set(x.strip() for x in a.event_classes.split(",") if x.strip()) if a.event_classes else None
+    fac = {}
+    for kv in a.event_factors.split(","):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            fac[k.strip()] = float(v)
+    if fac:
+        print(f"  factor overrides: {fac}")
+    # The SWORD mask is built regardless of stratification: accuracy on these steps is the only offline
+    # metric measured to track online boss damage (r = +0.83 over five arms), so it is what selects the
+    # checkpoint. Overall accuracy correlates -0.43 and had been choosing the checkpoint until now.
+    for e in eps:
+        z = np.load(e["z"], allow_pickle=False)
+        wsw, _ = event_weights(z, e["obs"], e["act"], a.event_span, 1.0, {"sword"}, {"sword": 1.0})
+        e["sel"] = (wsw > 1.0).astype(np.float32)
     if a.event_weight != 1.0:
         tot = chain = 0
         if only:
@@ -238,7 +324,7 @@ def main() -> int:
         agg = {}
         for e in eps:
             z = np.load(e["z"], allow_pickle=False)
-            e["w"], sh = event_weights(z, e["obs"], e["act"], a.event_span, a.event_weight, only)
+            e["w"], sh = event_weights(z, e["obs"], e["act"], a.event_span, a.event_weight, only, fac)
             tot += len(e["w"]); chain += int((e["w"] > 1.0).sum())
             for k, (n, cov) in sh.items():
                 p0, p1 = agg.get(k, (0, 0))
@@ -246,7 +332,7 @@ def main() -> int:
         print(f"  event stratification at scale {a.event_weight}, span {a.event_span}: "
               f"{chain:,}/{tot:,} steps up-weighted ({100*chain/max(tot,1):.1f}%); "
               f"{100-100*chain/max(tot,1):.1f}% stays at 1.0 (positioning)")
-        for k in ("seed_hit", "boss_hp", "stun", "sword", "seed_fire", "sling_out", "larva"):
+        for k in ("kill", "sword", "seed_hit", "boss_hp", "stun", "seed_fire", "sling_out", "larva"):
             n, cov = agg.get(k, (0, 0))
             print(f"    {k:<11}{n:>6} events  {cov:>7,} steps  {100*cov/max(tot,1):>5.1f}% of the corpus")
     fields = eps[0]["fields"]
@@ -288,40 +374,31 @@ def main() -> int:
     print(f"  majority-action baseline accuracy {100 * base:.1f}% (action {freq.most_common(1)[0][0]})\n")
 
     best = (0.0, -1)
-    print(f"{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val loss':>11}{'val acc':>9}")
+    print(f"{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val loss':>11}{'val acc':>9}"
+          f"{'SWORD acc':>9}")
     for ep_i in range(1, a.epochs + 1):
         model.train()
         tl, ta, _ = run_split(model, tr, a.chunk, opt, a.batch_episodes)
         model.eval()
         with torch.no_grad():
-            vl, vacc, _ = run_split(model, va, a.chunk, None, a.batch_episodes) if va else (float("nan"), float("nan"), 0)
-        print(f"{ep_i:>6}{tl:>12.4f}{100 * ta:>10.1f}%{vl:>11.4f}{100 * vacc:>8.1f}%")
-        score = vacc if va else ta
+            vl, vacc, _, vsw = (run_split(model, va, a.chunk, None, a.batch_episodes, True)
+                                if va else (float("nan"), float("nan"), 0, float("nan")))
+        print(f"{ep_i:>6}{tl:>12.4f}{100 * ta:>10.1f}%{vl:>11.4f}{100 * vacc:>8.1f}%{100 * vsw:>9.1f}%")
+        if a.snapshot_every and (ep_i % a.snapshot_every == 0 or ep_i == a.epochs):
+            snap = Path(str(a.out) + ".snaps")
+            snap.mkdir(parents=True, exist_ok=True)
+            torch.save(ckpt_payload(model, a, eps, global_dim, n_actors, actor_dim, n_actions, wins, steps,
+                                    vacc, ep_i, vsw), snap / f"snap_e{ep_i:04d}.pt")
+        score = (vsw if a.select_by == "sword" else vacc) if va else ta
         if score > best[0]:
             best = (score, ep_i)
             out = Path(a.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            # `config` must carry what --init-from's spec check compares (global_dim, n_actions, actor_dim)
-            # AND what policy_io.make_env needs to rebuild the fight (combat_cfg, episode_seconds,
-            # vi_per_step). Without the second group the trainer loads the clone fine and the EVALUATOR dies
-            # on `KeyError: 'combat_cfg'` -- which is how the first eval of this checkpoint failed.
-            from dataclasses import asdict
-            from zelda_rl.combat import CombatConfig, GOHMA_SIMPLE
-            ccfg = CombatConfig(profile="gohma", max_seconds=a.episode_seconds, **GOHMA_SIMPLE)
-            ckpt = {"model": model.state_dict(), "optimizer": None, "update": 0, "global_step": 0,
-                        "episode_count": 0,
-                        "config": {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
-                                   "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden,
-                                   "gru": a.gru, "recurrent": True, "obs_version": 7, "task": "combat",
-                                   "combat_cfg": asdict(ccfg), "episode_seconds": a.episode_seconds,
-                                   "vi_per_step": 6, "goal_slot": 3, "steps_per_rollout": 0,
-                                   "profile": "gohma", "run_name": "bc_human",
-                                   "bc_source": str(a.data), "bc_episodes": len(eps), "bc_wins": wins,
-                                   "bc_steps": steps, "bc_val_acc": float(vacc), "bc_epoch": ep_i,
-                                   "bc_wins_only": bool(a.wins_only)}}
-            torch.save(ckpt, out)
+            torch.save(ckpt_payload(model, a, eps, global_dim, n_actors, actor_dim, n_actions, wins,
+                                    steps, vacc, ep_i, vsw), out)
             ckpt_s3.upload(out, f"bc_human_n{len(eps)}", ep_i)
-    print(f"\nbest {'val' if va else 'train'} accuracy {100 * best[0]:.1f}% at epoch {best[1]} -> {a.out}")
+    print(f"\nbest {a.select_by if va else 'train'} accuracy {100 * best[0]:.1f}% at epoch {best[1]} "
+          f"-> {a.out}")
     print(f"  majority baseline was {100 * base:.1f}% -- beat that or the clone learned nothing")
     print(f"\nuse it:  fleet ckpt --experiment E --path {a.out}")
     print(f"         ... --train-args \"... --init-from {a.out} ...\"")

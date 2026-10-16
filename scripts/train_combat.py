@@ -90,6 +90,36 @@ def parse_args():
                     help="LATENT ALIGNMENT: MSE between this policy's GRU state and --bc-teacher's on the "
                          "demonstration frames. Aligns the representation instead of the action, which "
                          "matters because v15 and the human agree on only 3%% of actions while both winning")
+    ap.add_argument("--rvs-data", action="append", default=None, metavar="DIR",
+                    help="repeatable. RETURN-CONDITIONED PPO: the policy's input gains the 3 conditioning "
+                         "dims of zelda_rl/rvs.py and is trained BOTH by PPO (acting with the target prompt "
+                         "g=(1,1,0)) and by cross-entropy on these corpora with each step's ACTUAL outcome. "
+                         "Losing episodes become coverage instead of corruption, because the action that "
+                         "died is labelled with the outcome that followed it")
+    ap.add_argument("--rvs-coef", type=float, default=0.5, help="weight on the return-conditioned CE term")
+    ap.add_argument("--rvs-max-windows", type=int, default=12000, metavar="N",
+                    help="memory budget for the static corpus. Every file is READ (so composition is exact "
+                         "and every winning window is kept), but loss windows are strided to this budget: "
+                         "9,340 episodes as 60-step float32 windows is ~20 GB, which does not fit beside "
+                         "training on a 32 GB pod")
+    ap.add_argument("--rvs-buffer", type=int, default=6000, metavar="WINDOWS",
+                    help="DYNA-STYLE refresh: after every update the policy's own episodes are relabelled "
+                         "with the outcome they actually produced and appended to the RvS buffer, capped "
+                         "here, oldest evicted. Keep it above the static corpus so the human wins survive")
+    ap.add_argument("--rvs-fresh-share", type=float, default=0.5,
+                    help="HOW MUCH of the conditioning gradient comes from the policy's OWN fresh episodes, "
+                         "as a share in [0,1). 0 = the static corpus alone; 0.9 = almost pure "
+                         "self-imitation. The fresh windows' weights are rescaled to hit this exactly, so "
+                         "the knob is influence and not window count")
+    ap.add_argument("--rvs-static-only", action="store_true",
+                    help="shorthand for --rvs-fresh-share 0")
+    ap.add_argument("--rvs-win-share", type=float, default=0.3,
+                    help="TARGET share of the conditioning gradient that winning play should carry. The "
+                         "multiplier is solved from the corpus to hit it, because a fixed multiplier is the "
+                         "wrong knob: 8x on a pod-local 48%%-win mix put wins at 83%% of the gradient, which "
+                         "turns RvS back into anchored BC and throws away what the losses were for")
+    ap.add_argument("--rvs-win-weight", type=float, default=0.0,
+                    help="override the solved multiplier (0 = solve it from --rvs-win-share)")
     ap.add_argument("--bc-peer", default=None, metavar="CKPT",
                     help="MUTUAL alignment: load this checkpoint as a SECOND TRAINABLE network (normally the "
                          "BC clone). It keeps training on the demonstrations while both encoders are pulled "
@@ -246,6 +276,21 @@ def main():
     global_dim = GLOBAL_DIM_V2 + COMBAT_DIM + (BOSS_DIM if obs_version >= 5 else 0) + ego_dim
     actor_dim = ACTOR_DIM_V7 if obs_version >= 7 else ACTOR_DIM_V6 if obs_version >= 6 else ACTOR_DIM_V2
     n_actors = args.n_actors if args.n_actors > 0 else N_ACTORS
+    def _with_prompt(o):
+        """Append the inference prompt g=(1,1,0) to an env observation: during RL the policy always acts
+        conditioned on the outcome we want, while the corpus term teaches it what each outcome looks like."""
+        from zelda_rl.rvs import TARGET
+        o = np.asarray(o, np.float32)
+        g = np.asarray(TARGET, np.float32)
+        if o.ndim == 1:
+            return np.concatenate([o, g])
+        return np.concatenate([o, np.tile(g, (o.shape[0], 1))], axis=1)
+
+    rvs_cond = 0
+    if args.rvs_data:
+        from zelda_rl.rvs import COND_DIM
+        rvs_cond = COND_DIM
+        global_dim = global_dim + COND_DIM        # the prompt rides in the global block
     obs_dim = global_dim + n_actors * actor_dim
     n_actions = N_COMBAT_ACTIONS_V5 if obs_version >= 5 else N_COMBAT_ACTIONS
     config = {**vars(args), "task": "combat", "obs_version": obs_version, "obs_dim": obs_dim, "global_dim": global_dim,
@@ -374,6 +419,24 @@ def main():
     elif args.bc_data or args.bc_coef > 0 or args.bc_adaptive_frac > 0 or args.bc_latent_coef > 0:
         raise SystemExit("--bc-data needs one of --bc-coef / --bc-adaptive-frac / --bc-latent-coef > 0")
 
+    rvs = rvs_idx = None
+    if args.rvs_data:
+        # Aliased imports: a bare `from ... import GLOBAL_FIELDS_V2` here would make that name local to the
+        # whole function and break its module-level use earlier in main() (UnboundLocalError).
+        from zelda_rl.combat import COMBAT_FIELDS as _CF
+        from zelda_rl.ego import EGO_V7_FIELDS as _EF
+        from zelda_rl.gohma import BOSS_FIELDS as _BF
+        from zelda_rl.obs import GLOBAL_FIELDS_V2 as _GF
+        rvs_idx, _o = {}, 0
+        for _n, _w in _GF + _CF + _BF + _EF:
+            rvs_idx[_n] = _o
+            _o += _w
+        from zelda_rl.rvs_data import load_rvs_windows
+        rvs = load_rvs_windows(args.rvs_data, args.chunk, obs_dim=obs_dim, n_actions=n_actions,
+                               win_weight=args.rvs_win_weight, win_share=args.rvs_win_share,
+                               max_windows=args.rvs_max_windows)
+        LOGGER.info("RvS corpus: %s", rvs["desc"])
+
     q_head = None
     if args.ibrl:
         if not args.kl_anchor:
@@ -421,7 +484,8 @@ def main():
            + ("   bcL   bcA    bcC" if bc is not None else "")
            + ("   bcZ" if bc_teacher is not None else "")
            + ("   algn  peerA" if peer is not None else "")
-           + ("  bcPick    qL" if q_head is not None else ""))
+           + ("  bcPick    qL" if q_head is not None else "")
+           + ("  rvsL  rvsA" if rvs is not None else ""))
 
     try:
         for update in range(start_update, args.total_updates + 1):
@@ -437,6 +501,8 @@ def main():
                         return envs[i].reset(slot_of[i])
 
                     obs = np.stack([begin(i) for i in range(N)])
+                    if rvs_cond:
+                        obs = _with_prompt(obs)
                     h = model.init_hidden(N) if rec else None
                     h_a = anchor.init_hidden(N) if (anchor is not None and rec) else None
                     first = torch.ones(N)
@@ -499,7 +565,7 @@ def main():
                                     first[i] = 1.0                # new episode: zero this env's memory next step
                                     if h_a is not None:
                                         h_a[i] = 0.0              # and the anchor's, on the same boundary
-                            obs[i] = o
+                            obs[i] = _with_prompt(o) if rvs_cond else o
                     rollout_s = time.perf_counter() - t_roll
                     break
                 except EnvError as err:
@@ -524,6 +590,10 @@ def main():
                 if anc_buf is not None:
                     rbatch["anchor_logp"] = anc_buf
                 n_chunks = N * (T // args.chunk)
+                if rvs is not None and not args.rvs_static_only and args.rvs_fresh_share > 0:
+                    from zelda_rl.rvs_data import merge_capped, rollout_windows
+                    fresh = rollout_windows(rbatch, rvs_idx, args.chunk, rvs_cond, args.rvs_win_weight)
+                    rvs = merge_capped(rvs, fresh, args.rvs_buffer, args.rvs_fresh_share)
                 bc_coef_now = 0.0 if bc is None else (
                     args.bc_coef if args.bc_coef_final is None
                     else coef_at(update, args.bc_coef, args.bc_coef_final, args.bc_coef_updates))
@@ -541,7 +611,8 @@ def main():
                                              peer_bc_coef=args.peer_bc_coef,
                                              align_coef=args.align_coef, align_kind=args.align_kind,
                                              latent_mode=args.latent_mode, latent_proj=latent_proj,
-                                             q_head=q_head, q_coef=args.q_coef)
+                                             q_head=q_head, q_coef=args.q_coef,
+                                             rvs=rvs, rvs_coef=args.rvs_coef)
             else:
                 stats = ppo_update(model, opt, batch, epochs=args.epochs, minibatches=args.minibatches, clip=args.clip,
                                    ent_coef=args.ent_coef, vf_coef=args.vf_coef, max_grad_norm=args.max_grad_norm,
@@ -681,6 +752,8 @@ def main():
                            if peer is not None else "")
                         + (f" {100 * ibrl_bc_picks / max(1, ibrl_steps):>6.1f}% {stats.get('q_loss', float('nan')):>5.2f}"
                            if q_head is not None else "")
+                        + (f" {stats.get('rvs_loss', float('nan')):>5.2f} {100 * stats.get('rvs_acc', float('nan')):>4.0f}%"
+                           if rvs is not None else "")
                         + f"  top: {top}"
                         + (f"  sync {sync.get('sync_ranks')}r {sync.get('weight_hash')}" if sync else ""))
             if update % args.save_every == 0 or update == args.total_updates:

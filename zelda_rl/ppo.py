@@ -294,7 +294,7 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
                          bc_teacher=None, bc_latent_coef=0.0, bc_latent_site="gru",
                          bc_latent_states="demo", peer=None, peer_opt=None, peer_bc_coef=1.0,
                          align_coef=0.0, align_kind="mse", latent_mode="state", latent_proj=None,
-                         q_head=None, q_coef=0.5):
+                         q_head=None, q_coef=0.5, rvs=None, rvs_coef=0.0):
     """Recurrent PPO: minibatches of length-`chunk` sequences, each re-run from its stored initial hidden state.
     batch arrays are (T, N, ...): obs, act, logp, adv, ret, val, first, h (hidden state *before* each step).
 
@@ -466,6 +466,64 @@ def ppo_update_recurrent(model, opt, batch, *, chunk, epochs, chunks_per_mb, cli
                 loss = loss + bc_latent_coef * lat
                 with torch.no_grad():
                     stats.setdefault("bc_latent", []).append(float(lat))
+            if rvs is not None and rvs_coef > 0:
+                # RETURN-CONDITIONED term. The windows carry each step's ACTUAL outcome in the observation,
+                # so a fatal action is labelled with the low prompt that preceded it and the policy -- which
+                # ACTS with the target prompt -- is pushed toward the action that produced the outcome we ask
+                # for, not the average of winning and losing behaviour at that state.
+                j = torch.randint(0, rvs["obs"].shape[0], (min(chunks_per_mb, rvs["obs"].shape[0]),))
+                # LONG CONTEXT: sample a window, then replay its EPISODE from the start so the GRU arrives
+                # carrying the episode's history instead of cold-starting every 60 steps. The label is
+                # already episode-length (zelda_rl/rvs.py), and a cold context was the only short horizon
+                # left in the loop. Earlier windows are run under no_grad -- they are context, not targets --
+                # so the cost is forward passes, not memory.
+                if "ep" in rvs and "pos" in rvs:
+                    r_obs, r_act, r_first, r_w = [], [], [], []
+                    prefix = []
+                    for jj in j.tolist():
+                        e_, p_ = int(rvs["ep"][jj]), int(rvs["pos"][jj])
+                        same = (rvs["ep"] == e_).nonzero().flatten()
+                        earlier = [int(x) for x in same.tolist() if int(rvs["pos"][x]) < p_]
+                        prefix.append(earlier[-4:])          # up to 4 windows (4 s) of carried context
+                        r_obs.append(rvs["obs"][jj]); r_act.append(rvs["act"][jj])
+                        r_first.append(rvs["first"][jj]); r_w.append(rvs["keep"][jj])
+                    r_obs = torch.stack(r_obs); r_act = torch.stack(r_act)
+                    r_first = torch.stack(r_first); r_w = torch.stack(r_w)
+                    rh = model.init_hidden(r_obs.shape[0])
+                    depth = max((len(x) for x in prefix), default=0)
+                    with torch.no_grad():
+                        for d in range(depth):
+                            idxs, rows = [], []
+                            for b, pre in enumerate(prefix):
+                                if len(pre) >= depth - d:
+                                    idxs.append(b); rows.append(pre[len(pre) - (depth - d)])
+                            if not idxs:
+                                continue
+                            sel = torch.tensor(idxs)
+                            ctx = rvs["obs"][torch.tensor(rows)]
+                            cf = rvs["first"][torch.tensor(rows)]
+                            hh = rh[sel]
+                            for k in range(ctx.shape[1]):
+                                _, _, hh = model.step(ctx[:, k], hh, cf[:, k])
+                            rh = rh.clone()
+                            rh[sel] = hh
+                else:
+                    r_obs, r_act, r_first, r_w = (rvs["obs"][j], rvs["act"][j], rvs["first"][j],
+                                                  rvs["keep"][j])
+                    rh = model.init_hidden(r_obs.shape[0])
+                rlog = []
+                for k in range(r_obs.shape[1]):
+                    lg_r, _, rh = model.step(r_obs[:, k], rh, r_first[:, k])
+                    rlog.append(lg_r)
+                r_lg = torch.stack(rlog, 1)
+                rw = r_w.reshape(-1)
+                r_ce = F.cross_entropy(r_lg.reshape(-1, r_lg.shape[-1]), r_act.reshape(-1), reduction="none")
+                r_loss = (r_ce * rw).sum() / rw.sum().clamp(min=1.0)
+                loss = loss + rvs_coef * r_loss
+                with torch.no_grad():
+                    stats.setdefault("rvs_loss", []).append(float(r_loss))
+                    stats.setdefault("rvs_acc", []).append(
+                        float((((r_lg.argmax(-1) == r_act).float()) * r_w).sum() / rw.sum().clamp(min=1.0)))
             if not torch.isfinite(loss):
                 skipped += 1
                 continue

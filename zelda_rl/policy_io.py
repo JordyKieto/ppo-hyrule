@@ -47,6 +47,12 @@ def load_policy(path: Path):
     model = build_model(cfg)
     model.load_state_dict(ck["model"])
     model.eval()
+    if cfg.get("rvs_cond"):
+        # A return-conditioned checkpoint was trained on [obs | g]. Wrapping it here means the evaluator and
+        # every other consumer keep passing a plain env observation and never learn about conditioning.
+        from zelda_rl.rvs import Conditioned
+        model = Conditioned(model, tuple(cfg.get("rvs_target", (1.0, 1.0, 0.0))))
+        model.eval()
     return model, cfg, ck
 
 

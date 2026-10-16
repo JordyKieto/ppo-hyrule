@@ -316,7 +316,8 @@ def probe(env, slot, seconds=10.0):
 
 
 
-def record_row(out: Path, row: dict, s3: bool = True) -> None:
+# NOTE: fleet ckpt dedupes by SIZE, so an edit that preserves byte count is not pushed.
+def record_row(out: Path, row: dict, s3: bool = True, prefix: str = "zelda/human/gohma") -> None:
     """Write the manifest row and push the episode to S3 THE MOMENT the episode is saved.
 
     The manifest used to be written once, after the whole session. A session that was killed -- or simply
@@ -343,10 +344,16 @@ def record_row(out: Path, row: dict, s3: bool = True) -> None:
         return
     try:
         import boto3
-        c = boto3.Session(profile_name="race-wm", region_name="us-west-1").client("s3")
+        import os as _os
+        # A pod carries AWS_* in its environment (fleet/secrets.py exports them) and has NO named profile,
+        # so asking for `race-wm` there fails with "config profile could not be found" and every episode
+        # stays on a pod that will be terminated.
+        sess = (boto3.Session(region_name="us-west-1") if _os.environ.get("AWS_ACCESS_KEY_ID")
+                else boto3.Session(profile_name="race-wm", region_name="us-west-1"))
+        c = sess.client("s3")
         for f in (out / row["file"], mf):
-            c.upload_file(str(f), "zelda-rl", f"zelda/human/gohma/{f.name}")
-        print(f"  -> S3 zelda/human/gohma/{row['file']}", flush=True)
+            c.upload_file(str(f), "zelda-rl", f"{prefix.rstrip('/')}/{f.name}")
+        print(f"  -> S3 {prefix.rstrip('/')}/{row['file']}", flush=True)
     except Exception as e:                                                   # noqa: BLE001
         print(f"  !! S3 UPLOAD FAILED for {row['file']}: {str(e)[:140]}\n"
               f"     the episode is on disk only; re-run the sync before trusting it", flush=True)
@@ -380,6 +387,19 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true",
                     help="prove the input offset with NO controller: drive the pad through the env's pipe and "
                          "read it back from gPlayState+0x14. Records nothing")
+    ap.add_argument("--s3-prefix", default="zelda/human/gohma",
+                    help="S3 prefix each finished episode is pushed to. A FLEET collection must give every "
+                         "pod its own sub-prefix (e.g. zelda/ppo/gohma/r3), because episode numbering is "
+                         "per-pod and ep000 from thirty pods would otherwise overwrite one another")
+    ap.add_argument("--tag", default="", help="prefix for episode filenames, e.g. the rank, so files from "
+                                              "different pods never collide when pooled")
+    ap.add_argument("--policy", default=None, metavar="CKPT",
+                    help="record a POLICY instead of a human: the checkpoint drives the pad and the episode "
+                         "is saved in exactly the format the human corpus uses, so mine_corpus.py, "
+                         "mine_slingshot.py, probe_events.py and train_bc_human.py all work on it unchanged. "
+                         "This is how a Gohma PPO corpus gets collected -- collect_transitions.py is "
+                         "Deku-Baba-specific (it writes the 483-d obs and imports BABA_STATES)")
+    ap.add_argument("--deterministic", action="store_true", help="argmax actions (default: sampled)")
     ap.add_argument("--no-s3", action="store_true",
                     help="do NOT push each episode to s3://zelda-rl/zelda/human/gohma/ as it is recorded. "
                          "The default is to push, because a session that is interrupted otherwise leaves "
@@ -419,8 +439,17 @@ def main() -> int:
     ACTION_SPEC = [{"i": i, "world_dir_rad": d, "buttons": list(COMBAT_BUTTONS_V5[b]),
                     "name": action_name(i, "combat")} for i, (d, b) in enumerate(COMBAT_ACTIONS_V5)]
 
+    policy = None
+    if a.policy:
+        import torch as _t
+        _t.set_num_threads(1)                      # AGENTS 28: never let torch starve the emulator
+        from zelda_rl.policy_io import load_policy
+        policy, p_cfg, _ = load_policy(Path(a.policy))
+        policy.eval()
+        print(f"  POLICY MODE: {a.policy} (obs {p_cfg.get('obs_dim')}, {p_cfg.get('n_actions')} actions, "
+              f"{'argmax' if a.deterministic else 'sampled'})")
     env = build_env(slots, a.slots_dir, a.seconds, not a.headless,
-                    pad_ini="" if a.selftest else a.pad_ini, volume=a.volume)
+                    pad_ini="" if (a.selftest or policy is not None) else a.pad_ini, volume=a.volume)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     # Parse ALL the digits after "ep", not two of them: at 100 episodes `int(name[2:4])` reads "ep100" as 10
@@ -458,9 +487,21 @@ def main() -> int:
                   f"hp={start_hp} dist={start_dist}u"
                   + ("   <-- PRE-CUTSCENE: look up to start the fight" if start_state == "ceiling_wait" else ""))
             t0, info = time.time(), {}
+            h = policy.init_hidden(1) if policy is not None else None
+            first = 1.0
             while True:
-                b, x, y = read_pad(env.ram)
-                act = to_action(b, x, y, read_cam_yaw(env.ram))
+                if policy is not None:
+                    import torch as _t
+                    with _t.no_grad():
+                        x_ = _t.as_tensor(np.asarray(obs, np.float32)).unsqueeze(0)
+                        a_, _, _, _, h = policy.act(x_, h, _t.tensor([first]),
+                                                    deterministic=a.deterministic)
+                    first = 0.0
+                    act = int(a_.item())
+                    b, x, y = read_pad(env.ram)          # recorded anyway: the pad the env actually sent
+                else:
+                    b, x, y = read_pad(env.ram)
+                    act = to_action(b, x, y, read_cam_yaw(env.ram))
                 O.append(np.asarray(obs, np.float32)); A.append(act); PAD.append((b, x, y))
                 CY.append(env.state.cam_yaw)
                 env.send_action(act)                      # mirrors what the human pressed, so state advances
@@ -474,7 +515,7 @@ def main() -> int:
             ep_info = info.get("episode", {})
             won = bool(ep_info.get("boss_defeated"))
             died = bool(st.bit(SF1_DEAD))
-            f = out / f"ep{base + ep:02d}_slot{slot}_{'WIN' if won else 'death' if died else 'timeout'}.npz"
+            f = out / f"{a.tag}ep{base + ep:02d}_slot{slot}_{'WIN' if won else 'death' if died else 'timeout'}.npz"
             # SELF-DESCRIBING, because this is going to S3 and being trained on remotely: the obs field
             # names, the action-space definition and the pad decoding all travel WITH the data, so a remote
             # job never has to reconstruct the layout from this repo's current source (AGENTS 25, 27).
@@ -508,7 +549,7 @@ def main() -> int:
                    "length_s": len(A) / 10.0, "slot": slot, "start_gohma_state": start_state,
                    "md5": md5, "bytes": f.stat().st_size}
             kept.append(row)
-            record_row(out, row, s3=not a.no_s3)          # manifest + S3 now, not at session end
+            record_row(out, row, s3=not a.no_s3, prefix=a.s3_prefix)   # manifest + S3 per episode
             if ep < a.episodes - 1 and a.settle > 0:
                 # Keep the emulator ticking so the animation plays, then reload. ready()/observe() are not
                 # used here: the episode is over and the tracker is done, so this is purely wall-clock.
@@ -554,8 +595,11 @@ def main() -> int:
         if not a.no_s3:
             try:
                 import boto3
-                boto3.Session(profile_name="race-wm", region_name="us-west-1").client("s3").upload_file(
-                    str(mf), "zelda-rl", "zelda/human/gohma/MANIFEST.json")
+                import os as _os
+                _s = (boto3.Session(region_name="us-west-1") if _os.environ.get("AWS_ACCESS_KEY_ID")
+                      else boto3.Session(profile_name="race-wm", region_name="us-west-1"))
+                _s.client("s3").upload_file(
+                    str(mf), "zelda-rl", f"{a.s3_prefix.rstrip('/')}/MANIFEST.json")
                 print("  manifest -> s3://zelda-rl/zelda/human/gohma/MANIFEST.json")
             except Exception as e:                                           # noqa: BLE001
                 print(f"  !! manifest S3 upload failed: {str(e)[:120]}")

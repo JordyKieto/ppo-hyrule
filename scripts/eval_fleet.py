@@ -171,6 +171,43 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
     obs = np.stack([e.reset(s) for e, s in zip(envs, cur)])
     out, stalls, t0, nxt = [], 0, time.time(), time.time() + 60.0
 
+    # PER-STEP DUMPING. The whole point is throughput: this harness runs `envs_n` episodes at once, where
+    # record_human.py runs one, so collecting a Gohma corpus here is ~12x faster on the same pod. The format
+    # written is the one scripts/record_human.py produces, so mine_corpus.py / mine_slingshot.py /
+    # probe_events.py / train_bc_human.py all read it with no changes.
+    dump = Path(LIVE["dump"]) if LIVE["dump"] else None
+    if dump:
+        dump.mkdir(parents=True, exist_ok=True)
+    buf = [{"obs": [], "act": [], "rew": []} for _ in range(envs_n)]
+    dumped = [0]
+
+    def write_ep(i, info_ep, slot):
+        if not dump or not buf[i]["obs"]:
+            return
+        import hashlib
+        tag = os.environ.get("ZRL_SHARD", "x")
+        end = str(info_ep.get("end", "?"))
+        fn = dump / f"{tag}.e{dumped[0]:05d}_env{i}_slot{slot}_{end}.npz"
+        np.savez_compressed(
+            fn,
+            obs=np.stack(buf[i]["obs"]).astype(np.float32),
+            action=np.asarray(buf[i]["act"], np.int64),
+            reward=np.asarray(buf[i]["rew"], np.float32),
+            slot=np.int32(slot),
+            boss_damage=np.int32(info_ep.get("boss_damage", 0)),
+            boss_defeated=np.bool_(bool(info_ep.get("boss_defeated"))),
+            died=np.bool_(bool(info_ep.get("died"))),
+            end=str(end),
+            length_s=np.float32(len(buf[i]["act"]) / 10.0), hz=np.float32(10.0),
+            obs_version=np.int32(7), obs_dim=np.int32(len(buf[i]["obs"][0])),
+            n_actions=np.int32(N_COMBAT_ACTIONS_V5),
+            obs_fields=OBS_FIELDS_JSON,
+            source="eval_fleet.py --dump-steps", policy=str(LIVE["policy"]),
+            recorded_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+        dumped[0] += 1
+        buf[i] = {"obs": [], "act": [], "rew": []}
+
     def start(i):
         """Hand env i the next slot off the queue, or retire it when the queue is empty."""
         cur[i] = queue.pop(0) if queue else None
@@ -189,6 +226,9 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
             first = torch.zeros(envs_n)
             try:
                 for i in live:
+                    if dump:
+                        buf[i]["obs"].append(np.asarray(obs[i], np.float32).copy())
+                        buf[i]["act"].append(int(a[i]))
                     envs[i].send_action(int(a[i]))
                 for i in live:
                     while not envs[i].ready():
@@ -196,8 +236,11 @@ def evaluate(ckpt: Path, slots, episodes, envs_n, slots_dir, seconds, determinis
                 for i in live:
                     o, r, term, trunc, info = envs[i].observe()
                     obs[i] = o
+                    if dump:
+                        buf[i]["rew"].append(float(r))
                     if term or trunc:
                         _row = dict(info["episode"], slot=cur[i])
+                        write_ep(i, info["episode"], cur[i])
                         out.append(_row)
                         if LIVE["per_ep"] is not None:
                             LIVE["per_ep"].write(json.dumps(_row, default=float) + "\n")
@@ -257,7 +300,25 @@ def score(eps):
     return out
 
 
-LIVE = {"wb": None, "per_ep": None, "t0": None}
+LIVE = {"wb": None, "per_ep": None, "t0": None, "dump": None, "policy": ""}
+
+def _obs_fields_json() -> str:
+    """The observation layout, from the SAME definitions the trainer and the human recorder use, so a dumped
+    episode describes itself and nothing downstream has to reconstruct the layout (AGENTS 25)."""
+    from zelda_rl.combat import COMBAT_FIELDS
+    from zelda_rl.ego import ACTOR_FIELDS_V7, EGO_V7_FIELDS
+    from zelda_rl.gohma import BOSS_FIELDS
+    from zelda_rl.obs import GLOBAL_FIELDS_V2, N_ACTORS
+    return json.dumps({"global": [list(x) for x in
+                                  GLOBAL_FIELDS_V2 + COMBAT_FIELDS + BOSS_FIELDS + EGO_V7_FIELDS],
+                       "n_actors": N_ACTORS, "actor": [list(x) for x in ACTOR_FIELDS_V7]})
+
+
+OBS_FIELDS_JSON = _obs_fields_json()
+from zelda_rl.env import COMBAT_ACTIONS_V5 as _CA  # noqa: E402
+
+N_COMBAT_ACTIONS_V5 = len(_CA)
+
 
 
 def _stream(out, episodes, queue, t0):
@@ -431,6 +492,11 @@ def main():
     p.add_argument("--fleet-world-size", type=int, default=1)
     p.add_argument("--wandb-project", default=None, help="log the HELD-OUT metrics beside the training curve")
     p.add_argument("--wandb-group", default=None)
+    p.add_argument("--dump-steps", default=None, metavar="DIR",
+                   help="write EVERY episode's per-step obs/action/reward as an npz in the human-corpus "
+                        "format. This harness runs --envs episodes in parallel, so it collects ~12x faster "
+                        "than scripts/record_human.py --policy, and the output is readable by every corpus "
+                        "analysis script unchanged")
     p.add_argument("--per-episode-out", default=None, metavar="PATH",
                    help="append EVERY episode's row as jsonl (end reason, hp lost, length, damage, slot). "
                         "Needed for failure anatomy: the summary row cannot say how a policy dies")
@@ -457,14 +523,16 @@ def main():
             with open(a.out, "a") as f:
                 f.write(json.dumps(s) + "\n")
 
-    if a.ckpt:
-        emit(run_one(Path(a.ckpt), a))
-        return
 
     if not a.watch and not a.watch_published:
         raise SystemExit("pass --ckpt, --watch or --watch-published")
     d = Path(a.watch) if a.watch else None
     seen, best = set(), None
+    if a.dump_steps:
+        LIVE["dump"] = a.dump_steps
+        LIVE["policy"] = str(a.ckpt or a.watch or a.watch_published or "")
+        Path(a.dump_steps).mkdir(parents=True, exist_ok=True)
+        print(f"per-step episodes -> {a.dump_steps}")
     if a.per_episode_out:
         Path(a.per_episode_out).parent.mkdir(parents=True, exist_ok=True)
         LIVE["per_ep"] = open(a.per_episode_out, "a")
@@ -485,6 +553,11 @@ def main():
           + (f" | rank {a.fleet_rank}/{a.fleet_world_size}, taking every {a.fleet_world_size}th checkpoint"
              if a.fleet_world_size > 1 else ""))
     inbox = ROOT / "checkpoints" / "eval_inbox"
+    # Moved BELOW the sink setup: this branch returns, and with it above the setup both
+    # --dump-steps and --per-episode-out were silently inert for every --ckpt run.
+    if a.ckpt:
+        emit(run_one(Path(a.ckpt), a))
+        return
     while True:
         if a.watch_published:
             from zelda_rl.fleet_link import fetch_latest_policy
@@ -516,7 +589,11 @@ def main():
                         print(f"  eval failed: {str(e)[:120]}")
             time.sleep(a.poll)
             continue
-        for n_ck, f in enumerate(sorted(d.glob("update_*.pt"))):
+        # update_*.pt is what the PPO trainer writes; snap_*.pt is what train_bc_human.py --snapshot-every
+        # writes. Globbing only the former silently ignored six BC snapshots sitting in the watched
+        # directory -- the watcher printed "watching ..." and did nothing (AGENTS 16: verify the artefact
+        # was consumed, not that the command ran).
+        for n_ck, f in enumerate(sorted(set(d.glob("update_*.pt")) | set(d.glob("snap_*.pt")))):
             if f.name in seen:
                 continue
             seen.add(f.name)
