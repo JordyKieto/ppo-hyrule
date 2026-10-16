@@ -39,7 +39,11 @@ PROBE = (
     # removed it: 6.5 GB a run, five runs, 33 GB of a 40 GB overlay, and the next training arm died on
     # ENOSPC writing a savestate (gohma-s3, 2026-10-16). zelda_rl/tmpdirs.py now reaps them, and this
     # reports any that are left so the leak cannot come back silently.
-    "T=$(du -sm /tmp/evalf_* /tmp/human_* 2>/dev/null | awk '{s+=$1} END {print int(s/1024)}'); "
+    # ONLY dirs whose owning pid is gone. A RUNNING collector's own /tmp/evalf_<pid> is its working set --
+    # 12 Dolphin user dirs, ~6 GB -- and the first version of this check flagged all twelve healthy
+    # collectors as "6 GB LEAKED". A check that fires on correct work gets ignored within a day (AGENTS 36).
+    "T=$(for d in /tmp/evalf_* /tmp/human_*; do [ -d \"$d\" ] || continue; pid=${d##*_}; "
+    "[ -d \"/proc/$pid\" ] || du -sm \"$d\"; done 2>/dev/null | awk '{s+=$1} END {print int(s/1024)}'); "
     "echo \"P=$P D=$D U=$U FRESH=$F X=$X TMP=${T:-0} LOG=$(basename \"$L\" 2>/dev/null)\""
 )
 

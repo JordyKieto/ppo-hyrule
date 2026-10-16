@@ -77,6 +77,9 @@ def load_all(dirs, limit_per_dir=0):
     return eps
 
 
+CORPUS = {"episodes": 0, "wins": 0}          # updated by prepare(), printed beside every eval
+
+
 def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> float | None:
     """Play the game with the TARGET prompt and print balanced boss damage with its slope.
 
@@ -123,7 +126,8 @@ def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> floa
         trend = (f" | slope {beta[0]:+.4f} +- {se:.4f} /epoch  t={t:+.2f}  "
                  f"{'RISING' if t > 2 else 'FALLING' if t < -2 else 'flat'} over {len(hist)} evals")
     print(f"  EVAL epoch {ep_i}: dmgB(balanced) {bal:.3f} | pooled {pooled:.3f} | ret {ret:.1f} | "
-          f"hpLost {hurt:.2f} | wins {wins}/{len(eps)} | slots {len(per)}{trend}", flush=True)
+          f"hpLost {hurt:.2f} | wins {wins}/{len(eps)} | slots {len(per)} | "
+          f"corpus {CORPUS['episodes']}eps/{CORPUS['wins']}wins{trend}", flush=True)
     return bal
 
 
@@ -216,6 +220,7 @@ def main() -> int:
         tr = [e for i, e in enumerate(eps) if i not in val_idx]
         va = [e for i, e in enumerate(eps) if i in val_idx]
         print(f"  train {len(tr)} / val {len(va)} (val wins: {sum(1 for e in va if e['win'])})")
+        CORPUS["episodes"], CORPUS["wins"] = len(eps), len(wins)
         return eps, tr, va, solved
 
     eps, tr, va, solved = prepare(list(a.data))

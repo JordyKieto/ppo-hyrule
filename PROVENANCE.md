@@ -1312,6 +1312,38 @@ dataset was lost once already (§25).
 
 ---
 
+### THE LR ABLATION: lowering the learning rate buys FLATNESS, not improvement (M)
+
+PPO from `rvs_M5_s5.pt` at five learning rates spanning 100×, every other setting identical, all md5-checked
+against the same init. The 3e-4 pair had 37 updates; the ablation arms 6–17.
+
+| lr | pod | upd | pooled dmgB | slope/upd | t | first3 → last3 | succ |
+|---|---|---|---|---|---|---|---|
+| 3e-4 | rvs3 | 37 | 1.25 ± 0.09 | −0.0323 | **−5.0** | 2.10 → 0.89 | 2.5% |
+| 3e-4 | rvs5 | 37 | **1.90 ± 0.07** | +0.0011 | +0.2 | 1.79 → 1.81 | 6.1% |
+| 1e-4 | la6 | 6 | 1.20 ± 0.16 | −0.1857 | −3.9 | 1.44 → 0.96 | 4.0% |
+| 3e-5 | la8 | 17 | 1.87 ± 0.15 | +0.0160 | +0.5 | 1.64 → 1.97 | 1.7% |
+| 1e-5 | rvs0 | 14 | 1.48 ± 0.13 | +0.0355 | +1.2 | 1.06 → 1.44 | 5.6% |
+| 3e-6 | rvs1 | 14 | 1.53 ± 0.17 | +0.0456 | +1.1 | 1.50 → 1.86 | 0.0% |
+
+**Matched over updates 1–6** (the shortest arm's length, §12): 3e-4 **1.98 ± 0.20** and **1.89 ± 0.21**,
+3e-5 1.80 ± 0.19, 1e-5 1.42 ± 0.19, 1e-4 1.20 ± 0.16, 3e-6 1.19 ± 0.22. Best vs runner-up
+**+0.09 ± 0.29, t=+0.30 — a TIE. The ablation did not choose a learning rate.**
+
+**The conclusions.**
+
+1. **No learning rate makes PPO improve this policy.** The three lowest (3e-5, 1e-5, 3e-6) are flat at
+   t=+0.5 to +1.2 — that is PPO doing nothing, not PPO working. The best arm in the whole set is still a
+   **3e-4** seed, flat at 1.90, statistically tied with 3e-5's 1.87.
+2. **The collapse is SEED-dependent, not LR-dependent.** Two identical 3e-4 arms: one at t=−5.0
+   (2.10 → 0.89), one flat for 37 updates. Attributing it to the learning rate would have been wrong.
+3. **Consistent with R67, the suspect is the reward.** PPO under `--reward simple` at this config improves a
+   Gohma policy from NO initialisation tested — not v15 (five controls, three declining at |t|>3.7), not the
+   RvS policy, not at any of four learning rates across two orders of magnitude.
+
+
+---
+
 ## 4. WM track
 
 **Result so far: negative, and the negative is the contribution.** This track is older than the RL track and
