@@ -1,0 +1,54 @@
+{
+  "size_800_s0": {
+    "corpus": 799,
+    "evals": [
+      0.54,
+      0.67
+    ],
+    "pooled": 0.6,
+    "se": 0.06,
+    "kills": "0/48",
+    "note": "read at 12:5x before the relaunch truncated the log"
+  },
+  "size_1200_s1": {
+    "corpus": 1200,
+    "evals": [
+      0.54
+    ],
+    "pooled": 0.54,
+    "kills": "0/24",
+    "note": "read at 12:5x before the relaunch truncated the log"
+  },
+  "spout_s3_pre": {
+    "corpus": 792,
+    "evals": [
+      1.542
+    ],
+    "kills": "1/24",
+    "note": "first spout run, eval-every 3, before the eval-every-1 restart"
+  },
+  "spout_s4_pre": {
+    "corpus": 796,
+    "evals": [
+      1.167
+    ],
+    "kills": "0/24",
+    "note": "same"
+  },
+  "spout_s3_r2": {
+    "corpus": 792,
+    "evals": [
+      0.75
+    ],
+    "kills": "0/24",
+    "note": "second run, epoch 1"
+  },
+  "spout_s4_r2": {
+    "corpus": 796,
+    "evals": [
+      0.42
+    ],
+    "kills": "0/24",
+    "note": "second run, epoch 1"
+  }
+}
