@@ -812,6 +812,33 @@ and 29 of the author's recorded wins were in that state at the same time.
 | BC init | clone as the starting policy | 6 | 0.28 | 0.35 | +0.028/upd | rising from nothing |
 | **v15 alone** | **no human data at all** | — | **3.275** | — | the bar | |
 
+**The table above is the episode-weighted fleet mean from `fleet ppo`. Regenerated from the exported
+histories on the MIX-INVARIANT column (`combat/boss_damage_balanced`, AGENTS 29) by `scripts/arm_trends.py`,
+the ordering changes and one arm's series sits above 3.275 -- but every exported history is ONE RANK (the W&B
+group's representative run), and per-rank damage on this task spans 1.36-3.37, so no per-arm mean from it is
+a result (AGENTS 7). It also compares against a 3.275 that was never re-derived on the same column and
+aggregation, which is the AGENTS 12 error. Both tables are kept because neither is a matched comparison on
+its own, and saying which is which is the point:**
+
+| arm | one rank, balanced mean | max | slope +/- SE | t |
+|---|---|---|---|---|
+| latent transition (`latroll-r4`) | **3.30** | 4.40 | -0.0120 +/- 0.0331 | -0.36 |
+| FitNets (`fitnet-r0`) | 2.61 | 3.85 | +0.0149 +/- 0.0348 | +0.43 |
+| mutual (`mutual-r8`) | 2.60 | 4.00 | +0.0028 +/- 0.0150 | +0.19 |
+| constant 0.1 (`v15bc-r1`) | 2.60 | 3.52 | +0.0484 +/- 0.0590 | +0.82 |
+| one-way latent (`lat-r8`) | 2.54 | 3.33 | -0.0011 +/- 0.0147 | -0.07 |
+| Q-filter (`qf-r4`) | 2.18 | 2.95 | -0.0052 +/- 0.0242 | -0.22 |
+| decay replicate (`v15bcd-r0`) | 2.13 | 3.83 | +0.0016 +/- 0.0030 | +0.53 |
+| decay (`v15bcd-r1`) | 2.09 | 3.31 | -0.0086 +/- 0.0031 | **-2.75** |
+| on-policy distil (`onpol-r1`) | 1.75 | 3.25 | -0.1617 +/- 0.0291 | **-5.56** |
+| IBRL, broken (`ibrl-r1`) | 0.74 | 1.61 | +0.0543 +/- 0.0295 | +1.84 |
+| inverse (`inv-r0`) | 0.49 | 0.96 | +0.0337 +/- 0.0102 | **+3.32 rising from the floor** |
+
+**What the next session must do before any claim about the latent arms:** re-derive v15's number on
+`combat/boss_damage_balanced`, and compare arm MEANS ACROSS RANKS rather than the representative run. The
+exported histories cannot do the second -- only the representative run's history is kept -- so an arm
+comparison needs the fleet running, or the exporter extended to pull every rank's history.
+
 **Three arms produced one update above 3.275 each** (FitNets 3.37, mutual 3.28, on-policy 3.67) and **no arm
 produced a trend above it**. The two arms that merely HELD at v15's level are the two whose design follows the
 measurement that the divergence between v15 and the clone is accumulated memory rather than perception
