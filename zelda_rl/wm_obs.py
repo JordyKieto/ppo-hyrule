@@ -228,7 +228,7 @@ def pad_episodes(group, obs_dim, device, T_max=2000):
 
 
 def event_accuracy(model, scales, episodes, g_hp, l_hp, device, max_steps=600, batch=8,
-                   obs_dim=None, event_eps=0.01):
+                   obs_dim=None, event_eps=0.01, hard=True):
     """MISSED vs HALLUCINATED, per key event, one step ahead and teacher-forced.
 
     The model's predicted next observation is run through the SAME predicate as the ground truth
@@ -241,6 +241,13 @@ def event_accuracy(model, scales, episodes, g_hp, l_hp, device, max_steps=600, b
     Reported per event: recall (1 - missed rate), precision, and hallucinations per 1,000 quiet ticks --
     because at a sub-1% event rate a model can hold 100% recall and still make the dream unusable by firing
     on everything.
+
+    `hard` SELECTS THE GATE MODE AND CHANGES EVERYTHING, so it defaults to the mode the dream actually runs
+    in (hard). With `hard=False` the prediction is the soft product `sigmoid(gate) * value`, which leaks a
+    fraction of the value head on every tick: at pos_weight 50 and a 0.31% event rate a calibrated gate sits
+    at p ~ 0.135, so a value of 0.7-1.8 leaks 0.1-0.24 of the HP bar per tick and the report reads ~1000
+    hallucinations per 1,000 quiet ticks. Under `hard=True` the same model fires on nothing. Reporting the
+    soft number as if it described the dream is an instrument error this project has already made once.
     """
     import torch
     obs_dim = obs_dim or int(model.obs_dim)
@@ -256,7 +263,7 @@ def event_accuracy(model, scales, episodes, g_hp, l_hp, device, max_steps=600, b
             obs, act, msk = pad_episodes(group, obs_dim, device)
             h = model.init_hidden(obs.shape[0], device)
             for t in range(min(obs.shape[1] - 1, max_steps)):
-                d, _, h = model.step(obs[:, t], act[:, t], h)
+                d, _, h = model.step(obs[:, t], act[:, t], h, hard=hard)
                 pred_next = obs[:, t] + d * scales
                 truth = key_event_masks(torch.stack([obs[:, t], obs[:, t + 1]], 1), g_hp, l_hp,
                                         eps=event_eps)
@@ -299,6 +306,7 @@ def event_accuracy(model, scales, episodes, g_hp, l_hp, device, max_steps=600, b
         nm = "boss" if k.startswith("boss") else "link"
         out[k]["phantom_drift_per_tick"] = (drift[nm][0] / drift[nm][1]) if drift[nm][1] else float("nan")
         out[k]["event_eps"] = event_eps
+        out[k]["hard_gate"] = hard
     return out
 
 

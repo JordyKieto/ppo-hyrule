@@ -1,0 +1,51 @@
+# Scripts that predate the experiment contract (snapshot 2026-10-16). They are REPORTED, not enforced.
+# Deleting a line here puts that script under the contract -- which is the right move the next time
+# one of them is used for a real experiment. Nothing may be ADDED to this file: new code complies.
+#
+# NOT grandfathered, deliberately -- the current experiment surface:
+#   collect_transitions.py
+#   dyna_loop.py
+#   eval_fleet.py
+#   train_combat.py
+#   train_dream_obs_ppo.py
+#   train_rvs.py
+#   train_wm_obs.py
+#   wm_status.py
+
+arm_defeats.py
+bench_reset_ram.py
+build_savestate_manifest.py
+capture_boss_state.py
+collect_counterfactual.py
+discover_collision.py
+eval_policy.py
+fleet_signal.py
+make_transfer_checkpoint.py
+make_walk_state.py
+play.py
+probe_hotkey_flake.py
+probe_load.py
+probe_machmem.py
+probe_move_states.py
+probe_remap.py
+rvs_baselines.py
+train_bc.py
+train_bc_decode.py
+train_dream_ppo.py
+train_dynamics.py
+train_dynamics_simple.py
+train_encoder_reward.py
+train_event_head.py
+train_jepa.py
+train_jepa_latent.py
+train_jepa_nav.py
+train_jepa_pure.py
+train_jepa_stage2.py
+train_joint.py
+train_navcnn.py
+train_oocdm.py
+train_oocdm_loop.py
+train_ppo.py
+train_wm_tokens.py
+verify_link_fields.py
+verify_pod_dolphin.py

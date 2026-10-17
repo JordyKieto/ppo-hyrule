@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import os
 import subprocess
 import sys
 import tempfile
@@ -46,7 +47,11 @@ def _corpus(d: Path, n: int = 6, steps: int = 200, dim: int = 24) -> None:
 
 
 def _run(args: list[str], expect_ok: bool = True) -> str:
-    r = subprocess.run([PY, "-u", TRAIN, *args], capture_output=True, text=True, timeout=1800)
+    # ZRL_ALLOW_NO_WANDB is the contract's named override (zelda_rl/eval_log.py): the trainer REFUSES to
+    # start without a durable eval sink, which is the point, and a test is the one place that is fine --
+    # the sink still writes its jsonl, so resume behaviour is unaffected.
+    env = {**os.environ, "ZRL_ALLOW_NO_WANDB": "1"}
+    r = subprocess.run([PY, "-u", TRAIN, *args], capture_output=True, text=True, timeout=1800, env=env)
     out = (r.stdout or "") + (r.stderr or "")
     if expect_ok and r.returncode != 0:
         raise AssertionError(f"train_rvs failed ({r.returncode}) on args {args}:\n{out[-900:]}")

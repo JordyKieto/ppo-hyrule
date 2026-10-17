@@ -949,3 +949,40 @@ other three quarters, which is strictly worse than one pod on the whole corpus, 
    `straggler_wait + 30 s` instead of 600 s.
 4. **An unexplained change in epoch time is a measurement, not an annoyance.** 616 s against 15 s was the
    whole bug, printed every round, in a column I was already reading.
+
+## 43. The experiment contract: a trainer that can lose its own results does not reach a pod
+
+Two losses, eight days apart, same shape — the tool that would have prevented it already existed and the
+script did not call it:
+
+| when | what was lost | the tool that was already there |
+|---|---|---|
+| 2026-10-15 | a 34-pod fleet vanished with **fifteen arms' checkpoints** | `zelda_rl/ckpt_s3.py` (written after) |
+| 2026-10-16 | the consolidated RvS run's **3,118 held-out episodes** — the measurement that answered "does offline RvS match our best PPO at killing" — existed only as `print()` into `logs/consolidated_r*.log` on pod volumes that were then terminated | W&B (§27 says "exported, never linked") and S3 |
+
+The second one is worse than it looks. `train_rvs.py` and `train_wm_obs.py` — both written *during* the
+session that cites §21 and §33 — contained **zero** W&B calls between them. The pre-shutdown save even ran
+and was verified, but its glob was `logs/rvs*.log` and the file was `logs/consolidated_r*.log`, so the
+checkpoints survived and their evidence did not. The WM fleet's ~40 epochs of key-event numbers went the
+same way; the only record is what happened to be pasted into a chat.
+
+**So the rule is not a rule.** `zelda_rl/experiment_contract.py` is checked inside `fleet.cli.rsync` — the
+one function every line of code passes through on its way to a pod — and the push is **refused**:
+
+```
+saves checkpoints           -> must call ckpt_s3.upload beside every torch.save
+evaluates, or prints
+  per-epoch held-out numbers-> must report through zelda_rl.eval_log.EvalSink (jsonl + S3 + W&B, one call)
+opens Dolphin               -> must pin torch to one thread (§28)
+```
+
+`EvalSink` fails at CONSTRUCTION if W&B is unusable, so a credentials problem stops the run before epoch 1
+instead of after forty epochs of evaluations that live in stdout. `ZRL_ALLOW_NO_WANDB=1` (tests, offline
+smoke runs) and `ZRL_FORCE_CONTRACT=1` (deliberate deploy override) are the named, loud escapes.
+
+Scripts that predate the contract are listed in `zelda_rl/experiment_contract_legacy.txt` — reported, not
+enforced, because a check that flags correct work is ignored within a day (§36). Nothing may be added to that
+file; deleting a line puts that script under the contract, which is the right move the next time it runs a
+real experiment. `tests/test_experiment_contract.py` asserts the check fires on each violation, stays quiet
+on a compliant file, honours the exemption marker, and **is actually wired into `rsync`** — the failure mode
+of the last two incidents was a tool nobody called.

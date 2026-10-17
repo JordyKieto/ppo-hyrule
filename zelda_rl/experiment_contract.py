@@ -1,0 +1,117 @@
+"""The gate that stops a non-durable experiment reaching a pod.
+
+Twice this project paid for results and then lost them, and in both cases the tool that would have saved
+them already existed -- the script just did not call it:
+
+  2026-10-15  a 34-pod fleet vanished with FIFTEEN arms' checkpoints        -> zelda_rl/ckpt_s3.py existed
+  2026-10-16  3,118 held-out RvS episodes lived only in print() on a pod    -> W&B and S3 both existed
+
+Rules in a document did not prevent either (AGENTS 21/33/36 say exactly that). So the contract is checked
+where code CROSSES ONTO A POD: `fleet.cli.rsync` calls `enforce()` on every `scripts/*.py` it pushes and
+refuses the push on a violation. There is no step to remember, and the override is named and loud.
+
+    saves checkpoints  -> must back them up with ckpt_s3
+    runs evaluations   -> must report through zelda_rl.eval_log.EvalSink (or eval_fleet's own wandb path)
+    opens Dolphin      -> must pin torch to one thread (AGENTS 28)
+
+Scripts written before the contract are listed in `experiment_contract_legacy.txt`: they are reported, not
+enforced, so the check passes on a healthy tree and only fires on code that is new or touched. A check that
+flags correct work is ignored within a day (AGENTS 36), and a check that cannot fire is decoration -- both
+failure modes are covered by tests/test_experiment_contract.py.
+"""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LEGACY_FILE = Path(__file__).with_name("experiment_contract_legacy.txt")
+EXEMPT = re.compile(r"EXPERIMENT-CONTRACT:\s*exempt")
+OVERRIDE = "ZRL_FORCE_CONTRACT"
+
+
+def legacy() -> set[str]:
+    if not LEGACY_FILE.is_file():
+        return set()
+    return {l.split("#")[0].strip() for l in LEGACY_FILE.read_text().splitlines()
+            if l.strip() and not l.strip().startswith("#")} - {""}
+
+
+def saves_checkpoints(src: str) -> bool:
+    return "torch.save(" in src and ("--out" in src or "checkpoint" in src.lower())
+
+
+def runs_evals(src: str) -> bool:
+    return ("EVAL epoch" in src or "per_episode_out" in src or "per-episode-out" in src
+            or re.search(r"\bef\.evaluate\(|\bevaluate\(ckpt", src) is not None)
+
+
+def opens_dolphin(src: str) -> bool:
+    return "make_env(" in src or "DOLPHIN_BIN" in src
+
+
+def reports_metrics(src: str) -> bool:
+    """A trainer that prints per-epoch held-out numbers is reporting an evaluation, whatever it calls it.
+
+    The first version of this file only looked for "EVAL epoch", so it passed `train_wm_obs.py` -- whose
+    per-epoch skill-vs-persistence and per-event accuracy lines were, that same day, lost with the pods
+    they were printed on. If a number is worth printing every epoch it is worth keeping.
+    """
+    if not saves_checkpoints(src):
+        return False
+    return bool(re.search(r"skill vs persistence|better than doing nothing|val[_ ]?(acc|loss)|"
+                          r"held-?out|balanced", src))
+
+
+def violations(path: Path) -> list[str]:
+    """What this one file breaks. Empty list = compliant (or exempt/legacy)."""
+    try:
+        src = path.read_text()
+    except Exception:                                            # noqa: BLE001
+        return []
+    if EXEMPT.search(src) or path.name in legacy():
+        return []
+    out = []
+    if saves_checkpoints(src) and "ckpt_s3" not in src:
+        out.append("writes checkpoints with no S3 backup: add `from zelda_rl import ckpt_s3` and "
+                   "`ckpt_s3.upload(path, run_name, step)` beside every torch.save")
+    if (runs_evals(src) or reports_metrics(src)) and "EvalSink" not in src and "wandb" not in src:
+        out.append("evaluates into stdout only: use zelda_rl.eval_log.EvalSink (jsonl + S3 + W&B in one "
+                   "call) so the measurement outlives the pod")
+    if opens_dolphin(src) and "set_num_threads" not in src and "torch-threads" not in src:
+        out.append("opens Dolphin without torch.set_num_threads(1) (AGENTS 28): the emulator starves and "
+                   "the env raises 'emulation stalled'")
+    return out
+
+
+def check(paths) -> dict[str, list[str]]:
+    bad = {}
+    for p in paths:
+        p = Path(p)
+        if p.suffix != ".py":
+            continue
+        v = violations(p)
+        if v:
+            bad[p.name] = v
+    return bad
+
+
+def enforce(paths, *, what: str = "push") -> None:
+    """Raise unless every path satisfies the contract. Called from the deploy path, not from a checklist."""
+    bad = check(paths)
+    if not bad:
+        return
+    lines = [f"REFUSING TO {what.upper()}: {len(bad)} file(s) break the experiment contract "
+             f"(zelda_rl/experiment_contract.py)"]
+    for name, vs in sorted(bad.items()):
+        lines.append(f"  {name}")
+        for v in vs:
+            lines.append(f"      - {v}")
+    lines.append(f"  Fix it, add an `EXPERIMENT-CONTRACT: exempt -- <reason>` line, or set {OVERRIDE}=1 to "
+                 f"override deliberately.")
+    msg = "\n".join(lines)
+    if os.environ.get(OVERRIDE) == "1":
+        print(msg + f"\n  {OVERRIDE}=1 -- proceeding anyway.", flush=True)
+        return
+    raise SystemExit(msg)

@@ -33,6 +33,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from zelda_rl import ckpt_s3                        # noqa: E402
 from zelda_rl.policy_io import load_policy          # noqa: E402
 from zelda_rl.ppo import ppo_update_recurrent       # noqa: E402
 from zelda_rl.wm_obs import field_index, load_wm                 # noqa: E402
@@ -196,9 +197,11 @@ def main() -> int:
             t_start = time.time()
         torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "update": upd,
                     "config": {**cfg, **vars(a)}}, out)
+        ckpt_s3.upload(out, f"dream_{out.stem}", upd)         # a dream candidate dies with its pod otherwise
         if snap_dir and upd % a.snapshot_every == 0:
-            torch.save({"model": model.state_dict(), "update": upd, "config": {**cfg, **vars(a)}},
-                       snap_dir / f"{out.stem}.upd{upd:05d}.pt")
+            snap = snap_dir / f"{out.stem}.upd{upd:05d}.pt"
+            torch.save({"model": model.state_dict(), "update": upd, "config": {**cfg, **vars(a)}}, snap)
+            ckpt_s3.upload(snap, f"dream_{out.stem}", upd)
     print(f"done: {a.updates} updates, 0 emulator steps", flush=True)
     return 0
 

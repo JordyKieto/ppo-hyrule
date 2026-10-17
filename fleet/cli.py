@@ -93,6 +93,14 @@ def run(pod: dict, cmd: str, *, check: bool = True, capture: bool = False, timeo
 
 
 def rsync(pod: dict, src: list[str], dest: str, *, pull: bool = False, extra: list[str] | None = None) -> None:
+    # THE GATE. Every line of code reaches a pod through this function, which is why the experiment
+    # contract is checked HERE and not in a checklist: a trainer that writes checkpoints without an S3
+    # backup, or evaluates into stdout, cannot be deployed. Twice this project lost results that were
+    # already paid for because the script simply did not call tools that already existed
+    # (zelda_rl/experiment_contract.py names both incidents). ZRL_FORCE_CONTRACT=1 overrides, loudly.
+    if not pull:
+        from zelda_rl.experiment_contract import enforce
+        enforce([s_ for s_ in src if str(s_).endswith(".py")], what="push to " + pod.get("name", "pod"))
     rsh = f"ssh -i {SSH_KEY} -p {pod['port']} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30"
     remote = f"root@{pod['ip']}:"
     args = ["rsync", "-rlptz", "--no-owner", "--no-group", "-e", rsh, *(extra or [])]

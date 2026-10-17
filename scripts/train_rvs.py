@@ -13,6 +13,7 @@ assumed.
 from __future__ import annotations
 
 import argparse
+import os
 import importlib.util
 import json
 import shutil
@@ -31,6 +32,7 @@ spec = importlib.util.spec_from_file_location("tbh", REPO / "scripts" / "train_b
 tbh = importlib.util.module_from_spec(spec); sys.modules["tbh"] = tbh; spec.loader.exec_module(tbh)
 
 from zelda_rl import ckpt_s3  # noqa: E402
+from zelda_rl.eval_log import EvalSink  # noqa: E402
 from zelda_rl.ppo import RecurrentEntityActorCritic  # noqa: E402
 from zelda_rl.rvs import COND_DIM, TARGET, conditioning, field_offsets  # noqa: E402
 
@@ -122,7 +124,8 @@ def load_all(dirs, limit_per_dir=0, mem_frac: float = 0.55):
 CORPUS = {"episodes": 0, "wins": 0}          # updated by prepare(), printed beside every eval
 
 
-def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> float | None:
+def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]],
+                sink=None) -> float | None:
     """Play the game with the TARGET prompt and print balanced boss damage with its slope.
 
     Reuses scripts/eval_fleet.evaluate rather than reimplementing a rollout -- one tested path, and the
@@ -170,6 +173,17 @@ def online_eval(ckpt: Path, a, ep_i: int, hist: list[tuple[int, float]]) -> floa
     print(f"  EVAL epoch {ep_i}: dmgB(balanced) {bal:.3f} | pooled {pooled:.3f} | ret {ret:.1f} | "
           f"hpLost {hurt:.2f} | wins {wins}/{len(eps)} | slots {len(per)} | "
           f"corpus {CORPUS['episodes']}eps/{CORPUS['wins']}wins{trend}", flush=True)
+    # DURABLE, before this function returns. The previous version of this line WAS the only record of the
+    # consolidated run's 3,118 held-out episodes, and the pods that held it were terminated (eval_log.py).
+    if sink is not None:
+        sink.log(ep_i,
+                 {"boss_damage_balanced": bal, "boss_damage_pooled": pooled, "return": ret,
+                  "hp_lost": hurt, "defeats": wins, "episodes": len(eps), "slots_seen": len(per),
+                  "corpus_episodes": CORPUS["episodes"], "corpus_wins": CORPUS["wins"]},
+                 rows=[{"slot": int(e.get("slot", -1)), "boss_damage": float(e.get("boss_damage", 0)),
+                        "boss_defeated": bool(e.get("boss_defeated")), "return": float(e.get("return", 0.0)),
+                        "hp_lost": float(e.get("hp_lost", 0.0)), "end": str(e.get("end", "")),
+                        "checkpoint": str(ckpt)} for e in eps])
     return bal
 
 
@@ -379,6 +393,13 @@ def main() -> int:
 
     best, best_dmg, hist = (0.0, -1), (0.0, -1), []
     print(f"\n{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val acc':>9}{'val WIN acc':>13}")
+    # THE EVAL SINK, built BEFORE training starts so a credentials problem stops the run here instead of
+    # after forty epochs of evaluations that only exist in this process's stdout (zelda_rl/eval_log.py).
+    sink = EvalSink(run_label=f"{Path(a.out).stem}_r{a.fleet_rank}",
+                    project=os.environ.get("ZRL_WANDB_PROJECT", "zelda-rl-rvs"),
+                    group=a.fleet_experiment or Path(a.out).stem,
+                    rank=a.fleet_rank, config=vars(a))
+
     link = None
     if a.fleet_experiment and a.fleet_world_size > 1:
         try:
@@ -456,7 +477,7 @@ def main() -> int:
             out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
             save_ckpt(out, ep_i, score)
         if do_eval:
-            ev = online_eval(Path(a.out), a, ep_i, hist)
+            ev = online_eval(Path(a.out), a, ep_i, hist, sink)
             if a.dyna_dir and Path(a.dyna_dir).is_dir():
                 # DYNA refresh: the episodes just played are now on disk in corpus format. Reload with the
                 # static dirs FIRST (they are the anchor and are never dropped) plus the fresh dir, and

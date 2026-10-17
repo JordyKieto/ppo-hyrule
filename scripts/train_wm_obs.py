@@ -35,6 +35,7 @@ THE CONTROLS, which decide whether any of it means anything (AGENTS 1):
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import math
 import sys
@@ -50,6 +51,7 @@ import torch.nn.functional as F
 # repo cannot import zelda_rl without this -- which is how lifting ObsWM into the package broke the run.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl import ckpt_s3  # noqa: E402
+from zelda_rl.eval_log import EvalSink  # noqa: E402
 from zelda_rl.wm_obs import (N_DIRS, ObsWM, column_weight, field_index, gate_pos_weight,  # noqa: E402
                              event_accuracy, fields_from_checkpoint, key_event_masks,
                              layout_width, load_episodes, step_weight)
@@ -326,6 +328,14 @@ def main() -> int:
         model.train()
         return {h: {k: float(np.mean(v)) if v else float("nan") for k, v in d.items()} for h, d in res.items()}
 
+    # Every epoch's verdict goes to W&B + S3 as it is produced. Today's fleet printed ~40 epochs of these
+    # numbers into pod logs and the pods were terminated, so the only record of the key-event experiment is
+    # what happened to be pasted into a chat (zelda_rl/eval_log.py).
+    sink = EvalSink(run_label=f"{Path(a.out).stem}_r{a.fleet_rank}",
+                    project=os.environ.get("ZRL_WANDB_PROJECT", "zelda-wm"),
+                    group=a.fleet_experiment or Path(a.out).stem,
+                    rank=a.fleet_rank, config=vars(a))
+
     hist_sk: list[float] = []
     link = None
     if a.fleet_experiment and a.fleet_world_size > 1:
@@ -397,6 +407,10 @@ def main() -> int:
         # project lost weights that way (AGENTS 36 row 7). A rule is not a check (AGENTS 21).
         ckpt_s3.upload(out, f"wm_obs_r{a.fleet_rank}", ep)
         h1, h20, h100 = m[1], m[20], m[100]
+        sink.log(ep, {"train_loss": tl / max(n, 1), "val_loss": vl, "stage": stage,
+                      **{f"h{h}_{k}": v for h, d in m.items() for k, v in d.items()},
+                      **{f"h{h}_skill": 1 - d["model"] / max(d["persist"], 1e-9) for h, d in m.items()},
+                      "action_penalty_h20": h20["shuf"] / max(h20["model"], 1e-9)})
         print(f"{ep:>5}{stage:>7}{tl / max(n,1):>10.4f}{vl:>10.4f}   "
               f"{h1['model']:.3f}/{h1['persist']:.3f}/{h1['shuf']:.3f}   "
               f"{h20['model']:.2f}/{h20['persist']:.2f}/{h20['shuf']:.2f}   "
@@ -420,7 +434,10 @@ def main() -> int:
                   f"t={tt:+.2f} -> {'IMPROVING' if tt > 2 else 'GETTING WORSE' if tt < -2 else 'FLAT'} "
                   f"over {len(y)} epochs", flush=True)
         if ep % max(1, a.event_every) == 0:
-            for k_, v_ in event_report(val).items():
+            _ev = event_report(val)
+            sink.log(ep, {f"{k_}_{mk}": mv for k_, v_ in _ev.items() for mk, mv in v_.items()
+                          if isinstance(mv, (int, float, bool))})
+            for k_, v_ in _ev.items():
                 if not v_["n_events"]:
                     continue
                 print(f"      Q3 {k_:<12} {v_['n_events']:>4} events | MISSED {100*v_['missed']:5.1f}% | "
