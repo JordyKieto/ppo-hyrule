@@ -1672,3 +1672,40 @@ Close these before any of them enters a paper.
 |---|---|---|---|
 | WM, key-event penalties | `gohma-wm` r0–r3 (4×H100) | resumed from epoch 7 (`wm_e7_preKeyEvents.pt`), `--key-weight 20 --key-pos-weight 50 --key-halluc-weight 5 --death-weight 50 --event-every 1`, sync fixed | pending |
 | Full Dyna loop | `gohma-la` r0/r1/r2/r8, `gohma-rvs` r0/r1 (6×16-vCPU) | `dyna_loop.py --anchor gohma-kl-v15-r4_latest.pt --iters 12 --episodes-collect 60 --workers 8 --wm-epochs 2 --dream-transitions 200000 --eval-episodes 20 --slots 3,4,5,6,7,8`; 20 eval episodes × 6 pods = 120 per iteration (the n §30 demands) | collecting at 32–222 steps/s |
+
+---
+
+## 8. Session 2026-10-16 (evening): the Dyna loop ran nine iterations and the WM killed it
+
+The fleet was stopped by RunPod — `"Exited by Runpod"` on all four GPU pods at **20:56:26 UTC**, the six CPU
+pods and two eval pods terminated — i.e. the account balance ran out while the session was unattended. What
+follows is everything recoverable without resuming a pod.
+
+### Dyna loop (RL × WM)
+
+| row | claim | class | artefact |
+|---|---|---|---|
+| D1 | The full loop ran **9 iterations on each of 6 pods**, 17:12–19:26 UTC: collect 60 real games → obs-space WM (3 epochs, key-event penalties) → WM verdict → dream-PPO from the anchor → real eval on the loop's own slots → accept/roll back | **M** | `results/dyna3_loop_evals.json` (50 evaluations recovered from W&B `zelda-rl-dyna`), W&B runs `eval-dyna3_*_iter*_eval` |
+| D2 | **Every dream-trained candidate scored 0 defeats: 0/607 real episodes**, against the v15 anchor's 5.00% (6/120, R98) | **M** | same |
+| D3 | Candidate balanced boss damage by iteration: 2.90, 2.45, 2.15, 2.21, 2.19, 2.17, 2.40, 2.21, 2.19 — trend **−0.056 ± 0.033/iteration, t=−1.70 (flat)**, all below v15's measured 2.88 | **M** | same |
+| D4 | **RETRACTION of the loop's own anchor decision.** With `base is None` accepting unconditionally, iteration 0 replaced v15 (5.00% kills, measured) with its own dream candidate **without ever scoring v15**. Every later iteration was then correctly rejected — against a baseline already worse than the policy the loop was given. Fixed: `anchor_decision()` returns `needs_baseline`, the loop scores the anchor first, `tests/test_dyna_anchor.py` asserts it | **M** | `scripts/dyna_loop.py`, `tests/test_dyna_anchor.py` |
+| D5 | The loop's per-episode trajectories survive (the collector uploads each episode to S3 as it is written); the loop's WMs, candidate policies and eval jsonl do not — those pods were terminated | **I** | S3 `zelda/ppo/gohma_steps2/`, absence of `zelda/save/dyna3_*` |
+
+### WM (key-event penalties)
+
+| row | claim | class | artefact |
+|---|---|---|---|
+| W47 | The penalties opened the gate: boss-damage **missed fell from 100% to 4.3–29.3%**, Link-damage to 0–4.6%, with positive magnitude skill on firing ticks (boss +0.01…+0.34, Link +0.52…+0.78) | **M** | pod logs `logs/wm_r{0,1,2,3}.log` at epoch ~38 (read live; the files are on stranded volumes) |
+| W48 | They also made it fire on **everything**: 912–1000 hallucinated boss-damage events per 1,000 quiet ticks, precision 0.003–0.008, phantom drift **0.1–0.24 of the HP bar per tick** | **M** | same |
+| W49 | Free-running rollouts therefore diverged: H20 model 0.99–9.34 against persistence 0.44–0.50, H100 up to 48.6 against 0.95; rank 2 **getting worse at −0.347 ± 0.105/epoch, t=−3.32** | **M** | same |
+| W50 | **The distributed average works for the first time**: `sync_ranks: 4, aggregator: 0, weight_hash 1d483d441806` identical across ranks at epoch 38 (fix of W45) | **M** | same |
+| W51 | One reading of **action-conditioning** on rank 3: shuffled-action penalty ×1.27 (every other reading 0.92–1.03). Single reading, not a trend | **Q** | same |
+| W52 | **The WM checkpoints are stranded.** `ckpt_s3` was wired into `train_rvs.py` only, so ~40 epochs of key-event training exist solely on four EXITED pod volumes — the second loss of this kind (AGENTS 36 row 7). `train_wm_obs.py` now uploads every epoch | **M** | `scripts/train_wm_obs.py`, S3 `zelda/ckpt/` empty |
+
+### The causal reading
+
+D2/D3 and W48/W49 are one finding: a world model that hallucinates a fifth of a health bar per tick cannot
+train a policy. The dream's Gohma dies on her own, so the dream's reward is uninformative, and the policy that
+comes back is worse than the one that went in — which the real-game eval caught every time after iteration 0.
+**The loop's machinery is validated; its model is not.** The WM has to clear persistence before the loop can
+contribute anything, and that is now measured rather than predicted.

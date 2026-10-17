@@ -49,6 +49,7 @@ import torch.nn.functional as F
 # python puts the SCRIPT's directory on sys.path, not the repo root, so `python3 scripts/x.py` from the
 # repo cannot import zelda_rl without this -- which is how lifting ObsWM into the package broke the run.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from zelda_rl import ckpt_s3  # noqa: E402
 from zelda_rl.wm_obs import (N_DIRS, ObsWM, column_weight, field_index, gate_pos_weight,  # noqa: E402
                              event_accuracy, fields_from_checkpoint, key_event_masks,
                              layout_width, load_episodes, step_weight)
@@ -390,6 +391,11 @@ def main() -> int:
                     "scales": scales.cpu().numpy(), "obs_dim": obs_dim, "n_actions": n_actions,
                     "hidden": a.hidden, "gru": a.gru, "fields": fields, "config": vars(a),
                     "metrics": m}, out)
+        # S3 AT WRITE TIME, not at session end. On 2026-10-16 RunPod stopped this very fleet ("Exited by
+        # Runpod", all four ranks at 20:56 UTC) with ~40 epochs of key-event training on the pod volumes and
+        # NO copy anywhere else, because ckpt_s3 was wired into train_rvs.py only -- the second time this
+        # project lost weights that way (AGENTS 36 row 7). A rule is not a check (AGENTS 21).
+        ckpt_s3.upload(out, f"wm_obs_r{a.fleet_rank}", ep)
         h1, h20, h100 = m[1], m[20], m[100]
         print(f"{ep:>5}{stage:>7}{tl / max(n,1):>10.4f}{vl:>10.4f}   "
               f"{h1['model']:.3f}/{h1['persist']:.3f}/{h1['shuf']:.3f}   "
@@ -442,6 +448,7 @@ def main() -> int:
                     "scales": scales.cpu().numpy(), "obs_dim": obs_dim, "n_actions": n_actions,
                     "hidden": a.hidden, "gru": a.gru, "fields": fields, "config": vars(a),
                     "metrics": ck_m}, out)
+        ckpt_s3.upload(out, f"wm_obs_r{a.fleet_rank}", start - 1)
         print(f"\nNO EPOCHS RAN: the checkpoint is at epoch {start - 1} and --epochs is {a.epochs}. "
               f"Metadata (fields, scales, config) refreshed at {out}; pass a larger --epochs to train.",
               flush=True)

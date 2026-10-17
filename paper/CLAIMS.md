@@ -142,3 +142,13 @@ could not be defended six months later. Fill a row when the measurement happens,
 | The obs-space WM loses to persistence at every horizon at epoch 7 | **M** | `runs/wm_obs/status_r1.json` | skill −0.029 → −0.733 |
 | The WM's change gate ranks damage events well (AUC 0.884) but never fires at 0.5 | **M** | same | motivates the key-event penalties |
 | The 4×H100 WM run was four independent models, not a sharded fleet | **M** | pod logs + `tests/test_fleet_sync_device.py` | retraction of an earlier claim |
+
+## Session 2026-10-16 (evening)
+
+| Claim | Class | Artefact | Note |
+|---|---|---|---|
+| A closed Dyna loop (real games → WM → dream-PPO → real eval → accept/rollback) ran 9 iterations × 6 pods | **M** | `results/dyna3_loop_evals.json` | machinery validated, 607 real eval episodes |
+| Dream-trained candidates scored 0/607 defeats against the anchor's 5.00% | **M** | same | the WM, not the loop, is the blocker |
+| Candidate damage flat-to-declining across iterations (−0.056 ± 0.033, t=−1.70) | **M** | same | no iteration beat v15's measured 2.88 |
+| Key-event penalties cut the WM's missed boss-damage events from 100% to 4–29% | **M** | pod logs, epoch ~38 | and raised hallucination to ~1000/1k quiet ticks |
+| The 4-rank weight average is confirmed working (identical hash across ranks) | **M** | pod logs, epoch 38 | fixes the W45 retraction |

@@ -72,6 +72,19 @@ def read_eval(path: Path) -> dict | None:
             "kill_rate": kills / max(len(rows), 1)}
 
 
+def anchor_decision(base: dict | None, cand: dict) -> str:
+    """"accepted" / "rejected" / "needs_baseline" -- the loop's only accept rule, in one testable place.
+
+    `needs_baseline` exists because the alternative is what happened on 2026-10-16: with no measurement of
+    the policy the loop was given, iteration 0 accepted its own dream candidate unconditionally and the
+    anchor went from 5.00% kills (v15, 6/120 measured) to a candidate that scored 0 defeats in 607 real
+    episodes. The loop must score the anchor first; it may never accept against `None`.
+    """
+    if base is None:
+        return "needs_baseline"
+    return "accepted" if cand["dmg_balanced"] > base["dmg_balanced"] else "rejected"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="run directory under runs/")
@@ -217,8 +230,35 @@ def main() -> int:
 
             # 6. ANCHOR: keep the better policy BY REAL EVAL. A regression is rolled back, because the paper's
             #    unanchored runs collapsed with no in-dream signal that anything was wrong.
+            #
+            # THE ANCHOR IS SCORED BEFORE IT CAN BE REPLACED. With `base is None` accepting
+            # unconditionally, iteration 0 handed the anchor to its own dream candidate without ever
+            # measuring the policy it started from -- and on 2026-10-16 that cost the loop its anchor: v15
+            # kills 5.00% of episodes (6/120, measured) and the iteration-0 dream candidate that replaced it
+            # scored 0 defeats in 607 episodes across six pods and nine iterations. Every later iteration was
+            # then correctly rejected against a candidate that was already worse than the policy the loop was
+            # given. An unmeasured baseline is not a baseline (AGENTS 1).
             base = st.get("anchor_score")
-            if base is None or cand_score["dmg_balanced"] > base["dmg_balanced"]:
+            if base is None:
+                per_ep0 = run / f"{tag}_anchor_eval.jsonl"
+                rc0 = sh([PY_, "-u", "scripts/eval_fleet.py", "--ckpt", st["anchor"], "--slots", a.slots,
+                          "--episodes-per-slot", str(max(1, a.eval_episodes // len(a.slots.split(",")))),
+                          "--episode-seconds", "120", "--num-envs", str(a.workers),
+                          "--slots-dir", "assets/states", "--video-backend", "Null",
+                          "--per-episode-out", str(per_ep0), "--out", str(run / f"{tag}_anchor_eval.json"),
+                          "--fleet-world-size", "1", "--run-name", f"{a.run}_{tag}_anchor",
+                          "--wandb-project", "zelda-rl-dyna", "--wandb-group", f"{a.run}_anchor"],
+                         run / f"{tag}_anchoreval.log")
+                base = read_eval(per_ep0)
+                if rc0 != 0 or base is None:
+                    raise SystemExit(f"{tag}: could not score the ANCHOR (rc={rc0}); refusing to replace a "
+                                     f"policy whose real-game performance is unknown -- see "
+                                     f"{run / f'{tag}_anchoreval.log'}")
+                st["anchor_score"] = base
+                rec["anchor_score_measured"] = base
+                print(f"{tag}: anchor scored {base['dmg_balanced']:.2f} balanced damage, "
+                      f"{base['kills']}/{base['episodes']} kills", flush=True)
+            if anchor_decision(base, cand_score) == "accepted":
                 print(f"{tag}: ANCHOR MOVES to the candidate "
                       f"({cand_score['dmg_balanced']:.2f} vs {base and base['dmg_balanced']})", flush=True)
                 st["anchor"], st["anchor_score"] = str(cand), cand_score
