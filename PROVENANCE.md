@@ -1825,3 +1825,77 @@ nothing else:
 Those are **training-set** curves over four epochs; they say the loader and the widened init train, and
 nothing about play. Logs rescued to `runs/rescue_r*/logs/rvsv15_r*.log` before the fleet was terminated.
 Cost: 18 pods × ~34 min at $8.96/hr ≈ $5.
+
+## 12. `gohma-rvs2-rvsv15b`: RvS from v15 UNLEARNS the policy — **M**, retracts nothing, kills a hypothesis
+
+7 pods, Dyna-style RvS resumed from the v15 PPO lineage (exact zero-column widening, corrected prompt
+placement `obs 1036 = global 297 + cond 3 + 16 x 46`), `lr 3e-4`, `--win-share 0.3`, 24-episode online eval
+every 4 epochs at a 300 s cap, every eval absorbed into the corpus. FedAvg genuinely averaged all 7
+(`sync_ranks: 7`, identical `weight_hash ddd20d11f4af`). Rows: `results/rvsv15b/runs/evals/*.jsonl`
+(936 episodes, 7 ranks) + W&B `zelda-rl-rvs` + S3.
+
+**Pooled balanced boss damage** (unweighted mean of per-slot means, mix-invariant per §29; 24 eps × 6 slots
+per rank-eval):
+
+| epoch | pooled | ±SE | ranks |
+|---|---|---|---|
+| 8 | 2.095 | 0.178 | 7 |
+| 12 | 1.804 | 0.134 | 7 |
+| 16 | 1.431 | 0.130 | 6 |
+| 20 | 1.444 | 0.120 | 6 |
+| 24 | **1.000** | 0.122 | 6 |
+
+**Slope −0.0639 ± 0.0109 dmg/epoch, t = −5.86** over 32 rank-evals. For reference, v15 itself measures
+**3.526 ± 0.137** (§10) and the legacy `rvs_dyna.pt` 1.311 ± 0.081. So the run fell below the checkpoint it
+was meant to beat, from an init that was 3.5.
+
+**Train accuracy rose the whole time** (7.9% → 24%) while play collapsed: the supervised objective and the
+game disagree, which is §34 in reverse. The natural experiment inside the fleet confirms direction — rank 4
+lagged 12 epochs and scored **best** (2.46 balanced at epoch 16 vs ~1.0 at epoch 24). Less training, better
+play.
+
+**Conclusion.** Full-episode undiscounted credit — RvS's structural advantage over v15's 1.8 s advantage
+horizon — does not rescue offline RvS on this corpus. Horizon was never the binding constraint.
+
+### The mechanism, measured, and the deviation that caused it
+
+`train_rvs.py` sharded the corpus **stratified**, human included, so each of 7 ranks held **13–15 of the 100
+human episodes, disjoint from its peers'**. The module's own docstring defended it ("anchoring is preserved
+by composition, not by duplication") — a direct contradiction of §40.3, *"the scarce class stays whole on
+every rank, because sharding the anchor dilutes the only thing that drives the metric"*, decided inside a
+commit rather than proposed (§13).
+
+Signature, at matched epochs, same objective:
+
+| rank | r0 | r2 | r3 | r4 | r6 | r8 | r9 |
+|---|---|---|---|---|---|---|---|
+| human eps | 15 | 14 | 14 | 14 | 14 | 14 | 13 |
+| val WIN acc | 27.5% | 13.4% | 12.6% | 33.2% | 14.4% | 9.7% | 27.5% |
+
+**3.4× spread** — seven models each overfitting a different fourteen demonstrations, then averaged. And the
+`--win-share` solver made it worse as Dyna grew: the multiplier climbed 1.10 → 1.55 to hold wins at 30%,
+concentrating an ever-larger share of the gradient onto those same fourteen episodes.
+
+**The human gradient share itself was NOT being eroded**, which was the first hypothesis and is now measured
+and excluded: over six Dyna refreshes human held **17.8% → 17.1%** of the gradient. But only because the
+policy's own play won almost nothing (1 win in 15 absorbed episodes). Simulated at the real solver
+arithmetic, 1,500 Dyna wins take human from **23.3% → 8.8%** (`tests/test_human_anchor.py`), i.e. the
+protection was luck, not design.
+
+## 13. `gohma-rvs2-anchor`: the one change the above licenses — **U** until it has 3 evals
+
+Same 7 pods, same config, same v15 init (`rvs_anchor.pt.last.pt`, md5 `c4877a79583812c15c864a653789b1c3`,
+byte-identical to `rvs_from_v15.pt`), cold Adam, epoch 1. Two changes, both authored by the §12 measurement:
+
+1. **The human anchor is whole on every rank** — verified on the pods: `{'human': 100, ...}` and human steps
+   **54,626 identical on all 7 ranks**. Failures and PPO wins stay sharded (~4.0× faster epoch).
+2. **`--human-share 0.2` pins human to an exact fraction of the gradient**, re-solved on every Dyna refresh,
+   so absorbing more of the policy's own play cannot erode it. Verified on every rank:
+   `ACHIEVED: human 20.0% of the gradient, all wins 30.0%`.
+
+Note the direction: with the anchor whole and failures sharded, human is now ~50% of each rank's steps, so
+pinning at 20% **down-weights** it per step (multiplier 0.23–0.26). The intended gain is **diversity** — 100
+distinct demonstrations per rank instead of 14 — at roughly the previous gradient share (17% → 20%), not
+more human weight.
+
+§12 is the control for this run: same init, same everything else, 936 episodes of baseline.

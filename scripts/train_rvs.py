@@ -201,6 +201,11 @@ def main() -> int:
                          "solved from the corpus to hit it. A fixed multiplier is the wrong knob: 20x was "
                          "sized for a ~1%%-win PPO corpus and on a 48%%-win mix it put wins at 93%% of the "
                          "gradient, which is plain BC with extra steps")
+    ap.add_argument("--human-share", type=float, default=0.0,
+                    help="pin HUMAN play to this exact fraction of the gradient, re-solved on every Dyna "
+                         "refresh, so absorbing more of the policy's own episodes cannot erode it. Must be "
+                         "below --win-share (human play is a subset of winning play). 0 = off, i.e. human "
+                         "is weighted as an ordinary win and its share drifts with the corpus")
     ap.add_argument("--win-weight", type=float, default=0.0,
                     help="override the solved multiplier (0 = solve it from --win-share)")
     ap.add_argument("--epochs", type=int, default=40)
@@ -271,6 +276,12 @@ def main() -> int:
     if a.num_envs and a.num_envs != a.eval_envs:
         print(f"--num-envs {a.num_envs} (fleet) vs --eval-envs {a.eval_envs} (explicit): using "
               f"{a.eval_envs} for the online eval, which is the only thing that opens envs here", flush=True)
+    # ARGUMENT VALIDATION BEFORE THE EXPENSIVE LOAD. The in-solver guard below is the backstop, but it
+    # only fires after load_all() has read the whole corpus -- minutes of work to reject a typo.
+    if a.human_share > 0.0 and a.human_share >= a.win_share:
+        raise SystemExit(f"--human-share {a.human_share} must be BELOW --win-share {a.win_share}: human "
+                         f"play is a subset of winning play, so it cannot carry a larger share of the "
+                         f"gradient than the class containing it.")
     if a.seed is not None:
         torch.manual_seed(a.seed); np.random.seed(a.seed)
 
@@ -304,12 +315,23 @@ def main() -> int:
             buckets: dict[str, list] = {}
             for e in eps:
                 buckets.setdefault(klass(e), []).append(e)
-            eps = [e for k in sorted(buckets)
-                   for e in buckets[k][a.fleet_rank::a.fleet_world_size]]
-            got = {k: len(buckets[k][a.fleet_rank::a.fleet_world_size]) for k in sorted(buckets)}
-            print(f"  shard {a.fleet_rank}/{a.fleet_world_size} (stratified): {got} -> {len(eps)} of "
-                  f"{n_before} episodes (~{n_before/max(len(eps),1):.1f}x faster epoch; every class keeps "
-                  f"its proportion and the average recombines all ranks)", flush=True)
+            # THE HUMAN ANCHOR IS NOT SHARDED. AGENTS §40.3: "the scarce class stays whole on every rank,
+            # because sharding the anchor dilutes the only thing that drives the metric." The previous
+            # version split it stratified 7 ways and argued in its own docstring that composition preserves
+            # anchoring. Measured on `gohma-rvs2`, it does not: each rank held 13-15 of the 100 human
+            # episodes, DISJOINT from its peers', and val-WIN accuracy spread 3.4x across ranks at the same
+            # epoch (9.7% to 33.2%) -- seven models each overfitting a different fourteen demonstrations,
+            # then averaged. Balanced boss damage fell -0.0639 +- 0.0109 per epoch (t=-5.86) while train
+            # accuracy climbed, and the rank twelve epochs BEHIND played best.
+            shardable = [k for k in sorted(buckets) if k != "human"]
+            eps = list(buckets.get("human", [])) + [e for k in shardable
+                                                    for e in buckets[k][a.fleet_rank::a.fleet_world_size]]
+            got = {"human": len(buckets.get("human", []))}
+            got.update({k: len(buckets[k][a.fleet_rank::a.fleet_world_size]) for k in shardable})
+            print(f"  shard {a.fleet_rank}/{a.fleet_world_size}: {got} -> {len(eps)} of {n_before} episodes "
+                  f"(human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch "
+                  f"is ~{n_before/max(len(eps),1):.1f}x faster and the average recombines the shards)",
+                  flush=True)
         wins = [e for e in eps if e["win"]]
         lim_ = _mem_limit()
         print(f"corpus holds {getattr(load_all, 'gib', 0):.1f} GiB in RAM"
@@ -328,24 +350,62 @@ def main() -> int:
         # Solve the multiplier so winning play lands at --win-share of the gradient. w = s(1-p)/(p(1-s)) where
         # p is the winning fraction of STEPS, so the knob is the share we want and not a guess that only
         # happens to be right for one corpus composition.
+        def is_human(e):
+            return "human" in (str(e.get("src", "")) + " " + str(e.get("file", ""))).lower()
+
         win_steps = sum(len(e["act"]) for e in eps if e["win"])
         all_steps = sum(len(e["act"]) for e in eps)
         p_ = win_steps / max(all_steps, 1)
+        hum_steps = sum(len(e["act"]) for e in eps if is_human(e))
+        oth_win_steps = sum(len(e["act"]) for e in eps if e["win"] and not is_human(e))
+        loss_steps = all_steps - win_steps
+
+        # PIN THE HUMAN SHARE so absorbing more Dyna cannot erode it.
+        #
+        # --win-share alone pins the WIN class, and human is a sub-class of it, so human's share drifts with
+        # whatever else happens to win. Measured over six Dyna refreshes on `gohma-rvs2`, human held 17.8%
+        # -> 17.1% of the gradient, which sounds safe -- but that is only because the policy's own play won
+        # almost nothing (1 win in 15 episodes). The moment Dyna starts winning, those wins enter the SAME
+        # class as the human demonstrations and take share from them, exactly when the policy's own play is
+        # least worth imitating. --human-share removes the coupling: human is solved to an exact fraction of
+        # the gradient and stays there whatever the corpus does.
+        #
+        # Three classes, losses as the unit, so the shares are exact rather than approached:
+        #     loss_w = 1                       -> T = loss_steps / (1 - win_share)
+        #     human multiplier  mh = human_share       * T / human_steps
+        #     other-win mult    mw = (win_share - human_share) * T / other_win_steps
         if a.win_weight > 0:
-            solved = a.win_weight
+            solved, mh, mw = a.win_weight, a.win_weight, a.win_weight
+        elif a.human_share > 0.0 and hum_steps > 0 and loss_steps > 0 and 0.0 < a.win_share < 1.0:
+            if a.human_share >= a.win_share:
+                raise SystemExit(f"--human-share {a.human_share} must be BELOW --win-share {a.win_share}: "
+                                 f"human play is a subset of winning play, so it cannot carry a larger "
+                                 f"share of the gradient than the class containing it.")
+            T = loss_steps / (1.0 - a.win_share)
+            mh = a.human_share * T / hum_steps
+            mw = ((a.win_share - a.human_share) * T / oth_win_steps) if oth_win_steps > 0 else 0.0
+            solved = mh
         elif 0.0 < a.win_share < 1.0 and 0.0 < p_ < 1.0:
             solved = (a.win_share * (1 - p_)) / (p_ * (1 - a.win_share))
+            mh = mw = solved
         else:
-            solved = 1.0
-        print(f"  winning play is {100*p_:.1f}% of steps; multiplier {solved:.2f} to reach "
-              f"{100*a.win_share:.0f}% of the gradient")
-        tot_w = win_w = 0.0
+            solved = mh = mw = 1.0
+        print(f"  steps: human {hum_steps:,} / other-wins {oth_win_steps:,} / losses {loss_steps:,} "
+              f"(wins {100*p_:.1f}% of steps)")
+        print(f"  multipliers: human {mh:.2f}, other-win {mw:.2f}, loss 1.00"
+              + (f"  [human pinned to {100*a.human_share:.0f}% of the gradient]" if a.human_share > 0 else ""))
+        tot_w = win_w = hum_w = 0.0
         for e in eps:
-            w = solved if e["win"] else 1.0
+            w = (mh if is_human(e) else (mw if e["win"] else 1.0))
             e["w"] = np.full(len(e["act"]), w, np.float32)
             tot_w += w * len(e["act"])
-            win_w += (w * len(e["act"]) if e["win"] else 0.0)
-        print(f"  -> winning play is {100*win_w/max(tot_w,1e-9):.1f}% of the gradient")
+            if e["win"]:
+                win_w += w * len(e["act"])
+            if is_human(e):
+                hum_w += w * len(e["act"])
+        # ACHIEVED, not intended: the only line worth reading here (AGENTS §36 -- check the artefact).
+        print(f"  -> ACHIEVED: human {100*hum_w/max(tot_w,1e-9):.1f}% of the gradient, "
+              f"all wins {100*win_w/max(tot_w,1e-9):.1f}%", flush=True)
 
         rng = np.random.default_rng(0)
         order = rng.permutation(len(eps))
