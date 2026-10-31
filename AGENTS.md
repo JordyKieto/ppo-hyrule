@@ -1123,3 +1123,46 @@ instance of the same mistake in one day:
 machine, the question is not only "what check would have caught this" but "could that check have run before
 the pods existed". Parses, imports, argv, config arithmetic and contract gates all can. Put them on the Mac,
 in the path that pushes.
+
+## 47. "I'll report when X" is a lie unless the watch is armed in the same message
+
+Across one session the user asked "status?" five times, and five times the previous message had ended with a
+promise to report: *"I'll report the first pooled eval as soon as an update exists on enough ranks"*,
+*"I'll report the slope at five points"*, *"I'll report pooled boss damage with its SE once three evals
+exist per rank"*. **Every one of those reports arrived only because the user asked for it.** The intention
+was real and worth nothing. The user: *"you NEVER actually monitor! i need to prompt you EACH time."*
+
+This is not a politeness problem. A promised report that does not arrive means a run can regress, crash or
+idle for the whole gap, and §36's thirty dead pods billing at $16/hr is what that costs.
+
+**The rule.** Do not write "I'll report X when Y" unless the mechanism that delivers it is armed **in the
+same response**. If nothing is armed, the honest sentence is "ask me and I'll check", or just check now.
+
+And a watch covers **failure as well as progress** — a filter that matches only the metric line is silent
+through a crashloop, and silence is indistinguishable from health (§24 made this point about logs; it is
+equally true of watches). The poll emits on: the pooled metric changing, zero live pods, and
+`fleet_health.py` reporting crashed/unreachable/non-zero-exit.
+
+### What the instruments actually are, so a fifth script is never written
+
+| question | command | notes |
+|---|---|---|
+| is anything working / is it improving | `scripts/fleet_signal.py --experiment E` | pooled over FedAvg ranks, `last` / `POOLED` / `±SE` / slope / t, `VERDICT` line |
+| is anything dead | `scripts/fleet_health.py` | crash vs clean exit, disk, log freshness, non-zero exit |
+| held-out claim | `scripts/eval_compare.py` | slow by construction; the wrong tool for "is it learning" (§31) |
+
+**Two bugs found in `fleet_signal.py` the moment it was pointed at a live fleet**, both of which had made it
+useless for exactly the runs it was written to watch:
+
+1. It printed **one row per rank** of a FedAvg fleet while its own docstring promised "FedAvg ranks are
+   pooled into one row per group, never ranked individually" — because an arm's label is its log filename
+   and every launcher ends that with `-r<N>`. The table invited the per-rank reading the docstring forbids,
+   and "rank r0 is climbing" has been retracted twice in this project. Now grouped by stripping the rank
+   suffix.
+2. The pooled row took its unit label from `members[0]`, which may be a rank whose first eval has not
+   landed, so an epoch-indexed run printed `/upd`.
+
+Which is the §43/§44 shape once more: **a tool nobody has pointed at the live thing is not a working tool.**
+The first number it printed (1.14 against six EVAL lines averaging 1.26) also had to be reconciled by hand
+before it could be quoted — it was correct for the three ranks that had reported at that instant, and that
+is five seconds well spent rather than a number repeated blind.

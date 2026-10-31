@@ -121,6 +121,36 @@ def main() -> int:
                     unit = "epoch"
         arms.append({"exp": exp, "rank": rank, "name": label or "?", "u": seen, "unit": unit})
 
+    # POOL THE FedAvg RANKS. This file's own docstring has always said "FedAvg ranks are pooled into one row
+    # per group, never ranked individually" -- and it printed one row PER RANK, because an arm's label is its
+    # log filename and every launcher ends that with `-r<N>`. So the table invited exactly the per-rank
+    # reading the docstring forbids ("rank r0 is climbing" has been retracted twice here). Ranks of one
+    # FedAvg group share a weight average: they are one model, and their evals are one sample.
+    def group_of(name: str) -> str:
+        return re.sub(r"[-_]r\d+$", "", name)
+
+    groups: dict[str, list] = {}
+    for arm in arms:
+        groups.setdefault((arm["exp"], group_of(arm["name"])), []).append(arm)
+    pooled_arms = []
+    for (exp, gname), members in groups.items():
+        if len(members) == 1:
+            pooled_arms.append(members[0])
+            continue
+        merged: dict[int, list] = {}
+        for m in members:
+            for k, v in m["u"].items():
+                merged.setdefault(k, []).append(v)
+        pooled_arms.append({"exp": exp, "rank": f"x{len(members)}", "name": gname,
+                            "u": {k: sum(v) / len(v) for k, v in merged.items()},
+                            # the unit comes from a member that HAS data: members[0] may be a rank whose
+                            # first eval has not landed, and its default label ("upd") then mislabels the
+                            # whole pooled row as update-indexed when it is epoch-indexed
+                            "unit": next((m["unit"] for m in members if m["u"]), members[0]["unit"]),
+                            "n_ranks": len(members),
+                            "spread": {k: v for k, v in merged.items()}})
+    arms = pooled_arms
+
     print(f"{'arm':24} {'pod':12} {'n':>3} {'last':>6} {'POOLED':>6} {'+-SE':>6} "
           f"{'slope':>9} {'SE':>7} {'t':>6}")
     for arm in sorted(arms, key=lambda x: x["name"]):
@@ -138,7 +168,7 @@ def main() -> int:
         # on noise (AGENTS 35 rule 2); the pooled mean uses n_evals x 24 episodes.
         pooled = float(d.mean())
         pse = float(d.std(ddof=1) / len(d) ** 0.5) if len(d) > 1 else float("nan")
-        print(f"{arm['name']:24} {arm['exp'][-4:]+' r'+str(arm['rank']):12} {len(u):3d} "
+        print(f"{arm['name']:24} {arm['exp'][-4:]+' '+str(arm['rank']):12} {len(u):3d} "
               f"{d[-1]:6.2f} {pooled:6.2f} {pse:6.2f} {sl:9.4f} {se:7.4f} {t:6.2f}  /{arm['unit']}")
 
     # THE DECISION RULE, pre-registered in code so a ranking cannot be read off the table by eye.
