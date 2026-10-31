@@ -1023,3 +1023,23 @@ The dumbest possible check was the missing one. `ast.parse` is free and nothing 
    that must not choose a thread policy — the entry points differ on purpose); one was genuinely
    pre-contract. §43 said nothing may be added to the legacy list; one line was, with the reason recorded in
    the file, because the list grew as a consequence of coverage going from 0 files to 171.
+
+### 44b. …and the fix for §44 then blocked a bootstrap, which is the other half of the same rule
+
+§44's walker was handed the repo ROOT, because `fleet.cli.rsync`'s code push is `rsync [REPO/]`. It walked
+into `.venv/`, inspected **torch's own `storage.py`**, reported "writes checkpoints with no S3 backup", and
+**refused the bootstrap**. Seven pods then sat with no Dolphin and no venv; the corpus pull reported
+`human 0 mix 0`; and the symptom looked like a broken bootstrap rather than a gate that had vetoed it.
+
+§36 rule 2 says a check that flags correct work gets ignored within a day. This is one step worse than being
+ignored: it stopped a deploy. Within thirty minutes the same file produced both failure modes — a check that
+could not fire, then a check that fired on PyTorch.
+
+1. **A gate's scope is part of the gate, exactly like its argument list.** `expand_py` is now restricted to
+   **git-tracked** `.py` files, which is the same set `CODE_EXCLUDES` actually sends and cannot drift from
+   those excludes the way a second hand-kept list would.
+2. **Test the call site's real argument, not a representative one.** §44's test asserted
+   `expand_py(['zelda_rl','scripts','fleet'])`. The push passes `REPO/`. The test now asserts the repo root,
+   with a vendored `torch/storage.py` planted under it, because that is what the deploy does.
+3. **When a deploy step fails right after a gate changed, suspect the gate first.** The refusal was printed
+   in the log, above the failure, and read past.

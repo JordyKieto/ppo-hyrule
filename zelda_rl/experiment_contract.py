@@ -31,6 +31,8 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY_FILE = Path(__file__).with_name("experiment_contract_legacy.txt")
 EXEMPT = re.compile(r"EXPERIMENT-CONTRACT:\s*exempt")
 OVERRIDE = "ZRL_FORCE_CONTRACT"
+VENDORED = {".venv", "venv", "site-packages", "node_modules", "__pycache__",
+            ".git", "build", "dist", ".tox", ".mypy_cache", ".pytest_cache"}
 HARD = "[not overridable] "                 # a file that cannot parse cannot run; see syntax_error()
 
 
@@ -113,12 +115,35 @@ def violations(path: Path) -> list[str]:
 
 
 def expand_py(paths):
-    """Every .py under `paths`, following directories. See the comment at the fleet.cli.rsync call site."""
+    """Every .py under `paths` that is OURS. See the comment at the fleet.cli.rsync call site.
+
+    Scoped to git-tracked files, because the code push is `rsync [REPO/]` -- the whole repo root -- and the
+    first version of this walker went into `.venv/`, flagged **torch's own storage.py** for not backing its
+    checkpoints up to S3, and REFUSED THE BOOTSTRAP. Seven pods sat with no Dolphin and no venv as a result.
+    That is §36's "a check that flags correct work is ignored within a day", one step worse: it blocked a
+    deploy instead of merely being noise.
+
+    rsync drops `.venv/` via CODE_EXCLUDES and git ignores it, so "tracked by git" is the same set as "code
+    we wrote and are sending", and it cannot drift from the excludes the way a second hand-kept list would.
+    VENDORED is a belt-and-braces fallback for a tree git cannot answer for (the tests use a temp dir).
+    """
+    import subprocess
     out = []
     for p in paths:
-        p = Path(p)
+        p = Path(str(p).rstrip("/"))
         if p.is_dir():
-            out += [f for f in sorted(p.rglob("*.py")) if "__pycache__" not in f.parts]
+            got = []
+            try:
+                r = subprocess.run(["git", "-C", str(p), "ls-files", "-z", "--", "*.py"],
+                                   capture_output=True, text=True, timeout=60)
+                if r.returncode == 0:
+                    got = [p / f for f in r.stdout.split("\0") if f.endswith(".py")]
+            except Exception:                                    # noqa: BLE001
+                got = []
+            if not got:                                          # not a git tree (or git unavailable)
+                got = [f for f in sorted(p.rglob("*.py"))
+                       if not VENDORED.intersection(f.parts)]
+            out += [f for f in got if f.is_file()]
         elif p.suffix == ".py":
             out.append(p)
     return out

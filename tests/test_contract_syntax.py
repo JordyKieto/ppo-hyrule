@@ -83,11 +83,21 @@ def main() -> None:
         enforce(expand_py([pkg]), what="push")
         ck("a clean directory pushes", True)
 
+        # --- the gate must not walk third-party code. The first walker went into .venv/, flagged torch's
+        # own storage.py for having no S3 backup, and REFUSED THE BOOTSTRAP -- 7 pods with no Dolphin.
+        vend = pkg / ".venv" / "lib" / "site-packages" / "torch"
+        vend.mkdir(parents=True)
+        (vend / "storage.py").write_text("import torch\ndef save(p):\n    torch.save({}, p)  # --out\n")
+        ck("a vendored tree under the push root is NOT inspected",
+           all(".venv" not in f.parts for f in expand_py([pkg])))
+        ck("so the push is still clean with third-party code present", check(expand_py([pkg])) == {})
+
     # --- and the real tree, which is what a push actually sends
     repo = Path(__file__).resolve().parents[1]
-    tree = check(expand_py([repo / "zelda_rl", repo / "scripts", repo / "fleet"]))
-    ck(f"the repo's own push passes ({len(expand_py([repo / 'zelda_rl', repo / 'scripts', repo / 'fleet']))} files)",
-       tree == {})
+    pushed = expand_py([repo])                      # exactly what `rsync [REPO/]` sends
+    tree = check(pushed)
+    ck(f"the repo ROOT push passes ({len(pushed)} files)", tree == {})
+    ck("the repo root push excludes .venv", all(".venv" not in f.parts for f in pushed))
     if tree:
         for k, vs in sorted(tree.items()):
             print(f"      {k}: {vs}")
