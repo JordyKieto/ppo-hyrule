@@ -152,3 +152,13 @@ could not be defended six months later. Fill a row when the measurement happens,
 | Candidate damage flat-to-declining across iterations (−0.056 ± 0.033, t=−1.70) | **M** | same | no iteration beat v15's measured 2.88 |
 | Key-event penalties cut the WM's missed boss-damage events from 100% to 4–29% | **M** | pod logs, epoch ~38 | and raised hallucination to ~1000/1k quiet ticks |
 | The 4-rank weight average is confirmed working (identical hash across ranks) | **M** | pod logs, epoch 38 | fixes the W45 retraction |
+
+## Session 2026-10-30
+
+| Claim | Class | Artefact | Note |
+|---|---|---|---|
+| v15 kills ~12% of episodes under a 300 s cap, not 5.00% | **M** | W&B `gohma-cred-v21`, 11 updates × 18 ranks | the 5.00% was measured at a 120 s cap; a human win takes 154 s |
+| Every kill rate measured at `--episode-seconds 120` is retracted, including the RvS-vs-v15 comparison | **M** | PROVENANCE §9 | both sides need re-measuring at a cap that admits a human-paced win |
+| The policy gradient's credit horizon was 1.8 s against a 45–154 s fight | **M** | `tests/test_credit_horizon.py` | terminal +60 reached the first decision at 0.000% of face value |
+| At `gamma 0.99967 / lambda 1.0` the kill reaches the first decision at 59.9% (154 s) | **M** | same | the change this session's runs test |
+| `lr 3e-5` under the long horizon declines (−0.027 ± 0.010, 17/18 ranks); `lr 1e-6` is frozen (KL 1.4e-6) | **M** | W&B `gohma-cred-v20`, `-v21` | motivates lr 1e-5, KL ∝ lr^2.1 |

@@ -1709,3 +1709,61 @@ train a policy. The dream's Gohma dies on her own, so the dream's reward is unin
 comes back is worse than the one that went in — which the real-game eval caught every time after iteration 0.
 **The loop's machinery is validated; its model is not.** The WM has to clear persistence before the loop can
 contribute anything, and that is now measured rather than predicted.
+
+---
+
+## 9. Session 2026-10-30: full-episode credit, and a RETRACTION of every kill rate measured at 120 s
+
+### THE RETRACTION, which invalidates a headline from the previous session
+
+`gohma-cred-v21` pinned the policy at v15 (lr 1e-6, measured `approx_kl` 1.4e-6 — frozen) and so became, by
+accident, a clean **18-pod measurement of v15 itself under a 300-second episode cap**:
+
+| quantity | v15 at `--episode-seconds 120` (R98, previous session) | v15 at `--episode-seconds 300` (this run) |
+|---|---|---|
+| kill rate | **5.00%** (6/120) | **~12%** (9–16% per update, 11 updates × 18 ranks) |
+| balanced boss damage | 2.88 | **3.74** at update 1, 3.3–3.7 thereafter |
+
+**A human win took 154 seconds.** The held-out evaluation that produced R98 used a 120-second cap, i.e. a cap
+below the time the task takes, so it could not observe the wins it was counting. Consequences:
+
+- **R98 is retracted as "v15's kill rate".** It is v15's kill rate *under a 120 s cap*, and that qualifier is
+  not optional.
+- **R100 is retracted**: "the consolidated offline RvS run is NOT separable from v15 at killing (4.78% vs
+  5.00%, z=+0.11)". Both sides were measured at 120 s; v15 more than doubles at 300 s. The comparison must be
+  re-run at a cap that admits a human-paced win before it can be restated.
+- `docs/GOHMA_FOCUS.md` candidate #3 ("episode length — ten stun-and-hit cycles may not fit; a human win took
+  154 s") was the correct suspicion and had never been tested. It is now **M**: the cap was suppressing more
+  than half of v15's kills.
+
+### The credit-horizon change, and the LR ladder it forced
+
+`gamma 0.995 / gae_lambda 0.95` give an **advantage horizon of 1.8 s** (`1/(1-γλ)`, 18.3 steps at 10 Hz)
+against a 45–154 s fight, so the terminal `boss_defeat +60` reaches the first decision at **0.000% of face
+value**; at `gamma 0.99967 / lambda 1.0` it reaches **59.9%** (154 s) and **86.1%** (45 s).
+`tests/test_credit_horizon.py` asserts both, on the real `gae()`.
+
+**Note a conflation corrected here:** the often-quoted "47% at 15 s, so these settings were fine for Deku
+Baba" is the *value* discount `γ^t`. The *policy gradient* is weighted by `(γλ)^t`, which at 15 s is
+**0.023%** — so the kill bonus has never reached the first decision through GAE on ANY task in this project.
+Deku Baba was solved by dense shaping inside the 1.8 s window.
+
+| arm | lr | measured `approx_kl` (median) | 18-rank pooled damage | slope ± SE | reading |
+|---|---|---|---|---|---|
+| `gohma-cred-v20` | 3e-5 | 2.0e-3 | 3.11 → 2.68 over 15 updates | **−0.027 ± 0.010, t=−2.64** | falling; **negative on 17/18 ranks** |
+| `gohma-cred-v21` | 1e-6 | **1.4e-6** | 3.42 → 3.39 over 11 updates | −0.016 ± 0.021, t=−0.74 | flat **because frozen**, not because stable |
+| `gohma-cred-v22` | 1e-5 | predicted 2e-4 | in flight | — | KL scales as lr^2.1 between the two points above |
+
+No conclusion about the credit horizon is available yet: v20 changed γ, λ **and** the LR at once, and v21
+changed nothing that mattered. v22 is the first arm whose weights move at a rate that did not decline.
+
+### Operational, for the next session
+
+- Host `194.68.245.216` returned **9 pods today that reported RUNNING with `uptime=None` and never opened
+  SSH**, including after `fleet adopt` called them "SSH-ready". A TCP connect to the SSH port is the only
+  check that caught it; `fleet adopt`'s readiness test does not.
+- Capacity, not budget, is the constraint: 29 CPU pods requested, **18 obtained**, 31 rejected with "no
+  longer any instances available".
+- `--num-envs 8` on a 16-vCPU pod runs each Dolphin at **0.66× real time** (measured: 3,957 game-seconds in
+  746 s across 8 envs, ≈53 steps/s per pod). §28 wants ~2 threads per instance; 4 envs is the configuration
+  that respects it.
