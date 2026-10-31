@@ -645,6 +645,53 @@ def cmd_launch(a) -> None:
     for pod in pods:
         log(f"rank{pod['rank']}: launched {pod['run_name']} with {pod.pop('_envs')} envs")
     save_state(st)
+    verify_launch(pods)
+
+
+def verify_launch(pods: list[dict], *, settle: float = 25.0) -> list[int]:
+    """Confirm each rank is STILL ALIVE a few seconds in, and say why it is not.
+
+    AGENTS §19 says a launch report means N commands were dispatched, not that N pods are working, and this
+    function exists because the point was proved again: all seven ranks of `gohma-rvs2` died inside one
+    second on `train_rvs.py: error: unrecognized arguments: --run-name ... --num-envs ...` -- the very args
+    THIS launcher appends -- and every one was logged as "launched". The failure was found by hand, after
+    `fleet audit` reported 0 WORKING and that was read as "too early to tell".
+
+    An argparse error, a missing checkpoint and an import error all land in the first seconds, so a single
+    check after a short settle separates "dead on arrival" from "running". It does not prove the run is
+    healthy later -- `fleet audit` and `scripts/fleet_health.py` are for that -- it proves it STARTED.
+    """
+    import time as _t
+    _t.sleep(settle)
+
+    def probe(pod):
+        rn = pod.get("run_name", "")
+        # tmux has-session is true the instant the session starts and false once the command exits, which is
+        # the signal AGENTS §22 says to use for liveness. The log tail names the cause when it is dead.
+        cmd = (f"cd {R_REPO}; tmux has-session -t train 2>/dev/null && echo ALIVE || echo DEAD; "
+               f"grep -ciE 'unrecognized arguments|Traceback|No such file|FileNotFoundError|"
+               f"CUDA out of memory|No space left' logs/train_{rn}.log 2>/dev/null || echo 0; "
+               f"grep -ihoE 'error: unrecognized arguments.{{0,90}}|[A-Za-z]*Error: .{{0,80}}|"
+               f"No space left on device' logs/train_{rn}.log 2>/dev/null | tail -1")
+        return pod, run(pod, cmd, capture=True, check=False, timeout=90)
+
+    dead = []
+    for pod, out in for_pods(pods, probe):
+        lines = [l.strip() for l in str(out).strip().splitlines() if l.strip()]
+        alive = bool(lines) and lines[0] == "ALIVE"
+        why = next((l for l in lines[1:] if not l.isdigit()), "")
+        if alive:
+            log(f"  rank{pod['rank']}: RUNNING{(' (but log shows: ' + why + ')') if why else ''}")
+        else:
+            dead.append(pod["rank"])
+            log(f"  rank{pod['rank']}: DIED within {settle:.0f}s -- {why or 'see logs/train_' + pod.get('run_name', '') + '.log'}")
+    if dead:
+        log(f"LAUNCH FAILED on {len(dead)}/{len(pods)} rank(s): {','.join(str(r) for r in sorted(dead))}")
+        log("  Nothing is training on those pods. Fix the cause above and relaunch -- do NOT read a "
+            "'launched' line as evidence (AGENTS §19).")
+    else:
+        log(f"all {len(pods)} rank(s) still running after {settle:.0f}s")
+    return dead
 
 
 def cmd_status(a) -> None:

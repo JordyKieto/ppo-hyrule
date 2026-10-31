@@ -248,10 +248,29 @@ def main() -> int:
     ap.add_argument("--fleet-aggregator", type=int, default=0)
     ap.add_argument("--fleet-launch-id", default="0")
     ap.add_argument("--fleet-sync-every", type=int, default=4, help="average weights every N epochs")
+    # ARGS `fleet launch` INJECTS ON EVERY POD. They are not optional extras: the launcher appends them to
+    # whatever --train-args says, so a trainer that does not accept them dies on argparse before epoch 1.
+    # All seven ranks of gohma-rvs2 did exactly that, and `fleet launch` still logged "launched" for each
+    # one (AGENTS §19: a launch report is not evidence). Accepted and WIRED, not swallowed:
+    ap.add_argument("--run-name", default=None,
+                    help="injected by fleet launch; labels the W&B run and the eval sink")
+    ap.add_argument("--wandb-project", default=None, help="injected by fleet launch")
+    ap.add_argument("--wandb-group", default=None, help="injected by fleet launch")
+    ap.add_argument("--num-envs", type=int, default=0,
+                    help="injected by fleet launch. This trainer only opens envs for its ONLINE EVAL, which "
+                         "is sized by --eval-envs; an explicit --eval-envs therefore wins, and the "
+                         "difference is printed rather than silently resolved")
+    ap.add_argument("--video-backend", default="Null", help="injected by fleet launch")
     ap.add_argument("--dyna-dir", default=None,
                     help="absorb the online eval's own episodes from this directory into the corpus "
                          "(Dyna). Off when unset.")
-    a = ap.parse_args()
+    a, _unknown = ap.parse_known_args()
+    if _unknown:
+        # Never die on an arg the launcher adds later; say what was ignored instead of refusing to start.
+        print(f"ignoring unrecognised args (not fatal): {' '.join(_unknown)}", flush=True)
+    if a.num_envs and a.num_envs != a.eval_envs:
+        print(f"--num-envs {a.num_envs} (fleet) vs --eval-envs {a.eval_envs} (explicit): using "
+              f"{a.eval_envs} for the online eval, which is the only thing that opens envs here", flush=True)
     if a.seed is not None:
         torch.manual_seed(a.seed); np.random.seed(a.seed)
 
@@ -403,9 +422,9 @@ def main() -> int:
     print(f"\n{'epoch':>6}{'train loss':>12}{'train acc':>11}{'val acc':>9}{'val WIN acc':>13}")
     # THE EVAL SINK, built BEFORE training starts so a credentials problem stops the run here instead of
     # after forty epochs of evaluations that only exist in this process's stdout (zelda_rl/eval_log.py).
-    sink = EvalSink(run_label=f"{Path(a.out).stem}_r{a.fleet_rank}",
-                    project=os.environ.get("ZRL_WANDB_PROJECT", "zelda-rl-rvs"),
-                    group=a.fleet_experiment or Path(a.out).stem,
+    sink = EvalSink(run_label=a.run_name or f"{Path(a.out).stem}_r{a.fleet_rank}",
+                    project=a.wandb_project or os.environ.get("ZRL_WANDB_PROJECT", "zelda-rl-rvs"),
+                    group=a.wandb_group or a.fleet_experiment or Path(a.out).stem,
                     rank=a.fleet_rank, config=vars(a))
 
     link = None

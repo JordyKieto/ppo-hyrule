@@ -1043,3 +1043,39 @@ could not fire, then a check that fired on PyTorch.
    with a vendored `torch/storage.py` planted under it, because that is what the deploy does.
 3. **When a deploy step fails right after a gate changed, suspect the gate first.** The refusal was printed
    in the log, above the failure, and read past.
+
+## 45. The launcher's own injected args killed every rank, and "launched" was printed for all of them
+
+`fleet launch` appends `--run-name --num-envs --slots-dir --video-backend --seed --wandb-project
+--wandb-group --fleet-*` to whatever `--train-args` says. `train_rvs.py` did not accept five of them, so all
+seven ranks of `gohma-rvs2` died in under a second on:
+
+```
+train_rvs.py: error: unrecognized arguments: --run-name ... --num-envs 8 --video-backend Null
+                                             --wandb-project ... --wandb-group ...
+```
+
+and `fleet launch` logged `rankN: launched ... with 8 envs` seven times. `fleet audit` then said
+**0 WORKING**, which was read as "too early to tell" rather than as the answer. §19 has said since the 39-pod
+fleet that a launch report means N commands were dispatched; the launcher still had no idea whether anything
+survived, so the rule had nothing to stand on.
+
+**Two checks, because there are two failures here.**
+
+1. **`fleet.cli.verify_launch` runs after every launch**: it sleeps one settle interval, then reports
+   `RUNNING` or `DIED within 25s -- <the error from the log>` per rank, and prints `LAUNCH FAILED on N/M
+   rank(s)` when any died. An argparse error, a missing checkpoint and an import error all land in the first
+   seconds, so one probe separates "dead on arrival" from "running". It does not claim the run is healthy
+   later — `fleet audit` and `fleet_health.py` are for that — only that it STARTED.
+2. **A trainer accepts what the launcher injects, and WIRES it.** `train_rvs.py` now takes `--run-name`
+   (labels the W&B run and the eval sink), `--wandb-project`, `--wandb-group`, `--num-envs` and
+   `--video-backend`, and uses `parse_known_args` so a future injected flag prints "ignoring" instead of
+   killing the run. Where two flags mean the same thing it says so out loud rather than resolving silently:
+   `--num-envs 8 (fleet) vs --eval-envs 4 (explicit): using 4`.
+
+**And the corollary that cost the most time today.** Three things in one session reported success while
+producing nothing: the contract gate inspected zero files and passed, `fleet launch` reported seven launches
+of a process that could not start, and `fleet audit`'s truthful `0 WORKING` was explained away. §36 already
+named the shape — *every number a program prints about its own output is a claim, not evidence* — and the
+missing half is that **a dismissal needs evidence too.** "Probably too early" is a hypothesis about a
+machine, and it is one ssh away from being checked.
