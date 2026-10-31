@@ -1,0 +1,24 @@
+651 episodes in this rank's shard, 65 held out, loading 32
+
+====================================================================================================
+
+wm.pt  epoch 7  32 held-out episodes
+  Q1 BETTER THAN DOING NOTHING?
+     H1    model 0.1302  persistence 0.1265  skill -0.029  -> LOSES TO persistence
+     H5    model 0.2707  persistence 0.2531  skill -0.070  -> LOSES TO persistence
+     H20   model 0.5141  persistence 0.4448  skill -0.156  -> LOSES TO persistence
+     H100  model 1.5755  persistence 0.9090  skill -0.733  -> LOSES TO persistence
+  Q4 IS THE ACTION USED?  shuffled-action penalty x1.00 -> NO -- the action is decoration
+  Q3 DOES IT PREDICT EVENTS?
+     boss_hp: 48/15567 ticks fire (0.31%)
+        gate@0.5  P 0.000  R 0.000  F1 0.000   -> FIRES ON NOTHING
+        gate rank AUC 0.884  best F1 0.035 at threshold 0.03384   -> signal present, threshold too high
+        gate p on event ticks 0.0326 vs 0.0156 off
+        magnitude on firing ticks: model MAE 0.0660 vs persistence 0.1250  event-skill +0.472
+     link_hp: 120/15567 ticks fire (0.77%)
+        gate@0.5  P 0.000  R 0.000  F1 0.000   -> FIRES ON NOTHING
+        gate rank AUC 0.679  best F1 0.041 at threshold 0.06167   -> signal present, threshold too high
+        gate p on event ticks 0.0460 vs 0.0357 off
+        magnitude on firing ticks: model MAE 0.1342 vs persistence 0.1750  event-skill +0.233
+
+wrote runs/wm_obs/status_r1.json

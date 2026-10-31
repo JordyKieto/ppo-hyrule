@@ -1,0 +1,775 @@
+rank 1/4: +2847, holds 2737 ppo + 100 human
+rank 1/4 training on 2737 ppo + 100 human episodes
+interpreter: python3
+device cuda
+  loading 500/2837  16 files/s  eta 2.5 min
+  loading 1000/2837  19 files/s  eta 1.6 min
+  loading 1500/2837  20 files/s  eta 1.1 min
+  loading 2000/2837  22 files/s  eta 0.6 min
+  loading 2500/2837  22 files/s  eta 0.3 min
+loaded 2605 episodes (0 unreadable), 1,547,333 steps
+obs 1033, actions 108, gohma_hp col 100, link_hp col 45
+shard 1/4 (stratified): {'human': 25, 'loss': 443, 'win': 183} -> 651 of 2605 (~4.0x faster epoch)
+train 586 / val 65 episodes
+fleet sync: gohma-wm-fleet rank 1/4, averaging every 2 epoch(s)
+
+epoch  stage     train       val   H1 model/persist/shuf   H20   H100
+    1      1    1.6291    1.1967   0.112/0.110/0.112   0.46/0.42/0.46   1.16/0.81/1.16   15s
+      H20 skill vs persistence -0.076 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+      fleet sync FAILED @epoch 2: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to h -- training alone
+    2      1    0.9680    0.8534   0.110/0.100/0.110   0.65/0.46/0.65   2.38/0.89/2.38   620s
+      H20 skill vs persistence -0.420 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+    3      1    0.8695    0.8359   0.080/0.069/0.080   0.64/0.44/0.64   2.34/0.98/2.33   18s
+      H20 skill vs persistence -0.451 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+      fleet sync FAILED @epoch 4: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to h -- training alone
+    4      1    0.8525    0.8277   0.058/0.049/0.058   0.60/0.45/0.60   2.07/0.89/2.07   616s
+      H20 skill vs persistence -0.340 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+    5      1    0.8448    0.8218   0.118/0.110/0.118   0.53/0.42/0.53   1.86/0.97/1.86   20s
+      H20 skill vs persistence -0.280 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+      fleet sync FAILED @epoch 6: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to h -- training alone
+    6      1    0.8432    0.8227   0.038/0.035/0.038   0.48/0.44/0.48   1.37/0.91/1.37   615s
+      H20 skill vs persistence -0.079 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+    7      1    0.8366    0.8161   0.129/0.126/0.129   0.45/0.41/0.45   1.37/0.84/1.37   15s
+      H20 skill vs persistence -0.106 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+      fleet sync FAILED @epoch 8: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to h -- training alone
+    8      2    1.1899    0.8787   0.238/0.192/0.239   1.92/0.42/1.92   9.12/0.83/9.12   614s
+      H20 skill vs persistence -3.579 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+    9      2    1.7406    0.8388   0.159/0.137/0.159   0.98/0.47/0.98   4.50/0.98/4.52   11s
+      H20 skill vs persistence -1.080 | shuffled-action penalty x1.00 (NOT action-conditioned -- the action is decoration)
+device cuda
+  loading 500/2837  6 files/s  eta 6.5 min
+  loading 1000/2837  7 files/s  eta 4.6 min
+  loading 1500/2837  7 files/s  eta 3.2 min
+  loading 2000/2837  7 files/s  eta 2.0 min
+  loading 2500/2837  7 files/s  eta 0.7 min
+loaded 2605 episodes (0 unreadable), 1,547,333 steps
+obs 1033, actions 108, gohma_hp col 100, link_hp col 45
+shard 1/4 (stratified): {'human': 25, 'loss': 443, 'win': 183} -> 651 of 2605 (~4.0x faster epoch)
+train 586 / val 65 episodes
+RESUMED at epoch 10
+key columns [100, 45]: column weight x20, miss (gate pos_weight) x50, hallucination x5, death tick x50
+fleet sync: gohma-wm-fleet rank 1/4, averaging every 2 epoch(s)
+
+epoch  stage     train       val   H1 model/persist/shuf   H20   H100
+      fleet sync @epoch 10: {'sync_ranks': 1, 'sync_wait_s': 17.058852195739746, 'weight_hash': 'c80ec62662ba', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 10}
+   10      2    2.0577    1.3922   0.173/0.145/0.173   1.13/0.52/1.13   4.97/0.97/4.96   27s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.189) | H20 LOSES TO persistence (-1.162) | H100 LOSES TO persistence (-4.105)
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 7.5e-01 | magnitude skill -11.139 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  77.5% | HALLUCINATED 541.5/1k quiet ticks | precision 0.003 | drift 4.9e-02 | magnitude skill -0.287 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   11      2    2.0707    1.3459   0.099/0.045/0.100   1.19/0.44/1.13   5.37/0.84/4.88   12s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-1.207) | H20 LOSES TO persistence (-1.728) | H100 LOSES TO persistence (-5.425)
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 9.9e-01 | magnitude skill -11.986 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  98.0% | HALLUCINATED  20.3/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill -0.776 -> MISSES ALL
+      Q4 is the ACTION used?         shuffled-action penalty x0.95 -> NO -- the action is decoration
+      fleet sync @epoch 12: {'sync_ranks': 1, 'sync_wait_s': 18.250916242599487, 'weight_hash': 'c80ec62662ba', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 10}
+   12      2    1.6507    1.2722   0.217/0.187/0.216   0.45/0.46/0.45   0.80/0.92/0.80   30s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.156) | H20 BEATS persistence (+0.025) | H100 BEATS persistence (+0.131)
+      Q2 getting better?            H20 skill +0.5935 +- 0.6698/epoch t=+0.89 -> FLAT over 3 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 7.5e-01 | magnitude skill -11.139 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  77.5% | HALLUCINATED 541.5/1k quiet ticks | precision 0.003 | drift 4.9e-02 | magnitude skill -0.287 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   13      2    1.1656    1.2316   0.139/0.105/0.142   3.64/0.52/3.59   18.13/0.92/17.83   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.324) | H20 LOSES TO persistence (-5.992) | H100 LOSES TO persistence (-18.630)
+      Q2 getting better?            H20 skill -1.2736 +- 1.1188/epoch t=-1.14 -> FLAT over 4 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 918.9/1k quiet ticks | precision 0.004 | drift 2.6e-01 | magnitude skill +0.264 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 997.5/1k quiet ticks | precision 0.008 | drift 1.4e-01 | magnitude skill +0.750 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+      fleet sync @epoch 14: {'sync_ranks': 1, 'sync_wait_s': 17.62975239753723, 'weight_hash': 'c80ec62662ba', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 10}
+   14      2    1.5268    1.2347   0.141/0.110/0.141   0.90/0.41/0.90   4.53/0.89/4.42   27s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.283) | H20 LOSES TO persistence (-1.198) | H100 LOSES TO persistence (-4.071)
+      Q2 getting better?            H20 skill -0.4336 +- 0.8077/epoch t=-0.54 -> FLAT over 5 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 7.5e-01 | magnitude skill -11.139 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  77.5% | HALLUCINATED 541.5/1k quiet ticks | precision 0.003 | drift 4.9e-02 | magnitude skill -0.287 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   15      2    1.4034    1.2414   0.074/0.055/0.078   3.39/0.39/3.30   14.22/0.83/14.12   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.349) | H20 LOSES TO persistence (-7.744) | H100 LOSES TO persistence (-16.193)
+      Q2 getting better?            H20 skill -1.0667 +- 0.6428/epoch t=-1.66 -> FLAT over 6 epochs
+      Q3 boss_damage    41 events | MISSED  43.9% | HALLUCINATED 913.9/1k quiet ticks | precision 0.002 | drift 2.5e-01 | magnitude skill -0.428 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 934.1/1k quiet ticks | precision 0.009 | drift 1.6e-01 | magnitude skill +0.706 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.97 -> NO -- the action is decoration
+      fleet sync @epoch 16: {'sync_ranks': 1, 'sync_wait_s': 17.311001777648926, 'weight_hash': 'c80ec62662ba', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 10}
+   16      2    1.1393    1.1942   0.063/0.027/0.058   3.32/0.44/3.25   17.08/0.92/16.75   34s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-1.312) | H20 LOSES TO persistence (-6.541) | H100 LOSES TO persistence (-17.607)
+      Q2 getting better?            H20 skill -1.0497 +- 0.4547/epoch t=-2.31 -> GETTING WORSE over 7 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 7.5e-01 | magnitude skill -11.139 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  77.5% | HALLUCINATED 541.5/1k quiet ticks | precision 0.003 | drift 4.9e-02 | magnitude skill -0.287 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.98 -> NO -- the action is decoration
+   17      2    1.3704    1.2089   0.273/0.236/0.270   4.40/0.51/4.07   20.43/0.82/20.03   17s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.157) | H20 LOSES TO persistence (-7.592) | H100 LOSES TO persistence (-23.898)
+      Q2 getting better?            H20 skill -1.0427 +- 0.3389/epoch t=-3.08 -> GETTING WORSE over 8 epochs
+      Q3 boss_damage    41 events | MISSED  41.5% | HALLUCINATED 938.7/1k quiet ticks | precision 0.002 | drift 2.9e-01 | magnitude skill -0.398 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 931.0/1k quiet ticks | precision 0.009 | drift 1.3e-01 | magnitude skill +0.681 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.92 -> NO -- the action is decoration
+      fleet sync @epoch 18: {'sync_ranks': 1, 'sync_wait_s': 19.608886241912842, 'weight_hash': '244a1c2f3039', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 9}
+   18      2    1.0384    1.1997   0.227/0.213/0.233   4.41/0.41/4.90   28.02/0.94/28.56   30s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.065) | H20 LOSES TO persistence (-9.844) | H100 LOSES TO persistence (-28.917)
+      Q2 getting better?            H20 skill -1.1200 +- 0.2663/epoch t=-4.21 -> GETTING WORSE over 9 epochs
+      Q3 boss_damage    41 events | MISSED  78.0% | HALLUCINATED 855.4/1k quiet ticks | precision 0.001 | drift 1.7e-01 | magnitude skill -1.271 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 917.8/1k quiet ticks | precision 0.009 | drift 1.0e-01 | magnitude skill +0.677 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.11 -> ACTION-CONDITIONED
+   19      2    1.3120    1.2274   0.181/0.140/0.184   4.45/0.48/4.52   19.94/0.79/19.68   11s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.294) | H20 LOSES TO persistence (-8.197) | H100 LOSES TO persistence (-24.382)
+      Q2 getting better?            H20 skill -1.0085 +- 0.2220/epoch t=-4.54 -> GETTING WORSE over 10 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 1.0e+00 | magnitude skill -5.586 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 932.1/1k quiet ticks | precision 0.009 | drift 1.9e-01 | magnitude skill +0.676 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.02 -> NO -- the action is decoration
+      fleet sync @epoch 20: {'sync_ranks': 1, 'sync_wait_s': 19.37696599960327, 'weight_hash': 'c80ec62662ba', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 10}
+   20      2    1.6377    1.2171   0.154/0.119/0.154   1.73/0.45/1.74   7.71/0.94/7.33   30s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.298) | H20 LOSES TO persistence (-2.865) | H100 LOSES TO persistence (-7.196)
+      Q2 getting better?            H20 skill -0.6594 +- 0.2710/epoch t=-2.43 -> GETTING WORSE over 11 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 7.5e-01 | magnitude skill -11.139 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED  77.5% | HALLUCINATED 541.5/1k quiet ticks | precision 0.003 | drift 4.9e-02 | magnitude skill -0.287 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   21      2    1.2676    1.2162   0.164/0.130/0.159   5.72/0.46/5.68   22.47/0.93/22.41   17s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.263) | H20 LOSES TO persistence (-11.450) | H100 LOSES TO persistence (-23.031)
+      Q2 getting better?            H20 skill -0.7629 +- 0.2333/epoch t=-3.27 -> GETTING WORSE over 12 epochs
+      Q3 boss_damage    41 events | MISSED  58.5% | HALLUCINATED 708.1/1k quiet ticks | precision 0.002 | drift 2.7e-01 | magnitude skill -1.931 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   4.9% | HALLUCINATED 921.1/1k quiet ticks | precision 0.009 | drift 1.3e-01 | magnitude skill +0.553 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+      fleet sync @epoch 22: {'sync_ranks': 1, 'sync_wait_s': 20.680797576904297, 'weight_hash': 'f0c167ac5eda', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 11}
+   22      2    1.3515    1.1588   0.186/0.169/0.187   2.04/0.46/1.94   12.60/0.90/12.71   36s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.099) | H20 LOSES TO persistence (-3.404) | H100 LOSES TO persistence (-13.062)
+      Q2 getting better?            H20 skill -0.5350 +- 0.2370/epoch t=-2.26 -> GETTING WORSE over 13 epochs
+      Q3 boss_damage    41 events | MISSED  80.5% | HALLUCINATED 765.0/1k quiet ticks | precision 0.001 | drift 1.5e-01 | magnitude skill -1.253 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   5.9% | HALLUCINATED 926.1/1k quiet ticks | precision 0.008 | drift 8.8e-02 | magnitude skill +0.547 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.95 -> NO -- the action is decoration
+   23      2    1.1419    1.2118   0.237/0.211/0.236   3.96/0.56/3.97   19.47/0.93/19.53   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.125) | H20 LOSES TO persistence (-6.134) | H100 LOSES TO persistence (-19.897)
+      Q2 getting better?            H20 skill -0.4545 +- 0.2082/epoch t=-2.18 -> GETTING WORSE over 14 epochs
+      Q3 boss_damage    41 events | MISSED  63.4% | HALLUCINATED 858.0/1k quiet ticks | precision 0.001 | drift 3.0e-01 | magnitude skill -0.703 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   4.9% | HALLUCINATED 927.4/1k quiet ticks | precision 0.008 | drift 1.4e-01 | magnitude skill +0.618 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 24: {'sync_ranks': 2, 'sync_wait_s': 37.03383660316467, 'weight_hash': '4d253ff1dba6', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 12}
+   24      2    1.0801    1.1788   0.153/0.143/0.153   2.91/0.44/2.93   20.46/0.94/20.91   51s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.069) | H20 LOSES TO persistence (-5.578) | H100 LOSES TO persistence (-20.852)
+      Q2 getting better?            H20 skill -0.3769 +- 0.1858/epoch t=-2.03 -> GETTING WORSE over 15 epochs
+      Q3 boss_damage    41 events | MISSED   9.8% | HALLUCINATED 967.1/1k quiet ticks | precision 0.003 | drift 2.3e-01 | magnitude skill -0.249 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 999.5/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.693 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   25      2    1.4540    1.2080   0.203/0.180/0.203   1.03/0.53/1.03   4.01/0.92/3.86   16s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.129) | H20 LOSES TO persistence (-0.924) | H100 LOSES TO persistence (-3.378)
+      Q2 getting better?            H20 skill -0.2140 +- 0.1878/epoch t=-1.14 -> FLAT over 16 epochs
+      Q3 boss_damage    41 events | MISSED  97.6% | HALLUCINATED 318.5/1k quiet ticks | precision 0.000 | drift 1.3e-01 | magnitude skill -3.564 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 934.7/1k quiet ticks | precision 0.009 | drift 1.2e-01 | magnitude skill +0.617 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 26: {'sync_ranks': 4, 'sync_wait_s': 96.99107766151428, 'weight_hash': '33e9a79af280', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 13}
+   26      2    1.5104    1.1788   0.109/0.091/0.109   1.02/0.43/1.02   7.04/0.85/7.03   109s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.200) | H20 LOSES TO persistence (-1.393) | H100 LOSES TO persistence (-7.236)
+      Q2 getting better?            H20 skill -0.1072 +- 0.1767/epoch t=-0.61 -> FLAT over 17 epochs
+      Q3 boss_damage    41 events | MISSED  48.8% | HALLUCINATED 912.4/1k quiet ticks | precision 0.002 | drift 2.4e-01 | magnitude skill -0.415 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.9% | HALLUCINATED 985.9/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.583 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   27      2    1.3078    1.2896   0.211/0.182/0.211   4.88/0.40/4.89   24.97/0.88/25.00   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.156) | H20 LOSES TO persistence (-11.309) | H100 LOSES TO persistence (-27.356)
+      Q2 getting better?            H20 skill -0.2044 +- 0.1667/epoch t=-1.23 -> FLAT over 18 epochs
+      Q3 boss_damage    41 events | MISSED  41.5% | HALLUCINATED 956.3/1k quiet ticks | precision 0.002 | drift 2.3e-01 | magnitude skill -0.464 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 934.7/1k quiet ticks | precision 0.009 | drift 1.1e-01 | magnitude skill +0.671 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 28: {'sync_ranks': 4, 'sync_wait_s': 103.79418516159058, 'weight_hash': '37919fbbd42b', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 14}
+   28      2    1.3344    1.2101   0.242/0.223/0.242   2.19/0.52/2.19   10.26/0.86/10.26   119s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.085) | H20 LOSES TO persistence (-3.217) | H100 LOSES TO persistence (-10.892)
+      Q2 getting better?            H20 skill -0.1429 +- 0.1533/epoch t=-0.93 -> FLAT over 19 epochs
+      Q3 boss_damage    41 events | MISSED   9.8% | HALLUCINATED 985.0/1k quiet ticks | precision 0.003 | drift 3.8e-01 | magnitude skill -0.750 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   3.9% | HALLUCINATED 978.6/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.610 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   29      2    1.6577    1.2142   0.236/0.186/0.234   3.39/0.45/3.39   16.73/0.85/16.73   9s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.267) | H20 LOSES TO persistence (-6.530) | H100 LOSES TO persistence (-18.663)
+      Q2 getting better?            H20 skill -0.1434 +- 0.1379/epoch t=-1.04 -> FLAT over 20 epochs
+      Q3 boss_damage    41 events | MISSED  82.9% | HALLUCINATED 753.7/1k quiet ticks | precision 0.001 | drift 1.3e-01 | magnitude skill -2.406 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 932.2/1k quiet ticks | precision 0.009 | drift 1.0e-01 | magnitude skill +0.679 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 30: {'sync_ranks': 4, 'sync_wait_s': 118.33321213722229, 'weight_hash': '72ae4217bd1d', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 15}
+   30      2    1.2147    1.1635   0.206/0.196/0.208   4.25/0.46/4.27   21.41/0.85/21.51   138s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.054) | H20 LOSES TO persistence (-8.268) | H100 LOSES TO persistence (-24.281)
+      Q2 getting better?            H20 skill -0.1645 +- 0.1253/epoch t=-1.31 -> FLAT over 21 epochs
+      Q3 boss_damage    41 events | MISSED  85.4% | HALLUCINATED 740.6/1k quiet ticks | precision 0.001 | drift 1.7e-01 | magnitude skill -1.650 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 997.8/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.687 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   31      2    1.1821    1.2585   0.188/0.166/0.190   3.90/0.49/3.88   19.37/0.85/19.24   18s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.131) | H20 LOSES TO persistence (-6.930) | H100 LOSES TO persistence (-21.729)
+      Q2 getting better?            H20 skill -0.1625 +- 0.1139/epoch t=-1.43 -> FLAT over 22 epochs
+      Q3 boss_damage    41 events | MISSED  97.6% | HALLUCINATED 374.3/1k quiet ticks | precision 0.000 | drift 1.9e-01 | magnitude skill -2.745 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 998.2/1k quiet ticks | precision 0.008 | drift 1.4e-01 | magnitude skill +0.629 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+      fleet sync @epoch 32: {'sync_ranks': 4, 'sync_wait_s': 94.75597357749939, 'weight_hash': '597d031f5f56', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 16}
+   32      2    1.0145    1.1476   0.140/0.123/0.140   2.84/0.41/2.84   14.25/0.79/14.25   108s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.135) | H20 LOSES TO persistence (-5.949) | H100 LOSES TO persistence (-17.028)
+      Q2 getting better?            H20 skill -0.1486 +- 0.1043/epoch t=-1.42 -> FLAT over 23 epochs
+      Q3 boss_damage    41 events | MISSED  22.0% | HALLUCINATED 986.4/1k quiet ticks | precision 0.003 | drift 3.3e-01 | magnitude skill -0.448 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  10.8% | HALLUCINATED 938.5/1k quiet ticks | precision 0.008 | drift 8.1e-02 | magnitude skill +0.448 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   33      2    1.0438    1.1656   0.149/0.135/0.148   1.86/0.49/1.52   11.36/0.90/10.78   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.105) | H20 LOSES TO persistence (-2.831) | H100 LOSES TO persistence (-11.683)
+      Q2 getting better?            H20 skill -0.1052 +- 0.0988/epoch t=-1.06 -> FLAT over 24 epochs
+      Q3 boss_damage    41 events | MISSED  61.0% | HALLUCINATED 919.3/1k quiet ticks | precision 0.001 | drift 2.7e-01 | magnitude skill -0.874 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.4/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.695 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.81 -> NO -- the action is decoration
+      fleet sync @epoch 34: {'sync_ranks': 4, 'sync_wait_s': 196.43676042556763, 'weight_hash': '25e5eb1591e5', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 17}
+   34      2    1.0993    1.2062   0.068/0.043/0.069   3.81/0.44/3.85   18.56/0.84/18.53   212s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.583) | H20 LOSES TO persistence (-7.699) | H100 LOSES TO persistence (-21.167)
+      Q2 getting better?            H20 skill -0.1153 +- 0.0911/epoch t=-1.27 -> FLAT over 25 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 998.7/1k quiet ticks | precision 0.003 | drift 4.3e-01 | magnitude skill -0.834 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 989.1/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.609 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   35      2    1.4389    1.1966   0.206/0.176/0.207   4.08/0.47/4.09   19.63/0.91/19.61   16s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.167) | H20 LOSES TO persistence (-7.704) | H100 LOSES TO persistence (-20.492)
+      Q2 getting better?            H20 skill -0.1224 +- 0.0842/epoch t=-1.45 -> FLAT over 26 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 5.3e-01 | magnitude skill -1.425 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  54.9% | HALLUCINATED 610.6/1k quiet ticks | precision 0.006 | drift 4.3e-02 | magnitude skill +0.018 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 36: {'sync_ranks': 2, 'sync_wait_s': 81.25830221176147, 'weight_hash': 'a5b46f0880b7', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 18}
+   36      2    1.2278    1.1884   0.196/0.183/0.200   11.34/0.47/11.30   57.18/0.88/56.69   92s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.069) | H20 LOSES TO persistence (-23.150) | H100 LOSES TO persistence (-63.752)
+      Q2 getting better?            H20 skill -0.2496 +- 0.1071/epoch t=-2.33 -> GETTING WORSE over 27 epochs
+      Q3 boss_damage    41 events | MISSED  31.7% | HALLUCINATED 975.7/1k quiet ticks | precision 0.002 | drift 2.8e-01 | magnitude skill +0.146 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 996.9/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.735 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   37      2    2.0252    1.2411   0.239/0.228/0.239   0.76/0.50/0.76   2.64/0.86/2.65   10s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.050) | H20 LOSES TO persistence (-0.505) | H100 LOSES TO persistence (-2.059)
+      Q2 getting better?            H20 skill -0.1823 +- 0.1068/epoch t=-1.71 -> FLAT over 28 epochs
+      Q3 boss_damage    41 events | MISSED  19.5% | HALLUCINATED 944.5/1k quiet ticks | precision 0.003 | drift 2.4e-01 | magnitude skill -0.304 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 995.3/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.566 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 38: {'sync_ranks': 4, 'sync_wait_s': 99.1573965549469, 'weight_hash': '1d483d441806', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 19}
+   38      2    1.4844    1.2339   0.149/0.095/0.149   0.99/0.44/0.91   3.89/0.87/3.06   118s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.572) | H20 LOSES TO persistence (-1.244) | H100 LOSES TO persistence (-3.479)
+      Q2 getting better?            H20 skill -0.1318 +- 0.1036/epoch t=-1.27 -> FLAT over 29 epochs
+      Q3 boss_damage    41 events | MISSED  17.1% | HALLUCINATED 922.0/1k quiet ticks | precision 0.003 | drift 2.0e-01 | magnitude skill +0.020 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 996.7/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.666 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.92 -> NO -- the action is decoration
+   39      2    1.1746    1.1668   0.186/0.161/0.184   3.91/0.43/3.87   20.93/0.90/20.80   18s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.156) | H20 LOSES TO persistence (-8.049) | H100 LOSES TO persistence (-22.304)
+      Q2 getting better?            H20 skill -0.1338 +- 0.0967/epoch t=-1.38 -> FLAT over 30 epochs
+      Q3 boss_damage    41 events | MISSED  36.6% | HALLUCINATED 910.0/1k quiet ticks | precision 0.002 | drift 2.2e-01 | magnitude skill -0.254 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.9% | HALLUCINATED 998.3/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.598 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+      fleet sync @epoch 40: {'sync_ranks': 4, 'sync_wait_s': 82.24525022506714, 'weight_hash': '833f81429c5f', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 20}
+   40      2    1.0543    1.1944   0.134/0.096/0.135   3.92/0.38/3.97   15.43/0.96/16.00   90s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.398) | H20 LOSES TO persistence (-9.248) | H100 LOSES TO persistence (-15.109)
+      Q2 getting better?            H20 skill -0.1419 +- 0.0905/epoch t=-1.57 -> FLAT over 31 epochs
+      Q3 boss_damage    41 events | MISSED  90.2% | HALLUCINATED 443.9/1k quiet ticks | precision 0.001 | drift 1.1e-01 | magnitude skill -2.258 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 995.9/1k quiet ticks | precision 0.008 | drift 8.1e-02 | magnitude skill +0.547 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   41      2    1.1949    1.1675   0.144/0.123/0.150   2.79/0.36/2.86   13.70/0.73/14.24   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.170) | H20 LOSES TO persistence (-6.858) | H100 LOSES TO persistence (-17.648)
+      Q2 getting better?            H20 skill -0.1342 +- 0.0850/epoch t=-1.58 -> FLAT over 32 epochs
+      Q3 boss_damage    41 events | MISSED  75.6% | HALLUCINATED 597.7/1k quiet ticks | precision 0.001 | drift 1.1e-01 | magnitude skill -0.894 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   3.9% | HALLUCINATED 900.5/1k quiet ticks | precision 0.009 | drift 9.2e-02 | magnitude skill +0.529 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.03 -> NO -- the action is decoration
+      fleet sync @epoch 42: {'sync_ranks': 4, 'sync_wait_s': 95.83196139335632, 'weight_hash': 'f01860762862', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 21}
+   42      2    1.1157    1.1523   0.183/0.168/0.183   2.48/0.49/2.71   14.06/0.82/14.60   110s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.091) | H20 LOSES TO persistence (-4.043) | H100 LOSES TO persistence (-16.196)
+      Q2 getting better?            H20 skill -0.1120 +- 0.0809/epoch t=-1.39 -> FLAT over 33 epochs
+      Q3 boss_damage    41 events | MISSED  34.1% | HALLUCINATED 923.5/1k quiet ticks | precision 0.002 | drift 1.8e-01 | magnitude skill -0.097 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.2/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.673 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.09 -> NO -- the action is decoration
+   43      2    1.1556    1.1745   0.133/0.093/0.135   8.04/0.46/8.10   42.60/0.86/42.79   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.424) | H20 LOSES TO persistence (-16.651) | H100 LOSES TO persistence (-48.752)
+      Q2 getting better?            H20 skill -0.1565 +- 0.0803/epoch t=-1.95 -> FLAT over 34 epochs
+      Q3 boss_damage    41 events | MISSED  82.9% | HALLUCINATED 727.8/1k quiet ticks | precision 0.001 | drift 1.5e-01 | magnitude skill -1.216 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 998.6/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.647 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 44: {'sync_ranks': 4, 'sync_wait_s': 90.43315196037292, 'weight_hash': 'f2b4a6324b58', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 22}
+   44      2    1.1112    1.1785   0.152/0.111/0.150   5.03/0.33/5.02   21.95/0.92/21.71   111s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.362) | H20 LOSES TO persistence (-14.252) | H100 LOSES TO persistence (-22.943)
+      Q2 getting better?            H20 skill -0.1817 +- 0.0771/epoch t=-2.36 -> GETTING WORSE over 35 epochs
+      Q3 boss_damage    41 events | MISSED  12.2% | HALLUCINATED 986.1/1k quiet ticks | precision 0.003 | drift 2.3e-01 | magnitude skill -0.040 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  15.7% | HALLUCINATED 934.9/1k quiet ticks | precision 0.007 | drift 6.0e-02 | magnitude skill +0.325 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   45      2    0.9824    1.1727   0.063/0.038/0.065   2.98/0.38/2.99   15.67/0.88/15.75   11s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.640) | H20 LOSES TO persistence (-6.854) | H100 LOSES TO persistence (-16.770)
+      Q2 getting better?            H20 skill -0.1687 +- 0.0732/epoch t=-2.30 -> GETTING WORSE over 36 epochs
+      Q3 boss_damage    41 events | MISSED  29.3% | HALLUCINATED 991.5/1k quiet ticks | precision 0.002 | drift 2.2e-01 | magnitude skill -0.105 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.9/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.715 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 46: {'sync_ranks': 4, 'sync_wait_s': 97.54432439804077, 'weight_hash': '7084d82a665d', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 23}
+   46      2    1.0753    1.1588   0.131/0.116/0.131   2.79/0.47/2.73   14.06/0.89/13.79   113s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.129) | H20 LOSES TO persistence (-4.964) | H100 LOSES TO persistence (-14.798)
+      Q2 getting better?            H20 skill -0.1490 +- 0.0702/epoch t=-2.12 -> GETTING WORSE over 37 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 987.2/1k quiet ticks | precision 0.003 | drift 2.8e-01 | magnitude skill -0.420 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.2/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.657 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.98 -> NO -- the action is decoration
+   47      2    1.0345    1.1563   0.206/0.196/0.207   6.33/0.46/6.40   31.18/0.77/32.17   9s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.051) | H20 LOSES TO persistence (-12.807) | H100 LOSES TO persistence (-39.597)
+      Q2 getting better?            H20 skill -0.1633 +- 0.0670/epoch t=-2.44 -> GETTING WORSE over 38 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 998.6/1k quiet ticks | precision 0.003 | drift 3.1e-01 | magnitude skill -1.388 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  41.2% | HALLUCINATED 559.4/1k quiet ticks | precision 0.009 | drift 3.3e-02 | magnitude skill +0.114 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 48: {'sync_ranks': 4, 'sync_wait_s': 107.2757396697998, 'weight_hash': '7c8b188ea07d', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 24}
+   48      2    1.1313    1.1423   0.198/0.192/0.200   2.25/0.41/2.25   11.78/0.86/11.94   122s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.034) | H20 LOSES TO persistence (-4.473) | H100 LOSES TO persistence (-12.734)
+      Q2 getting better?            H20 skill -0.1429 +- 0.0646/epoch t=-2.21 -> GETTING WORSE over 39 epochs
+      Q3 boss_damage    41 events | MISSED  95.1% | HALLUCINATED 524.1/1k quiet ticks | precision 0.000 | drift 1.0e-01 | magnitude skill -2.327 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 998.8/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.649 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   49      2    1.2032    1.1714   0.112/0.076/0.112   8.88/0.48/8.90   45.68/0.95/45.69   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.470) | H20 LOSES TO persistence (-17.704) | H100 LOSES TO persistence (-47.083)
+      Q2 getting better?            H20 skill -0.1732 +- 0.0639/epoch t=-2.71 -> GETTING WORSE over 40 epochs
+      Q3 boss_damage    41 events | MISSED  39.0% | HALLUCINATED 919.5/1k quiet ticks | precision 0.002 | drift 1.8e-01 | magnitude skill -0.549 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   4.9% | HALLUCINATED 918.0/1k quiet ticks | precision 0.009 | drift 7.6e-02 | magnitude skill +0.497 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 50: {'sync_ranks': 4, 'sync_wait_s': 100.52291631698608, 'weight_hash': '3934244abca3', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 25}
+   50      2    1.0939    1.1871   0.127/0.095/0.128   7.52/0.43/7.52   38.33/0.84/38.29   112s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.339) | H20 LOSES TO persistence (-16.479) | H100 LOSES TO persistence (-44.753)
+      Q2 getting better?            H20 skill -0.1945 +- 0.0620/epoch t=-3.14 -> GETTING WORSE over 41 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 993.6/1k quiet ticks | precision 0.003 | drift 3.1e-01 | magnitude skill -1.456 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 984.6/1k quiet ticks | precision 0.008 | drift 8.8e-02 | magnitude skill +0.618 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   51      2    1.0826    1.1523   0.158/0.137/0.166   17.33/0.44/17.35   92.39/0.92/92.44   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.159) | H20 LOSES TO persistence (-38.684) | H100 LOSES TO persistence (-99.771)
+      Q2 getting better?            H20 skill -0.2860 +- 0.0792/epoch t=-3.61 -> GETTING WORSE over 42 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 962.9/1k quiet ticks | precision 0.003 | drift 2.9e-01 | magnitude skill -0.286 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 960.0/1k quiet ticks | precision 0.009 | drift 1.1e-01 | magnitude skill +0.702 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 52: {'sync_ranks': 4, 'sync_wait_s': 104.8850965499878, 'weight_hash': 'e91d3740f6db', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 26}
+   52      2    1.3551    1.1428   0.111/0.090/0.111   6.04/0.45/5.31   31.15/0.87/27.20   121s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.236) | H20 LOSES TO persistence (-12.359) | H100 LOSES TO persistence (-34.670)
+      Q2 getting better?            H20 skill -0.2809 +- 0.0756/epoch t=-3.72 -> GETTING WORSE over 43 epochs
+      Q3 boss_damage    41 events | MISSED  90.2% | HALLUCINATED 721.0/1k quiet ticks | precision 0.000 | drift 1.1e-01 | magnitude skill -1.821 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 990.4/1k quiet ticks | precision 0.008 | drift 9.2e-02 | magnitude skill +0.635 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.88 -> NO -- the action is decoration
+   53      2    1.2035    1.2331   0.176/0.120/0.177   8.94/0.54/8.95   44.61/0.96/44.74   12s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.464) | H20 LOSES TO persistence (-15.705) | H100 LOSES TO persistence (-45.526)
+      Q2 getting better?            H20 skill -0.2858 +- 0.0722/epoch t=-3.96 -> GETTING WORSE over 44 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.003 | drift 3.9e-01 | magnitude skill -1.898 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  16.7% | HALLUCINATED 872.5/1k quiet ticks | precision 0.008 | drift 6.5e-02 | magnitude skill +0.384 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 54: {'sync_ranks': 4, 'sync_wait_s': 96.26021981239319, 'weight_hash': '6f36c4a0ac01', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 27}
+   54      2    1.6282    1.1687   0.126/0.106/0.126   1.84/0.40/1.84   8.90/0.88/8.88   109s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.185) | H20 LOSES TO persistence (-3.627) | H100 LOSES TO persistence (-9.123)
+      Q2 getting better?            H20 skill -0.2542 +- 0.0714/epoch t=-3.56 -> GETTING WORSE over 45 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 994.5/1k quiet ticks | precision 0.003 | drift 2.6e-01 | magnitude skill -0.432 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 988.5/1k quiet ticks | precision 0.008 | drift 8.9e-02 | magnitude skill +0.557 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   55      2    1.5852    1.1836   0.189/0.166/0.191   12.26/0.38/12.31   62.68/0.74/62.56   11s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.140) | H20 LOSES TO persistence (-31.630) | H100 LOSES TO persistence (-84.231)
+      Q2 getting better?            H20 skill -0.3036 +- 0.0740/epoch t=-4.10 -> GETTING WORSE over 46 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 5.7e-01 | magnitude skill -6.466 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  72.5% | HALLUCINATED 383.7/1k quiet ticks | precision 0.006 | drift 2.3e-02 | magnitude skill -0.069 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 56: {'sync_ranks': 4, 'sync_wait_s': 103.30803728103638, 'weight_hash': 'f3edebfa8b00', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 28}
+   56      2    2.0743    1.1564   0.277/0.256/0.279   6.91/0.51/6.89   34.80/0.97/34.72   113s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.079) | H20 LOSES TO persistence (-12.580) | H100 LOSES TO persistence (-35.022)
+      Q2 getting better?            H20 skill -0.2954 +- 0.0710/epoch t=-4.16 -> GETTING WORSE over 47 epochs
+      Q3 boss_damage    41 events | MISSED  34.1% | HALLUCINATED 950.2/1k quiet ticks | precision 0.002 | drift 1.4e-01 | magnitude skill +0.003 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 988.3/1k quiet ticks | precision 0.008 | drift 9.7e-02 | magnitude skill +0.667 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   57      2    1.1587    1.1408   0.112/0.094/0.114   2.18/0.49/2.27   10.77/0.85/11.08   11s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.191) | H20 LOSES TO persistence (-3.450) | H100 LOSES TO persistence (-11.602)
+      Q2 getting better?            H20 skill -0.2642 +- 0.0704/epoch t=-3.76 -> GETTING WORSE over 48 epochs
+      Q3 boss_damage    41 events | MISSED  31.7% | HALLUCINATED 969.8/1k quiet ticks | precision 0.002 | drift 2.6e-01 | magnitude skill -0.274 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.008 | drift 1.5e-01 | magnitude skill +0.700 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.04 -> NO -- the action is decoration
+      fleet sync @epoch 58: {'sync_ranks': 4, 'sync_wait_s': 99.62927603721619, 'weight_hash': '7544e14d0189', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 29}
+   58      2    1.0987    1.1500   0.099/0.072/0.100   7.15/0.35/7.27   36.92/0.84/37.36   115s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.386) | H20 LOSES TO persistence (-19.645) | H100 LOSES TO persistence (-43.154)
+      Q2 getting better?            H20 skill -0.2757 +- 0.0678/epoch t=-4.07 -> GETTING WORSE over 49 epochs
+      Q3 boss_damage    41 events | MISSED  43.9% | HALLUCINATED 933.6/1k quiet ticks | precision 0.002 | drift 1.7e-01 | magnitude skill -0.423 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 983.0/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.674 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.02 -> NO -- the action is decoration
+   59      2    1.0342    1.1330   0.233/0.217/0.232   1.99/0.53/1.88   9.85/0.90/8.78   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.072) | H20 LOSES TO persistence (-2.736) | H100 LOSES TO persistence (-9.885)
+      Q2 getting better?            H20 skill -0.2454 +- 0.0674/epoch t=-3.64 -> GETTING WORSE over 50 epochs
+      Q3 boss_damage    41 events | MISSED  22.0% | HALLUCINATED 922.8/1k quiet ticks | precision 0.003 | drift 1.9e-01 | magnitude skill +0.053 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 968.9/1k quiet ticks | precision 0.009 | drift 1.2e-01 | magnitude skill +0.657 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.95 -> NO -- the action is decoration
+      fleet sync @epoch 60: {'sync_ranks': 4, 'sync_wait_s': 99.9427137374878, 'weight_hash': '4810cb2c4e09', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 30}
+   60      2    0.9379    1.1553   0.063/0.034/0.063   1.99/0.40/1.93   9.89/0.89/9.58   119s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.864) | H20 LOSES TO persistence (-4.013) | H100 LOSES TO persistence (-10.145)
+      Q2 getting better?            H20 skill -0.2209 +- 0.0663/epoch t=-3.33 -> GETTING WORSE over 51 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 998.7/1k quiet ticks | precision 0.003 | drift 2.8e-01 | magnitude skill -0.737 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.735 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.97 -> NO -- the action is decoration
+   61      2    1.2748    1.1751   0.115/0.094/0.115   4.37/0.41/4.32   21.65/0.95/21.99   12s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.220) | H20 LOSES TO persistence (-9.611) | H100 LOSES TO persistence (-21.733)
+      Q2 getting better?            H20 skill -0.2108 +- 0.0640/epoch t=-3.29 -> GETTING WORSE over 52 epochs
+      Q3 boss_damage    41 events | MISSED  12.2% | HALLUCINATED 829.0/1k quiet ticks | precision 0.004 | drift 1.6e-01 | magnitude skill -0.050 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 830.9/1k quiet ticks | precision 0.010 | drift 1.2e-01 | magnitude skill +0.713 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+      fleet sync @epoch 62: {'sync_ranks': 4, 'sync_wait_s': 96.73581838607788, 'weight_hash': '333be7934747', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 31}
+   62      2    1.5324    1.1623   0.110/0.091/0.112   0.98/0.50/0.97   3.46/0.88/3.21   112s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.207) | H20 LOSES TO persistence (-0.943) | H100 LOSES TO persistence (-2.947)
+      Q2 getting better?            H20 skill -0.1831 +- 0.0636/epoch t=-2.88 -> GETTING WORSE over 53 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 982.4/1k quiet ticks | precision 0.003 | drift 2.5e-01 | magnitude skill -0.128 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 992.7/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.730 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+   63      2    1.6864    1.1763   0.096/0.067/0.092   2.73/0.34/2.73   11.70/0.82/11.77   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.437) | H20 LOSES TO persistence (-6.929) | H100 LOSES TO persistence (-13.282)
+      Q2 getting better?            H20 skill -0.1702 +- 0.0617/epoch t=-2.76 -> GETTING WORSE over 54 epochs
+      Q3 boss_damage    41 events | MISSED  70.7% | HALLUCINATED 921.1/1k quiet ticks | precision 0.001 | drift 2.4e-01 | magnitude skill -1.642 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 916.0/1k quiet ticks | precision 0.009 | drift 1.1e-01 | magnitude skill +0.763 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 64: {'sync_ranks': 4, 'sync_wait_s': 113.34766030311584, 'weight_hash': '9bd429f0360c', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 32}
+   64      2    1.4738    1.1445   0.104/0.086/0.106   1.91/0.47/1.92   8.53/0.93/8.57   132s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.211) | H20 LOSES TO persistence (-3.024) | H100 LOSES TO persistence (-8.158)
+      Q2 getting better?            H20 skill -0.1507 +- 0.0605/epoch t=-2.49 -> GETTING WORSE over 55 epochs
+      Q3 boss_damage    41 events | MISSED  34.1% | HALLUCINATED 969.6/1k quiet ticks | precision 0.002 | drift 2.5e-01 | magnitude skill -0.284 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.646 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   65      2    1.2305    1.1341   0.202/0.186/0.205   4.72/0.46/4.76   24.80/0.90/25.01   16s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.088) | H20 LOSES TO persistence (-9.259) | H100 LOSES TO persistence (-26.611)
+      Q2 getting better?            H20 skill -0.1447 +- 0.0585/epoch t=-2.47 -> GETTING WORSE over 56 epochs
+      Q3 boss_damage    41 events | MISSED  46.3% | HALLUCINATED 878.6/1k quiet ticks | precision 0.002 | drift 1.8e-01 | magnitude skill -0.537 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 913.9/1k quiet ticks | precision 0.009 | drift 1.1e-01 | magnitude skill +0.696 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 66: {'sync_ranks': 4, 'sync_wait_s': 90.12861895561218, 'weight_hash': 'f4022ec8dba3', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 33}
+   66      2    1.1437    1.1102   0.275/0.271/0.275   7.15/0.46/6.74   43.04/0.77/38.01   103s
+      Q1 better than doing nothing?  H1 ties persistence (-0.014) | H20 LOSES TO persistence (-14.630) | H100 LOSES TO persistence (-54.662)
+      Q2 getting better?            H20 skill -0.1487 +- 0.0565/epoch t=-2.63 -> GETTING WORSE over 57 epochs
+      Q3 boss_damage    41 events | MISSED  90.2% | HALLUCINATED 589.4/1k quiet ticks | precision 0.001 | drift 9.3e-02 | magnitude skill -1.590 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.673 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.94 -> NO -- the action is decoration
+   67      2    1.0051    1.1791   0.274/0.241/0.274   2.44/0.41/2.45   12.90/0.84/13.11   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.139) | H20 LOSES TO persistence (-4.906) | H100 LOSES TO persistence (-14.447)
+      Q2 getting better?            H20 skill -0.1350 +- 0.0551/epoch t=-2.45 -> GETTING WORSE over 58 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 901.5/1k quiet ticks | precision 0.004 | drift 2.1e-01 | magnitude skill +0.071 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 995.1/1k quiet ticks | precision 0.008 | drift 1.4e-01 | magnitude skill +0.677 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 68: {'sync_ranks': 4, 'sync_wait_s': 103.96020102500916, 'weight_hash': '7666f1a1d8bd', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 34}
+   68      2    0.8145    1.1141   0.149/0.144/0.148   5.56/0.40/5.51   34.11/0.75/33.88   116s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.034) | H20 LOSES TO persistence (-12.914) | H100 LOSES TO persistence (-44.653)
+      Q2 getting better?            H20 skill -0.1360 +- 0.0532/epoch t=-2.56 -> GETTING WORSE over 59 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 985.9/1k quiet ticks | precision 0.003 | drift 2.6e-01 | magnitude skill -0.745 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 995.3/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.684 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+   69      2    0.8469    1.1337   0.168/0.159/0.170   2.99/0.46/2.70   15.80/0.79/13.99   18s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.059) | H20 LOSES TO persistence (-5.429) | H100 LOSES TO persistence (-19.103)
+      Q2 getting better?            H20 skill -0.1245 +- 0.0519/epoch t=-2.40 -> GETTING WORSE over 60 epochs
+      Q3 boss_damage    41 events | MISSED  41.5% | HALLUCINATED 871.5/1k quiet ticks | precision 0.002 | drift 1.2e-01 | magnitude skill -0.165 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 900.2/1k quiet ticks | precision 0.009 | drift 7.3e-02 | magnitude skill +0.609 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.90 -> NO -- the action is decoration
+      fleet sync FAILED @epoch 70: Response ended prematurely -- training alone
+   70      2    1.2486    1.1358   0.129/0.105/0.131   11.17/0.40/11.09   59.46/0.94/59.36   216s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.226) | H20 LOSES TO persistence (-26.826) | H100 LOSES TO persistence (-62.039)
+      Q2 getting better?            H20 skill -0.1477 +- 0.0519/epoch t=-2.84 -> GETTING WORSE over 61 epochs
+      Q3 boss_damage    41 events | MISSED  31.7% | HALLUCINATED 849.2/1k quiet ticks | precision 0.003 | drift 1.2e-01 | magnitude skill +0.051 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 841.2/1k quiet ticks | precision 0.010 | drift 8.3e-02 | magnitude skill +0.650 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+   71      2    1.3564    1.1177   0.136/0.118/0.136   5.48/0.47/5.95   31.41/0.87/32.43   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.149) | H20 LOSES TO persistence (-10.674) | H100 LOSES TO persistence (-35.214)
+      Q2 getting better?            H20 skill -0.1438 +- 0.0503/epoch t=-2.86 -> GETTING WORSE over 62 epochs
+      Q3 boss_damage    41 events | MISSED  29.3% | HALLUCINATED 728.0/1k quiet ticks | precision 0.003 | drift 1.0e-01 | magnitude skill +0.068 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 767.4/1k quiet ticks | precision 0.011 | drift 6.7e-02 | magnitude skill +0.607 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.09 -> NO -- the action is decoration
+      fleet sync @epoch 72: {'sync_ranks': 2, 'sync_wait_s': 20.225900650024414, 'weight_hash': 'aa5691a6f14c', 'aggregator': 0, 'sync_included_self': False, 'sync_from_update': 36}
+   72      2    1.0892    1.1763   0.199/0.182/0.198   6.09/0.56/6.01   32.43/0.91/32.33   36s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.091) | H20 LOSES TO persistence (-9.829) | H100 LOSES TO persistence (-34.702)
+      Q2 getting better?            H20 skill -0.1387 +- 0.0488/epoch t=-2.84 -> GETTING WORSE over 63 epochs
+      Q3 boss_damage    41 events | MISSED   7.3% | HALLUCINATED 956.7/1k quiet ticks | precision 0.003 | drift 2.7e-01 | magnitude skill -0.668 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 975.9/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.695 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+   73      2    1.0921    1.1513   0.147/0.125/0.146   5.07/0.53/5.11   27.02/0.96/26.96   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.176) | H20 LOSES TO persistence (-8.513) | H100 LOSES TO persistence (-27.215)
+      Q2 getting better?            H20 skill -0.1321 +- 0.0474/epoch t=-2.78 -> GETTING WORSE over 64 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 926.5/1k quiet ticks | precision 0.003 | drift 2.1e-01 | magnitude skill -0.887 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.9% | HALLUCINATED 961.8/1k quiet ticks | precision 0.008 | drift 9.8e-02 | magnitude skill +0.605 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 74: {'sync_ranks': 4, 'sync_wait_s': 118.61264181137085, 'weight_hash': '330b0198b04d', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 37}
+   74      2    1.0834    1.1493   0.176/0.163/0.176   6.85/0.47/6.85   36.30/0.97/36.31   134s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.083) | H20 LOSES TO persistence (-13.704) | H100 LOSES TO persistence (-36.367)
+      Q2 getting better?            H20 skill -0.1330 +- 0.0460/epoch t=-2.89 -> GETTING WORSE over 65 epochs
+      Q3 boss_damage    41 events | MISSED   7.3% | HALLUCINATED 917.5/1k quiet ticks | precision 0.003 | drift 1.7e-01 | magnitude skill -0.167 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 933.7/1k quiet ticks | precision 0.009 | drift 7.9e-02 | magnitude skill +0.602 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   75      2    0.9771    1.1509   0.221/0.213/0.221   3.04/0.52/2.99   15.68/0.89/14.70   21s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.038) | H20 LOSES TO persistence (-4.871) | H100 LOSES TO persistence (-16.624)
+      Q2 getting better?            H20 skill -0.1218 +- 0.0451/epoch t=-2.70 -> GETTING WORSE over 66 epochs
+      Q3 boss_damage    41 events | MISSED  36.6% | HALLUCINATED 837.8/1k quiet ticks | precision 0.003 | drift 1.1e-01 | magnitude skill +0.027 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 957.2/1k quiet ticks | precision 0.009 | drift 7.1e-02 | magnitude skill +0.646 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.98 -> NO -- the action is decoration
+      fleet sync @epoch 76: {'sync_ranks': 4, 'sync_wait_s': 115.92286229133606, 'weight_hash': 'b3a8b13de4a1', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 38}
+   76      2    1.2494    1.1598   0.256/0.229/0.256   7.30/0.50/7.28   34.78/0.94/34.46   128s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.117) | H20 LOSES TO persistence (-13.593) | H100 LOSES TO persistence (-36.038)
+      Q2 getting better?            H20 skill -0.1228 +- 0.0437/epoch t=-2.81 -> GETTING WORSE over 67 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 992.5/1k quiet ticks | precision 0.003 | drift 2.9e-01 | magnitude skill -1.261 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 968.1/1k quiet ticks | precision 0.009 | drift 9.3e-02 | magnitude skill +0.644 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   77      2    1.2902    1.1230   0.138/0.112/0.141   3.82/0.45/3.84   19.24/0.80/19.45   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.232) | H20 LOSES TO persistence (-7.427) | H100 LOSES TO persistence (-23.177)
+      Q2 getting better?            H20 skill -0.1157 +- 0.0426/epoch t=-2.71 -> GETTING WORSE over 68 epochs
+      Q3 boss_damage    41 events | MISSED  56.1% | HALLUCINATED 526.2/1k quiet ticks | precision 0.003 | drift 4.7e-02 | magnitude skill -0.268 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 842.1/1k quiet ticks | precision 0.010 | drift 8.4e-02 | magnitude skill +0.604 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 78: {'sync_ranks': 4, 'sync_wait_s': 65.8878607749939, 'weight_hash': 'a999f9743cd5', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 39}
+   78      2    1.2894    1.1501   0.101/0.055/0.103   9.53/0.42/9.51   46.91/0.89/46.83   79s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.850) | H20 LOSES TO persistence (-21.691) | H100 LOSES TO persistence (-51.575)
+      Q2 getting better?            H20 skill -0.1268 +- 0.0419/epoch t=-3.03 -> GETTING WORSE over 69 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 986.3/1k quiet ticks | precision 0.003 | drift 2.9e-01 | magnitude skill -1.022 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 990.0/1k quiet ticks | precision 0.008 | drift 9.5e-02 | magnitude skill +0.626 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   79      2    1.3726    1.1942   0.168/0.147/0.170   2.67/0.38/2.72   15.21/0.79/15.50   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.140) | H20 LOSES TO persistence (-6.007) | H100 LOSES TO persistence (-18.139)
+      Q2 getting better?            H20 skill -0.1179 +- 0.0410/epoch t=-2.87 -> GETTING WORSE over 70 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.003 | drift 5.5e-01 | magnitude skill -2.487 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 998.4/1k quiet ticks | precision 0.008 | drift 1.5e-01 | magnitude skill +0.634 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.02 -> NO -- the action is decoration
+      fleet sync @epoch 80: {'sync_ranks': 4, 'sync_wait_s': 106.46047592163086, 'weight_hash': '652b7e955dce', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 40}
+   80      2    1.3298    1.1432   0.105/0.083/0.104   5.94/0.42/5.92   31.99/0.94/31.94   118s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.271) | H20 LOSES TO persistence (-13.159) | H100 LOSES TO persistence (-32.855)
+      Q2 getting better?            H20 skill -0.1179 +- 0.0399/epoch t=-2.96 -> GETTING WORSE over 71 epochs
+      Q3 boss_damage    41 events | MISSED  22.0% | HALLUCINATED 876.1/1k quiet ticks | precision 0.003 | drift 1.8e-01 | magnitude skill +0.157 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 990.9/1k quiet ticks | precision 0.008 | drift 9.9e-02 | magnitude skill +0.680 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   81      2    0.9596    1.1370   0.117/0.089/0.117   12.91/0.48/13.09   66.16/0.83/67.09   7s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.314) | H20 LOSES TO persistence (-25.855) | H100 LOSES TO persistence (-78.373)
+      Q2 getting better?            H20 skill -0.1323 +- 0.0396/epoch t=-3.34 -> GETTING WORSE over 72 epochs
+      Q3 boss_damage    41 events | MISSED  70.7% | HALLUCINATED 776.1/1k quiet ticks | precision 0.001 | drift 1.1e-01 | magnitude skill -0.592 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   4.9% | HALLUCINATED 927.4/1k quiet ticks | precision 0.008 | drift 6.5e-02 | magnitude skill +0.416 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 82: {'sync_ranks': 4, 'sync_wait_s': 128.12314295768738, 'weight_hash': 'dbc81acf1272', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 41}
+   82      2    1.1664    1.1212   0.070/0.061/0.071   3.24/0.35/3.24   16.27/0.88/16.29   143s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.148) | H20 LOSES TO persistence (-8.222) | H100 LOSES TO persistence (-17.496)
+      Q2 getting better?            H20 skill -0.1259 +- 0.0387/epoch t=-3.25 -> GETTING WORSE over 73 epochs
+      Q3 boss_damage    41 events | MISSED   9.8% | HALLUCINATED 986.3/1k quiet ticks | precision 0.003 | drift 2.2e-01 | magnitude skill -0.476 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 981.4/1k quiet ticks | precision 0.008 | drift 8.7e-02 | magnitude skill +0.614 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   83      2    1.1313    1.1251   0.071/0.049/0.069   4.40/0.39/4.40   23.48/1.00/23.43   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.459) | H20 LOSES TO persistence (-10.268) | H100 LOSES TO persistence (-22.470)
+      Q2 getting better?            H20 skill -0.1220 +- 0.0378/epoch t=-3.23 -> GETTING WORSE over 74 epochs
+      Q3 boss_damage    41 events | MISSED  31.7% | HALLUCINATED 910.3/1k quiet ticks | precision 0.002 | drift 1.7e-01 | magnitude skill -0.027 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 998.5/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.634 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 84: {'sync_ranks': 4, 'sync_wait_s': 96.77125191688538, 'weight_hash': 'bf8828818c29', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 42}
+   84      2    0.9868    1.1339   0.087/0.057/0.087   2.83/0.40/2.83   14.91/0.77/14.94   109s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.513) | H20 LOSES TO persistence (-6.039) | H100 LOSES TO persistence (-18.277)
+      Q2 getting better?            H20 skill -0.1138 +- 0.0370/epoch t=-3.07 -> GETTING WORSE over 75 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 941.0/1k quiet ticks | precision 0.004 | drift 2.0e-01 | magnitude skill -0.652 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 966.7/1k quiet ticks | precision 0.009 | drift 8.9e-02 | magnitude skill +0.707 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   85      2    1.1345    1.1233   0.163/0.143/0.164   7.75/0.45/7.75   39.59/0.81/39.60   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.140) | H20 LOSES TO persistence (-16.047) | H100 LOSES TO persistence (-47.784)
+      Q2 getting better?            H20 skill -0.1164 +- 0.0361/epoch t=-3.23 -> GETTING WORSE over 76 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 999.3/1k quiet ticks | precision 0.003 | drift 2.5e-01 | magnitude skill -1.519 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   3.9% | HALLUCINATED 851.0/1k quiet ticks | precision 0.009 | drift 5.9e-02 | magnitude skill +0.472 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync FAILED @epoch 86: Response ended prematurely -- training alone
+   86      2    1.3499    1.1238   0.170/0.127/0.169   4.81/0.48/4.64   26.30/0.82/25.96   183s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.330) | H20 LOSES TO persistence (-8.910) | H100 LOSES TO persistence (-31.133)
+      Q2 getting better?            H20 skill -0.1116 +- 0.0353/epoch t=-3.16 -> GETTING WORSE over 77 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 4.1e-01 | magnitude skill -4.763 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  26.5% | HALLUCINATED 620.9/1k quiet ticks | precision 0.010 | drift 3.6e-02 | magnitude skill +0.233 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.97 -> NO -- the action is decoration
+   87      2    1.5465    1.1669   0.189/0.155/0.194   2.93/0.46/2.75   12.69/0.86/11.89   18s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.225) | H20 LOSES TO persistence (-5.430) | H100 LOSES TO persistence (-13.725)
+      Q2 getting better?            H20 skill -0.1036 +- 0.0347/epoch t=-2.99 -> GETTING WORSE over 78 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 979.3/1k quiet ticks | precision 0.003 | drift 2.1e-01 | magnitude skill -0.465 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 886.4/1k quiet ticks | precision 0.009 | drift 1.1e-01 | magnitude skill +0.669 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.94 -> NO -- the action is decoration
+      fleet sync @epoch 88: {'sync_ranks': 4, 'sync_wait_s': 58.261474609375, 'weight_hash': 'ba80b106be58', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 44}
+   88      2    1.3888    1.1385   0.057/0.020/0.063   3.98/0.34/3.99   20.33/0.95/20.36   156s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-1.797) | H20 LOSES TO persistence (-10.773) | H100 LOSES TO persistence (-20.476)
+      Q2 getting better?            H20 skill -0.1012 +- 0.0338/epoch t=-2.99 -> GETTING WORSE over 79 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 987.6/1k quiet ticks | precision 0.003 | drift 2.5e-01 | magnitude skill -0.752 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 997.2/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.710 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   89      2    0.9657    1.1529   0.095/0.078/0.094   4.30/0.48/4.30   21.82/0.84/21.62   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.215) | H20 LOSES TO persistence (-7.961) | H100 LOSES TO persistence (-25.007)
+      Q2 getting better?            H20 skill -0.0963 +- 0.0331/epoch t=-2.91 -> GETTING WORSE over 80 epochs
+      Q3 boss_damage    41 events | MISSED  22.0% | HALLUCINATED 943.1/1k quiet ticks | precision 0.003 | drift 1.3e-01 | magnitude skill +0.036 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 860.5/1k quiet ticks | precision 0.009 | drift 5.8e-02 | magnitude skill +0.566 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 90: {'sync_ranks': 4, 'sync_wait_s': 56.21512246131897, 'weight_hash': '4ce123c635fd', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 45}
+   90      2    1.1123    1.1437   0.284/0.266/0.284   9.96/0.58/10.03   50.85/1.00/51.26   73s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.065) | H20 LOSES TO persistence (-16.213) | H100 LOSES TO persistence (-49.692)
+      Q2 getting better?            H20 skill -0.0991 +- 0.0323/epoch t=-3.07 -> GETTING WORSE over 81 epochs
+      Q3 boss_damage    41 events | MISSED  39.0% | HALLUCINATED 934.6/1k quiet ticks | precision 0.002 | drift 1.5e-01 | magnitude skill -0.246 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 980.6/1k quiet ticks | precision 0.008 | drift 8.2e-02 | magnitude skill +0.673 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+   91      2    1.3344    1.1398   0.231/0.208/0.233   3.46/0.48/3.97   18.01/0.84/20.56   15s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.108) | H20 LOSES TO persistence (-6.261) | H100 LOSES TO persistence (-20.461)
+      Q2 getting better?            H20 skill -0.0928 +- 0.0317/epoch t=-2.92 -> GETTING WORSE over 82 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 3.9e-01 | magnitude skill -4.545 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 850.7/1k quiet ticks | precision 0.010 | drift 6.1e-02 | magnitude skill +0.534 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.15 -> ACTION-CONDITIONED
+      fleet sync @epoch 92: {'sync_ranks': 4, 'sync_wait_s': 96.75461483001709, 'weight_hash': 'e354b09ebd82', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 46}
+   92      2    1.3004    1.1179   0.189/0.146/0.188   1.96/0.48/1.94   9.61/0.95/9.46   110s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.294) | H20 LOSES TO persistence (-3.078) | H100 LOSES TO persistence (-9.151)
+      Q2 getting better?            H20 skill -0.0842 +- 0.0314/epoch t=-2.68 -> GETTING WORSE over 83 epochs
+      Q3 boss_damage    41 events | MISSED  14.6% | HALLUCINATED 955.9/1k quiet ticks | precision 0.003 | drift 1.8e-01 | magnitude skill +0.143 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 998.9/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.728 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.99 -> NO -- the action is decoration
+   93      2    1.2761    1.1108   0.171/0.155/0.169   11.18/0.50/11.22   58.02/0.87/58.23   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.099) | H20 LOSES TO persistence (-21.202) | H100 LOSES TO persistence (-65.571)
+      Q2 getting better?            H20 skill -0.0913 +- 0.0309/epoch t=-2.95 -> GETTING WORSE over 84 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 978.8/1k quiet ticks | precision 0.003 | drift 1.7e-01 | magnitude skill +0.089 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 884.5/1k quiet ticks | precision 0.009 | drift 7.7e-02 | magnitude skill +0.617 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 94: {'sync_ranks': 4, 'sync_wait_s': 100.30134153366089, 'weight_hash': '12d9a737f3f7', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 47}
+   94      2    1.2860    1.1010   0.136/0.117/0.136   8.49/0.44/8.53   44.24/0.87/44.44   122s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.164) | H20 LOSES TO persistence (-18.443) | H100 LOSES TO persistence (-49.611)
+      Q2 getting better?            H20 skill -0.0956 +- 0.0303/epoch t=-3.16 -> GETTING WORSE over 85 epochs
+      Q3 boss_damage    41 events | MISSED  46.3% | HALLUCINATED 859.8/1k quiet ticks | precision 0.002 | drift 1.4e-01 | magnitude skill -0.196 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 986.3/1k quiet ticks | precision 0.008 | drift 8.5e-02 | magnitude skill +0.622 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   95      2    1.0879    1.1234   0.232/0.218/0.232   6.05/0.46/6.06   31.35/0.84/31.37   12s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.066) | H20 LOSES TO persistence (-12.138) | H100 LOSES TO persistence (-36.160)
+      Q2 getting better?            H20 skill -0.0945 +- 0.0296/epoch t=-3.19 -> GETTING WORSE over 86 epochs
+      Q3 boss_damage    41 events | MISSED  26.8% | HALLUCINATED 949.0/1k quiet ticks | precision 0.003 | drift 1.4e-01 | magnitude skill -0.101 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 847.8/1k quiet ticks | precision 0.010 | drift 6.3e-02 | magnitude skill +0.521 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 96: {'sync_ranks': 4, 'sync_wait_s': 93.50006055831909, 'weight_hash': 'b6ccddb77ec4', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 48}
+   96      2    1.7911    1.2053   0.111/0.070/0.111   4.22/0.39/4.21   21.31/0.84/21.29   106s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.578) | H20 LOSES TO persistence (-9.763) | H100 LOSES TO persistence (-24.382)
+      Q2 getting better?            H20 skill -0.0915 +- 0.0290/epoch t=-3.16 -> GETTING WORSE over 87 epochs
+      Q3 boss_damage    41 events | MISSED  56.1% | HALLUCINATED 846.0/1k quiet ticks | precision 0.002 | drift 1.3e-01 | magnitude skill -0.349 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   5.9% | HALLUCINATED 825.6/1k quiet ticks | precision 0.009 | drift 5.7e-02 | magnitude skill +0.481 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   97      2    0.7583    1.1219   0.175/0.158/0.175   3.83/0.52/3.85   19.98/0.95/20.15   12s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.106) | H20 LOSES TO persistence (-6.354) | H100 LOSES TO persistence (-19.980)
+      Q2 getting better?            H20 skill -0.0860 +- 0.0285/epoch t=-3.02 -> GETTING WORSE over 88 epochs
+      Q3 boss_damage    41 events | MISSED  19.5% | HALLUCINATED 946.1/1k quiet ticks | precision 0.003 | drift 1.7e-01 | magnitude skill +0.034 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 964.3/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.651 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 98: {'sync_ranks': 4, 'sync_wait_s': 137.6510648727417, 'weight_hash': '5e5ea06fc03e', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 49}
+   98      2    0.7012    1.1088   0.244/0.238/0.243   2.42/0.50/2.42   12.21/0.83/12.21   148s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.022) | H20 LOSES TO persistence (-3.834) | H100 LOSES TO persistence (-13.735)
+      Q2 getting better?            H20 skill -0.0789 +- 0.0281/epoch t=-2.81 -> GETTING WORSE over 89 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 982.5/1k quiet ticks | precision 0.003 | drift 2.3e-01 | magnitude skill -0.375 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 992.0/1k quiet ticks | precision 0.008 | drift 1.1e-01 | magnitude skill +0.673 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+   99      2    1.2645    1.1679   0.135/0.106/0.134   16.05/0.42/16.02   82.15/0.93/82.07   14s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.274) | H20 LOSES TO persistence (-37.204) | H100 LOSES TO persistence (-87.167)
+      Q2 getting better?            H20 skill -0.0967 +- 0.0294/epoch t=-3.29 -> GETTING WORSE over 90 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED 308.6/1k quiet ticks | precision 0.000 | drift 1.1e-01 | magnitude skill -3.352 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.008 | drift 2.5e-01 | magnitude skill -0.008 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 100: {'sync_ranks': 4, 'sync_wait_s': 140.0945429801941, 'weight_hash': 'c51e078c8c46', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 50}
+  100      2    1.4165    1.1100   0.090/0.072/0.092   3.13/0.45/3.13   15.63/0.96/15.63   152s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.243) | H20 LOSES TO persistence (-6.024) | H100 LOSES TO persistence (-15.268)
+      Q2 getting better?            H20 skill -0.0909 +- 0.0289/epoch t=-3.15 -> GETTING WORSE over 91 epochs
+      Q3 boss_damage    41 events | MISSED  22.0% | HALLUCINATED 950.6/1k quiet ticks | precision 0.003 | drift 2.1e-01 | magnitude skill -0.018 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 991.2/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.662 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  101      2    1.2024    1.1576   0.165/0.146/0.166   7.78/0.41/7.76   39.80/0.85/39.64   11s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.130) | H20 LOSES TO persistence (-18.207) | H100 LOSES TO persistence (-45.832)
+      Q2 getting better?            H20 skill -0.0940 +- 0.0283/epoch t=-3.32 -> GETTING WORSE over 92 epochs
+      Q3 boss_damage    41 events | MISSED  70.7% | HALLUCINATED 635.8/1k quiet ticks | precision 0.002 | drift 6.1e-02 | magnitude skill -0.640 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 848.4/1k quiet ticks | precision 0.010 | drift 7.0e-02 | magnitude skill +0.591 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 102: {'sync_ranks': 4, 'sync_wait_s': 115.72670412063599, 'weight_hash': '06d78e10a24a', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 51}
+  102      2    1.1606    1.1203   0.163/0.151/0.164   2.39/0.42/2.76   11.76/0.71/13.80   133s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.081) | H20 LOSES TO persistence (-4.661) | H100 LOSES TO persistence (-15.556)
+      Q2 getting better?            H20 skill -0.0875 +- 0.0280/epoch t=-3.13 -> GETTING WORSE over 93 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 958.9/1k quiet ticks | precision 0.003 | drift 2.2e-01 | magnitude skill -0.362 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.3/1k quiet ticks | precision 0.008 | drift 1.0e-01 | magnitude skill +0.768 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.16 -> ACTION-CONDITIONED
+  103      2    1.1142    1.1387   0.127/0.078/0.124   6.89/0.44/6.88   35.01/0.87/35.00   7s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.612) | H20 LOSES TO persistence (-14.698) | H100 LOSES TO persistence (-39.297)
+      Q2 getting better?            H20 skill -0.0881 +- 0.0274/epoch t=-3.22 -> GETTING WORSE over 94 epochs
+      Q3 boss_damage    41 events | MISSED  48.8% | HALLUCINATED 810.5/1k quiet ticks | precision 0.002 | drift 1.0e-01 | magnitude skill -0.177 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 858.5/1k quiet ticks | precision 0.010 | drift 9.3e-02 | magnitude skill +0.625 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 104: {'sync_ranks': 4, 'sync_wait_s': 105.2029459476471, 'weight_hash': 'dfd36b2f880a', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 52}
+  104      2    1.0184    1.1007   0.135/0.120/0.137   1.37/0.39/1.53   6.42/0.76/7.33   116s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.128) | H20 LOSES TO persistence (-2.524) | H100 LOSES TO persistence (-7.425)
+      Q2 getting better?            H20 skill -0.0806 +- 0.0272/epoch t=-2.97 -> GETTING WORSE over 95 epochs
+      Q3 boss_damage    41 events | MISSED  39.0% | HALLUCINATED 811.5/1k quiet ticks | precision 0.002 | drift 1.0e-01 | magnitude skill -0.133 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 988.6/1k quiet ticks | precision 0.008 | drift 9.5e-02 | magnitude skill +0.690 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.12 -> ACTION-CONDITIONED
+  105      2    1.2682    1.1534   0.134/0.092/0.135   5.16/0.45/5.07   23.11/0.95/22.67   10s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.445) | H20 LOSES TO persistence (-10.453) | H100 LOSES TO persistence (-23.251)
+      Q2 getting better?            H20 skill -0.0786 +- 0.0266/epoch t=-2.96 -> GETTING WORSE over 96 epochs
+      Q3 boss_damage    41 events | MISSED 100.0% | HALLUCINATED   0.0/1k quiet ticks | precision 0.000 | drift 1.4e-01 | magnitude skill -4.321 -> MISSES ALL
+      Q3 link_damage   102 events | MISSED   2.9% | HALLUCINATED 758.6/1k quiet ticks | precision 0.011 | drift 5.2e-02 | magnitude skill +0.500 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.98 -> NO -- the action is decoration
+      fleet sync @epoch 106: {'sync_ranks': 4, 'sync_wait_s': 111.81420135498047, 'weight_hash': '32a2ad0c53c5', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 53}
+  106      2    1.2302    1.1085   0.247/0.233/0.246   7.61/0.48/7.60   38.00/0.90/37.75   123s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.061) | H20 LOSES TO persistence (-14.943) | H100 LOSES TO persistence (-41.174)
+      Q2 getting better?            H20 skill -0.0796 +- 0.0261/epoch t=-3.05 -> GETTING WORSE over 97 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 973.6/1k quiet ticks | precision 0.003 | drift 1.9e-01 | magnitude skill -0.618 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 965.4/1k quiet ticks | precision 0.008 | drift 8.6e-02 | magnitude skill +0.668 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  107      2    0.7784    1.1229   0.158/0.149/0.159   6.66/0.45/6.66   34.18/0.80/34.25   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.057) | H20 LOSES TO persistence (-13.731) | H100 LOSES TO persistence (-41.739)
+      Q2 getting better?            H20 skill -0.0796 +- 0.0255/epoch t=-3.12 -> GETTING WORSE over 98 epochs
+      Q3 boss_damage    41 events | MISSED  19.5% | HALLUCINATED 866.8/1k quiet ticks | precision 0.003 | drift 1.1e-01 | magnitude skill +0.197 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 972.1/1k quiet ticks | precision 0.009 | drift 8.9e-02 | magnitude skill +0.651 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 108: {'sync_ranks': 4, 'sync_wait_s': 104.28948092460632, 'weight_hash': 'b58d99b863bf', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 54}
+  108      2    0.8348    1.1205   0.066/0.023/0.066   12.85/0.34/12.85   66.49/0.94/66.48   112s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-1.882) | H20 LOSES TO persistence (-37.201) | H100 LOSES TO persistence (-70.036)
+      Q2 getting better?            H20 skill -0.0939 +- 0.0263/epoch t=-3.56 -> GETTING WORSE over 99 epochs
+      Q3 boss_damage    41 events | MISSED   4.9% | HALLUCINATED 947.9/1k quiet ticks | precision 0.003 | drift 1.8e-01 | magnitude skill +0.136 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 957.0/1k quiet ticks | precision 0.009 | drift 9.2e-02 | magnitude skill +0.717 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  109      2    1.3327    1.1211   0.146/0.131/0.146   4.00/0.44/4.00   20.59/1.00/20.60   10s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.116) | H20 LOSES TO persistence (-8.105) | H100 LOSES TO persistence (-19.681)
+      Q2 getting better?            H20 skill -0.0899 +- 0.0259/epoch t=-3.47 -> GETTING WORSE over 100 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 997.9/1k quiet ticks | precision 0.003 | drift 3.4e-01 | magnitude skill -2.128 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 980.3/1k quiet ticks | precision 0.008 | drift 1.3e-01 | magnitude skill +0.565 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 110: {'sync_ranks': 4, 'sync_wait_s': 114.61923861503601, 'weight_hash': '216add6a3664', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 55}
+  110      2    1.1155    1.1311   0.244/0.229/0.241   5.23/0.51/4.66   27.01/0.98/23.87   129s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.068) | H20 LOSES TO persistence (-9.267) | H100 LOSES TO persistence (-26.550)
+      Q2 getting better?            H20 skill -0.0868 +- 0.0255/epoch t=-3.41 -> GETTING WORSE over 101 epochs
+      Q3 boss_damage    41 events | MISSED  51.2% | HALLUCINATED 901.6/1k quiet ticks | precision 0.002 | drift 1.8e-01 | magnitude skill -0.404 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 947.8/1k quiet ticks | precision 0.009 | drift 8.6e-02 | magnitude skill +0.555 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.89 -> NO -- the action is decoration
+  111      2    1.4947    1.1852   0.224/0.181/0.227   3.98/0.45/4.02   20.66/0.86/20.82   6s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.243) | H20 LOSES TO persistence (-7.853) | H100 LOSES TO persistence (-23.074)
+      Q2 getting better?            H20 skill -0.0831 +- 0.0251/epoch t=-3.32 -> GETTING WORSE over 102 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.003 | drift 3.8e-01 | magnitude skill -3.747 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED  13.7% | HALLUCINATED 694.3/1k quiet ticks | precision 0.010 | drift 4.6e-02 | magnitude skill +0.381 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+      fleet sync @epoch 112: {'sync_ranks': 4, 'sync_wait_s': 121.65836334228516, 'weight_hash': '33893171958a', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 56}
+  112      2    1.0518    1.1262   0.249/0.235/0.249   9.50/0.45/9.47   49.02/0.83/48.88   131s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.061) | H20 LOSES TO persistence (-20.028) | H100 LOSES TO persistence (-58.348)
+      Q2 getting better?            H20 skill -0.0863 +- 0.0246/epoch t=-3.50 -> GETTING WORSE over 103 epochs
+      Q3 boss_damage    41 events | MISSED  51.2% | HALLUCINATED 777.7/1k quiet ticks | precision 0.002 | drift 1.0e-01 | magnitude skill -0.177 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 910.5/1k quiet ticks | precision 0.009 | drift 7.3e-02 | magnitude skill +0.524 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  113      2    0.9992    1.1632   0.064/0.036/0.064   9.49/0.39/9.47   49.33/0.91/49.20   10s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.798) | H20 LOSES TO persistence (-23.249) | H100 LOSES TO persistence (-53.227)
+      Q2 getting better?            H20 skill -0.0911 +- 0.0243/epoch t=-3.74 -> GETTING WORSE over 104 epochs
+      Q3 boss_damage    41 events | MISSED   9.8% | HALLUCINATED 960.6/1k quiet ticks | precision 0.003 | drift 2.3e-01 | magnitude skill -0.303 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.008 | drift 1.2e-01 | magnitude skill +0.711 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 114: {'sync_ranks': 4, 'sync_wait_s': 112.93638181686401, 'weight_hash': 'bac7da97be3c', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 57}
+  114      2    1.4197    1.1391   0.128/0.108/0.125   11.04/0.45/11.08   54.96/0.94/55.21   130s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.182) | H20 LOSES TO persistence (-23.674) | H100 LOSES TO persistence (-57.283)
+      Q2 getting better?            H20 skill -0.0957 +- 0.0240/epoch t=-3.99 -> GETTING WORSE over 105 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 963.3/1k quiet ticks | precision 0.003 | drift 1.7e-01 | magnitude skill -0.242 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 969.9/1k quiet ticks | precision 0.009 | drift 8.5e-02 | magnitude skill +0.608 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  115      2    0.9371    1.1261   0.086/0.057/0.086   6.63/0.35/6.64   34.88/0.76/34.86   10s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.508) | H20 LOSES TO persistence (-18.064) | H100 LOSES TO persistence (-45.079)
+      Q2 getting better?            H20 skill -0.0971 +- 0.0236/epoch t=-4.12 -> GETTING WORSE over 106 epochs
+      Q3 boss_damage    41 events | MISSED   0.0% | HALLUCINATED 1000.0/1k quiet ticks | precision 0.003 | drift 4.5e-01 | magnitude skill -3.102 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 999.8/1k quiet ticks | precision 0.008 | drift 1.4e-01 | magnitude skill +0.666 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 116: {'sync_ranks': 4, 'sync_wait_s': 134.15771412849426, 'weight_hash': '59feb507be84', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 58}
+  116      2    0.9481    1.1351   0.143/0.114/0.140   3.78/0.43/3.83   19.78/0.87/19.95   147s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.258) | H20 LOSES TO persistence (-7.868) | H100 LOSES TO persistence (-21.734)
+      Q2 getting better?            H20 skill -0.0931 +- 0.0232/epoch t=-4.01 -> GETTING WORSE over 107 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 965.9/1k quiet ticks | precision 0.003 | drift 2.2e-01 | magnitude skill -0.778 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 994.9/1k quiet ticks | precision 0.008 | drift 9.7e-02 | magnitude skill +0.724 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.01 -> NO -- the action is decoration
+  117      2    0.8024    1.0941   0.210/0.206/0.214   2.58/0.47/2.44   13.17/0.92/13.12   13s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.021) | H20 LOSES TO persistence (-4.520) | H100 LOSES TO persistence (-13.301)
+      Q2 getting better?            H20 skill -0.0876 +- 0.0230/epoch t=-3.80 -> GETTING WORSE over 108 epochs
+      Q3 boss_damage    41 events | MISSED  29.3% | HALLUCINATED 862.7/1k quiet ticks | precision 0.003 | drift 1.5e-01 | magnitude skill +0.162 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 894.4/1k quiet ticks | precision 0.009 | drift 9.1e-02 | magnitude skill +0.650 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x0.94 -> NO -- the action is decoration
+      fleet sync @epoch 118: {'sync_ranks': 4, 'sync_wait_s': 126.95083904266357, 'weight_hash': '06c0cb4d1ed5', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 59}
+  118      2    0.9965    1.1028   0.090/0.069/0.091   5.56/0.46/5.57   28.81/0.93/28.85   142s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.293) | H20 LOSES TO persistence (-11.056) | H100 LOSES TO persistence (-29.911)
+      Q2 getting better?            H20 skill -0.0855 +- 0.0226/epoch t=-3.78 -> GETTING WORSE over 109 epochs
+      Q3 boss_damage    41 events | MISSED   2.4% | HALLUCINATED 978.8/1k quiet ticks | precision 0.003 | drift 2.4e-01 | magnitude skill -0.631 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   2.0% | HALLUCINATED 939.9/1k quiet ticks | precision 0.009 | drift 7.8e-02 | magnitude skill +0.606 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+  119      2    1.0932    1.1085   0.133/0.108/0.133   7.37/0.40/7.35   38.18/0.98/38.11   16s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.228) | H20 LOSES TO persistence (-17.472) | H100 LOSES TO persistence (-38.090)
+      Q2 getting better?            H20 skill -0.0867 +- 0.0222/epoch t=-3.90 -> GETTING WORSE over 110 epochs
+      Q3 boss_damage    41 events | MISSED  46.3% | HALLUCINATED 882.1/1k quiet ticks | precision 0.002 | drift 1.5e-01 | magnitude skill -0.224 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   0.0% | HALLUCINATED 964.1/1k quiet ticks | precision 0.009 | drift 1.0e-01 | magnitude skill +0.702 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+      fleet sync @epoch 120: {'sync_ranks': 4, 'sync_wait_s': 103.9100604057312, 'weight_hash': 'e5f05f4a2068', 'aggregator': 0, 'sync_included_self': True, 'sync_from_update': 60}
+  120      2    1.1543    1.0955   0.081/0.065/0.082   7.09/0.40/7.08   36.45/0.87/36.40   121s
+      Q1 better than doing nothing?  H1 LOSES TO persistence (-0.254) | H20 LOSES TO persistence (-16.684) | H100 LOSES TO persistence (-40.736)
+      Q2 getting better?            H20 skill -0.0874 +- 0.0218/epoch t=-4.00 -> GETTING WORSE over 111 epochs
+      Q3 boss_damage    41 events | MISSED   9.8% | HALLUCINATED 930.7/1k quiet ticks | precision 0.003 | drift 1.8e-01 | magnitude skill +0.096 -> FIRES WILDLY
+      Q3 link_damage   102 events | MISSED   1.0% | HALLUCINATED 952.4/1k quiet ticks | precision 0.009 | drift 8.8e-02 | magnitude skill +0.649 -> FIRES WILDLY
+      Q4 is the ACTION used?         shuffled-action penalty x1.00 -> NO -- the action is decoration
+
+saved runs/wm_obs/wm.pt

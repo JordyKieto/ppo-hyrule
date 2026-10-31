@@ -1899,3 +1899,56 @@ distinct demonstrations per rank instead of 14 — at roughly the previous gradi
 more human weight.
 
 §12 is the control for this run: same init, same everything else, 936 episodes of baseline.
+
+## 14. Recovered: the obs-space WM trained to epoch 120 and never beat persistence — **M**
+
+**Provenance of the recovery itself**, because the artefacts were believed lost. Four H100 pods
+(`runs/fleet/gohma-wm.json`) were **"Exited by Runpod: Fri Oct 16 2026 20:56:26"** — the balance-exhaustion
+incident in AGENTS §36 row 7. They were never terminated afterwards, so on 2026-10-31 they still existed as
+`desiredStatus EXITED`, and a RunPod **volume survives an exit**: `volumeInGb 20, volumeMountPath
+/workspace`, with the repo at `/workspace/zelda-RL`.
+
+`POST /pods/<id>/start` restarted **r1** (`6orad6kxdu8v0x`); r0, r2 and r3 refused with *"not enough free
+GPUs on the host machine"* and are still EXITED, their volumes intact and retryable. Note for next time:
+**the container disk is reset on restart and only the volume survives**, so `rsync` (apt-installed at
+bootstrap) was gone and the pull had to go out as `tar cf - | ssh`. r1 was stopped again immediately after
+the pull, so it billed only for the transfer.
+
+Recovered to `recovered/gohma-wm-r1/` and `s3://zelda-rl/recovered/gohma-wm-r1/` (sizes verified both ends):
+
+| file | bytes | what |
+|---|---|---|
+| `runs/wm_obs/wm.pt` | 127,202,146 | **epoch 120**, 13 tensors, loads |
+| `runs/wm_obs/wm_e7_preKeyEvents.pt` | 127,201,826 | epoch 9, before the key-event weighting |
+| `runs/wm_obs/status_r1.json` | 2,287 | four-question readout at epoch 7 |
+| `logs/wm_r1.log` | 99,175 | 775 lines, the whole run |
+
+**It trained to epoch 120, not the ~40 recorded earlier — that figure is corrected here.** FedAvg worked
+(`sync_ranks: 4` at epochs 118 and 120), so this is four pods' worth of training.
+
+**And it is a clean negative, in the trainer's own words at epoch 120:**
+
+```
+Q2 getting better?   H20 skill -0.0874 +- 0.0218/epoch  t=-4.00  -> GETTING WORSE over 111 epochs
+Q3 boss_damage   41 events | MISSED  9.8% | HALLUCINATED 930.7/1k quiet ticks | precision 0.003
+Q3 link_damage  102 events | MISSED  1.0% | HALLUCINATED 952.4/1k quiet ticks | precision 0.009
+Q4 is the ACTION used?   shuffled-action penalty x1.00 -> NO -- the action is decoration
+```
+
+Three separate failures, each decisive on its own:
+
+1. **Diverging from persistence, not converging to it.** H20 skill fell at −0.0874 ± 0.0218 per epoch
+   (t = −4.00) across 111 epochs. The zero-init head starts AT persistence (§1: the identity is the floor),
+   so 120 epochs of training moved it steadily away from doing nothing.
+2. **The event heads fire on almost every quiet tick.** Precision 0.003 and 0.009 against ~930–950
+   hallucinations per 1,000 non-event ticks. The heavy key-event weighting asked for recall and bought
+   recall by firing always — missing only 1–10% of real events while being wrong essentially whenever
+   nothing happened.
+3. **The action is inert.** `Q4: shuffled-action penalty ×1.00`. Shuffling the action changes the
+   prediction not at all, so the model is not a *controllable* dynamics model in any sense — which is the
+   §1 free-signal control, and it fails outright. Nothing can be planned in it, and it explains
+   `train_dream_obs_ppo`'s 0 defeats in 607 real episodes (§ earlier) without appealing to the policy.
+
+**Conclusion.** The obs-space world model line is measured dead over 120 epochs, with the action-ablation
+control naming the mechanism. Recovering it changed nothing about the conclusion and everything about
+whether the conclusion is defensible: 775 lines of per-epoch readout now exist outside a terminated pod.
