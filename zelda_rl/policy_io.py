@@ -26,6 +26,11 @@ def newest_checkpoint() -> Path | None:
 
 
 def resolve_checkpoint(arg: str | None) -> Path:
+
+EXPERIMENT-CONTRACT: exempt -- this module DEFINES make_env; it does not choose a thread
+policy. AGENTS 28 belongs to the entry point, because the entry points differ on purpose:
+train_combat exposes --torch-threads and v15 trained with 2, while the collectors hardcode 1.
+Pinning threads inside the factory would silently override a training config.
     """None -> newest in inbox/runs; a .pt path; a run name/dir -> its checkpoints/latest.pt."""
     if not arg:
         p = newest_checkpoint()
@@ -51,7 +56,10 @@ def load_policy(path: Path):
         # A return-conditioned checkpoint was trained on [obs | g]. Wrapping it here means the evaluator and
         # every other consumer keep passing a plain env observation and never learn about conditioning.
         from zelda_rl.rvs import Conditioned
-        model = Conditioned(model, tuple(cfg.get("rvs_target", (1.0, 1.0, 0.0))))
+        # rvs_cond_at is absent on checkpoints trained before the placement fix; None reproduces the
+        # legacy tail placement so an old checkpoint is evaluated exactly as it was trained.
+        model = Conditioned(model, tuple(cfg.get("rvs_target", (1.0, 1.0, 0.0))),
+                            cond_at=cfg.get("rvs_cond_at"))
         model.eval()
     return model, cfg, ck
 

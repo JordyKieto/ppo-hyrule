@@ -1,5 +1,10 @@
 """Pod <-> Mac link over Upstash Redis REST: heartbeats, published policy checkpoints, cross-pod weight averaging.
 
+EXPERIMENT-CONTRACT: exempt -- this is a TRANSPORT library. Its `torch.save` writes into an in-memory
+BytesIO so weights can cross the wire; it never owns a checkpoint file, so there is nothing here for
+ckpt_s3 to back up. The trainers that do own files (train_rvs, train_wm_obs, train_combat,
+train_dream_obs_ppo) each call ckpt_s3 themselves, and the contract enforces that on them.
+
 Credentials: UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN from the environment (pods: sourced from .fleet_secrets),
 else fleet.secrets on the Mac. Keys are namespaced `zrl:{experiment}:...`; values never logged.
 """
@@ -10,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import threading
 import time
 
 import requests
@@ -150,6 +156,41 @@ class FleetLink:
         except Exception:  # noqa: BLE001 -- queue full (Upstash unreachable): drop, don't block the trainer
             pass
 
+    def start_heartbeat(self, interval: float = 30.0, metrics: dict | None = None):
+        """Heartbeat from a daemon thread, so liveness does not depend on which PHASE the trainer is in.
+
+        `average_weights` finds peers through `live_peers()`, which only counts heartbeats newer than 150 s.
+        Heartbeating once per epoch looks fine until an epoch contains a multi-minute online evaluation: on
+        2026-10-30 the RvS fleet spent ~24 episodes x 300 s inside `eval_fleet` every fourth epoch, every
+        rank went stale while evaluating, and a sync round averaged **2 of 18 ranks** after waiting 123 s --
+        eighteen pods paid for, two averaged. A background ping removes the coupling; call `update()` to
+        refresh what it reports and `stop()` at the end.
+        """
+        state = {"metrics": dict(metrics or {}), "stop": False}
+
+        def loop():
+            while not state["stop"]:
+                try:
+                    self.heartbeat(state["metrics"])
+                except Exception:                                # noqa: BLE001
+                    pass
+                for _ in range(max(1, int(interval))):
+                    if state["stop"]:
+                        return
+                    time.sleep(1.0)
+
+        th = threading.Thread(target=loop, daemon=True, name=f"heartbeat-r{self.rank}")
+        th.start()
+
+        class Handle:
+            def update(self, **kw):
+                state["metrics"].update(kw)
+
+            def stop(self):
+                state["stop"] = True
+
+        return Handle()
+
     def heartbeat(self, metrics: dict) -> None:
         """Non-blocking."""
         self._submit(self._heartbeat, {"rank": self.rank, "t": time.time(), **metrics})
@@ -190,7 +231,7 @@ class FleetLink:
                                "t": time.time(), **meta, "metrics": metrics}, default=float), "EX", BLOB_TTL)
 
     def average_weights(self, model, update: int, timeout: float = 300.0, aggregator: int = 0,
-                        straggler_wait: float = 30.0) -> dict:
+                        straggler_wait: float = 30.0, max_stale_rounds: int = 5) -> dict:
         """Parameter averaging after PPO update `update`, aggregator pattern, straggler tolerant.
 
         Every rank uploads its weights. The aggregator waits at most `straggler_wait` for live ranks, averages what
@@ -203,18 +244,34 @@ class FleetLink:
         t0 = time.time()
         local = _cpu_state(model.state_dict())
         self.u.put_blob(f"{base}:r{self.rank}", _state_bytes(local), ttl=SYNC_TTL)
+        # ALSO under a ROUND-INDEPENDENT key. The round is derived from the epoch, pods run at different
+        # speeds, and after a couple of hours they sit 16+ epochs apart -- a whole round at
+        # --fleet-sync-every 20 -- so the aggregator's own round bucket held 2-3 of 18 ranks and the rest
+        # were invisible (measured 2026-10-30: sync_ranks 3 of 10 with every heartbeat FRESH). Followers
+        # already catch up to any newer average; this is the symmetric half.
+        self.u.put_blob(f"{root}:newest:r{self.rank}",
+                        _state_bytes({"state": local, "update": update}), ttl=SYNC_TTL)
         live0 = self.live_peers()
         aggregator = pick_aggregator(aggregator, live0, self.rank)
         if self.rank == aggregator:
             live = live0
             expected = live if (live or update > 2) else {r for r in range(self.world) if r != self.rank}
             peers = {self.rank: local}
+            rounds = {self.rank: update}
             wait = straggler_wait if update > 2 else max(straggler_wait, 120.0)
             while time.time() - t0 < wait and not expected <= set(peers):
                 for r in expected - set(peers):
+                    # this round first, then the rank's NEWEST blob from whatever round it is on
                     blob = self.u.get_blob(f"{base}:r{r}")
                     if blob is not None:
-                        peers[r] = _state_load(blob)
+                        peers[r] = _state_load(blob); rounds[r] = update
+                        continue
+                    blob = self.u.get_blob(f"{root}:newest:r{r}")
+                    if blob is not None:
+                        payload = _state_load(blob)
+                        u_r = int(payload.get("update", -1))
+                        if update - u_r <= max_stale_rounds:
+                            peers[r] = payload["state"]; rounds[r] = u_r
                 if not expected <= set(peers):
                     time.sleep(1.0)
             states = [peers[r] for r in sorted(peers)]
@@ -223,6 +280,7 @@ class FleetLink:
             self.u.cmd("SET", f"{root}:latest", str(update), "EX", SYNC_TTL)
             model.load_state_dict(avg)
             n, got, src = len(states), sorted(peers), update
+            self._last_rounds = dict(rounds)
             old = update - 5
             if old >= 1:
                 self._submit(self._cleanup, [f"{root}:u{old}:avg"] + [f"{root}:u{old}:r{r}" for r in range(self.world)])
@@ -248,8 +306,10 @@ class FleetLink:
                 model.load_state_dict(payload["state"])
                 n, got = len(payload["ranks"]), payload["ranks"]
         h = weight_hash(model.state_dict())
+        _rounds = getattr(self, "_last_rounds", None)
         return {"sync_ranks": n, "sync_wait_s": time.time() - t0, "weight_hash": h,
                 "aggregator": aggregator,
+                "rounds_mixed": (f"{min(_rounds.values())}..{max(_rounds.values())}" if _rounds else None),
                 "sync_included_self": self.rank in got, "sync_from_update": src if src is not None else -1}
 
     def _cleanup(self, keys: list[str]) -> None:

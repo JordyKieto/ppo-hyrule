@@ -34,7 +34,7 @@ tbh = importlib.util.module_from_spec(spec); sys.modules["tbh"] = tbh; spec.load
 from zelda_rl import ckpt_s3  # noqa: E402
 from zelda_rl.eval_log import EvalSink  # noqa: E402
 from zelda_rl.ppo import RecurrentEntityActorCritic  # noqa: E402
-from zelda_rl.rvs import COND_DIM, TARGET, conditioning, field_offsets  # noqa: E402
+from zelda_rl.rvs import COND_DIM, TARGET, cond_offset, conditioning, field_offsets  # noqa: E402
 
 
 def _mem_limit() -> int | None:
@@ -102,7 +102,12 @@ def load_all(dirs, limit_per_dir=0, mem_frac: float = 0.55):
             idx = field_offsets(str(z["obs_fields"]))
             won = bool(z["boss_defeated"]) if "boss_defeated" in z.files else False
             g = conditioning(obs, idx, won)
-            eps.append({"file": f.name, "src": str(d), "obs": np.concatenate([obs, g], 1),
+            # INSERT at the end of the global block, not at the tail. Appending put three actor columns in
+            # the global slice, shifted every actor row by three (breaking the id-embedding lookup) and
+            # buried the prompt in the last actor row. See zelda_rl.rvs.cond_offset.
+            _at = cond_offset(json.loads(str(z["obs_fields"])), obs.shape[1])
+            eps.append({"file": f.name, "src": str(d),
+                        "obs": np.concatenate([obs[:, :_at], g, obs[:, _at:]], 1),
                         "act": z["action"].astype(np.int64), "win": won,
                         "dmg": int(z["boss_damage"]) if "boss_damage" in z.files else 0,
                         "obs_dim": obs.shape[1] + COND_DIM, "raw_dim": obs.shape[1],
@@ -338,8 +343,10 @@ def main() -> int:
 
     f0 = eps[0]["fields"]
     n_actors, actor_dim = f0["n_actors"], sum(w for _, w in f0["actor"])
-    raw_global = eps[0]["raw_dim"] - n_actors * actor_dim
+    raw_global = cond_offset(f0, eps[0]["raw_dim"])
+    assert raw_global == eps[0]["raw_dim"] - n_actors * actor_dim, "cond_offset disagrees with the geometry"
     global_dim = raw_global + COND_DIM          # the conditioning rides in the global block
+    cond_at = raw_global                        # ...and now it actually does; see zelda_rl/rvs.Conditioned
     n_actions = eps[0]["n_actions"]
     print(f"  obs {eps[0]['obs_dim']} = global {raw_global} + cond {COND_DIM} + {n_actors} x {actor_dim}")
 
@@ -376,6 +383,7 @@ def main() -> int:
         """One writer for every checkpoint this script produces, so the per-epoch file and the
         'improved' file can never carry different metadata or a different optimiser state."""
         cfg = {"global_dim": global_dim, "n_actors": n_actors, "actor_dim": actor_dim,
+               "rvs_cond_at": cond_at,
                "n_actions": n_actions, "obs_dim": eps[0]["obs_dim"], "hidden": a.hidden, "gru": a.gru,
                "recurrent": True, "obs_version": 7, "task": "combat", "profile": "gohma",
                "run_name": "rvs", "episode_seconds": a.episode_seconds, "vi_per_step": 6,
@@ -405,6 +413,10 @@ def main() -> int:
         try:
             from zelda_rl.fleet_link import FleetLink
             link = FleetLink(a.fleet_experiment, a.fleet_rank, a.fleet_world_size, a.fleet_launch_id)
+            # LIVENESS FROM A DAEMON THREAD. An epoch here can contain a multi-minute online eval, during
+            # which a once-per-epoch heartbeat goes stale and peers look dead -- measured: a sync round
+            # averaged 2 of 18 ranks after waiting 123 s. See FleetLink.start_heartbeat.
+            hb = link.start_heartbeat(interval=30.0, metrics={"epoch": 0})
             print(f"fleet sync: {a.fleet_experiment} rank {a.fleet_rank}/{a.fleet_world_size}, "
                   f"averaging every {a.fleet_sync_every} epoch(s)", flush=True)
         except Exception as e:                                   # noqa: BLE001
@@ -449,6 +461,8 @@ def main() -> int:
         if link is not None:
             try:
                 link.heartbeat({"epoch": ep_i, "val_win_acc": float(score)})
+                try: hb.update(epoch=ep_i, val_win_acc=float(score))
+                except Exception: pass
             except Exception:                                    # noqa: BLE001
                 pass
         if link is not None and ep_i % a.fleet_sync_every == 0:
@@ -468,6 +482,8 @@ def main() -> int:
                 print(f"  fleet sync FAILED @epoch {ep_i}: {str(e)[:100]} -- training alone", flush=True)
             try:
                 link.heartbeat({"epoch": ep_i, "val_win_acc": float(score)})
+                try: hb.update(epoch=ep_i, val_win_acc=float(score))
+                except Exception: pass
             except Exception:                                    # noqa: BLE001
                 pass
         do_eval = a.eval_every and (ep_i % a.eval_every == 0 or ep_i == a.epochs)

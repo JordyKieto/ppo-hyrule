@@ -30,7 +30,7 @@ def solve_win_weight(win_steps: int, all_steps: int, share: float) -> float:
 
 
 def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weight: float = 0.0,
-                     win_share: float = 0.3, max_windows: int = 12000) -> dict:
+                     win_share: float = 0.3, max_windows: int = 12000, cond_at: int | None = None) -> dict:
     # EP/POS let the consumer replay an episode's windows IN ORDER with the hidden state carried, instead of
     # cold-starting every 60-step slice. The label is already episode-length (rvs.conditioning), so a cold
     # context was the one short horizon left in the loop.
@@ -69,7 +69,11 @@ def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weig
             n_ep += 1                                   # counted for composition, windows not kept
             continue
         g = conditioning(obs, field_offsets(str(z["obs_fields"])), won)
-        x = np.concatenate([obs, g], 1)
+        # cond_at = raw_global puts the prompt INSIDE the global block, which is the layout the model's
+        # `x[:, :global_dim]` slice assumes and the only one that keeps the actor table aligned. Appending
+        # it (cond_at=None, the legacy path) shifted every actor row by three columns.
+        x = (np.concatenate([obs, g], 1) if cond_at is None
+             else np.concatenate([obs[:, :cond_at], g, obs[:, cond_at:]], 1))
         # -1 marks "winning", resolved after the multiplier is solved. Appended per window, NOT slice-assigned:
         # `W[-n:] = ...` with n == 0 (an episode shorter than one chunk) is `W[0:]` and wiped every weight
         # collected so far, leaving keep shorter than obs -- the `index 6538 ... size 19` crash on gohma-col.
@@ -106,7 +110,8 @@ def load_rvs_windows(dirs, chunk: int, *, obs_dim: int, n_actions: int, win_weig
     return out
 
 
-def rollout_windows(batch, idx: dict, chunk: int, cond_dim: int, win_weight: float = 20.0):
+def rollout_windows(batch, idx: dict, chunk: int, cond_dim: int, win_weight: float = 20.0,
+                    cond_at: int | None = None):
     """Turn the policy's OWN just-collected rollout into return-conditioned windows.
 
     Dyna-style: the corpus is not a fixed dataset but a buffer that keeps absorbing the newest episodes, so
@@ -138,7 +143,8 @@ def rollout_windows(batch, idx: dict, chunk: int, cond_dim: int, win_weight: flo
             hurt = np.clip(lhp - lhp[-1], 0.0, 1.0)
             g = np.stack([dmg, np.full(len(seg), 1.0 if won else 0.0, np.float32), hurt], 1)
             x = seg.copy()
-            x[:, D - cond_dim:] = g[:, :cond_dim]      # replace the prompt with the ACTUAL outcome
+            at = (D - cond_dim) if cond_at is None else int(cond_at)
+            x[:, at:at + cond_dim] = g[:, :cond_dim]   # replace the prompt with the ACTUAL outcome
             w = win_weight if won else 1.0
             for k_, i in enumerate(range(0, len(x) - chunk + 1, chunk)):
                 O.append(x[i:i + chunk]); A.append(act[s0 + i:s0 + i + chunk, n])

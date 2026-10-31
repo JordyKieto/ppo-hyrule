@@ -58,10 +58,11 @@ class EvalSink:
                     f"{ALLOW_NO_WANDB}=1 deliberately to accept jsonl+S3 only.") from e
         if mod is not None:
             try:
+                # NO settings= here. Passing Settings(start_method="thread") made wandb 0.30 raise
+                # "Extra inputs are not permitted", wandb.init failed, and this class then refused to let
+                # the trainer start -- the gate working exactly as designed, against a bug of its own.
                 self._run = mod.init(project=project, group=group, name=run_label,
-                                     config=config or {}, reinit=True,
-                                     settings=getattr(mod, "Settings", lambda **k: None)(start_method="thread")
-                                     if hasattr(mod, "Settings") else None)
+                                     config=config or {}, reinit=True)
                 self._wandb = mod
             except Exception as e:                               # noqa: BLE001
                 if not allow:
