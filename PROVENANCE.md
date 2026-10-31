@@ -1909,7 +1909,10 @@ incident in AGENTS §36 row 7. They were never terminated afterwards, so on 2026
 /workspace`, with the repo at `/workspace/zelda-RL`.
 
 `POST /pods/<id>/start` restarted **r1** (`6orad6kxdu8v0x`); r0, r2 and r3 refused with *"not enough free
-GPUs on the host machine"* and are still EXITED, their volumes intact and retryable. Note for next time:
+GPUs on the host machine"*. **All four were deleted on 2026-10-31 08:05**, on the user's instruction and
+after r1's artefacts were confirmed local + in S3. r0/r2/r3's own checkpoints are therefore **gone
+permanently** — they were FedAvg ranks of the same run (`sync_ranks: 4`), so their weights were near-copies
+of r1's average, and nothing in §14's conclusion rests on them. The RunPod account now holds **zero pods**. Note for next time:
 **the container disk is reset on restart and only the volume survives**, so `rsync` (apt-installed at
 bootstrap) was gone and the pull had to go out as `tar cf - | ssh`. r1 was stopped again immediately after
 the pull, so it billed only for the transfer.
