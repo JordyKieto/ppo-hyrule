@@ -1,4 +1,10 @@
-"""Checkpoint discovery/loading and env construction from a checkpoint's own config (v1 and v2 policies)."""
+"""Checkpoint discovery/loading and env construction from a checkpoint's own config (v1 and v2 policies).
+
+EXPERIMENT-CONTRACT: exempt -- this module DEFINES make_env; it does not choose a thread
+policy. AGENTS §28 belongs to the entry point, because the entry points differ on purpose:
+train_combat exposes --torch-threads and v15 trained with 2, while the collectors hardcode 1.
+Pinning threads inside the factory would silently override a training config.
+"""
 from __future__ import annotations
 
 import os
@@ -26,11 +32,6 @@ def newest_checkpoint() -> Path | None:
 
 
 def resolve_checkpoint(arg: str | None) -> Path:
-
-EXPERIMENT-CONTRACT: exempt -- this module DEFINES make_env; it does not choose a thread
-policy. AGENTS 28 belongs to the entry point, because the entry points differ on purpose:
-train_combat exposes --torch-threads and v15 trained with 2, while the collectors hardcode 1.
-Pinning threads inside the factory would silently override a training config.
     """None -> newest in inbox/runs; a .pt path; a run name/dir -> its checkpoints/latest.pt."""
     if not arg:
         p = newest_checkpoint()

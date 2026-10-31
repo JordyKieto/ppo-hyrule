@@ -162,3 +162,7 @@ could not be defended six months later. Fill a row when the measurement happens,
 | The policy gradient's credit horizon was 1.8 s against a 45–154 s fight | **M** | `tests/test_credit_horizon.py` | terminal +60 reached the first decision at 0.000% of face value |
 | At `gamma 0.99967 / lambda 1.0` the kill reaches the first decision at 59.9% (154 s) | **M** | same | the change this session's runs test |
 | `lr 3e-5` under the long horizon declines (−0.027 ± 0.010, 17/18 ranks); `lr 1e-6` is frozen (KL 1.4e-6) | **M** | W&B `gohma-cred-v20`, `-v21` | motivates lr 1e-5, KL ∝ lr^2.1 |
+| At matched 300 s caps, v15 (PPO) beats Dyna-RvS: 8.33% vs 3.95% defeats (z=+2.76) and 3.53 vs 1.31 boss damage (t=+13.91), 456 eps/arm | **M** | `results/mateval300/*.jsonl` (912 rows), PROVENANCE §10 | supersedes every earlier RvS-vs-v15 statement; the graded metric separates at 14 SE where the binary does at 2.8 (§34) |
+| v15 wins from 5 of 6 starts, Dyna-RvS from 2 of 6; off the easy slot v15 is ~4.8× the damage | **M** | same, per-slot table in PROVENANCE §10 | mix-invariant form (§29), so this is the version-to-version claim |
+| The round-independent FedAvg aggregator averages all 10 ranks at 104–120 epochs of drift | **M** | `gohma-rvsv15` r0 log: `sync_ranks: 10, rounds_mixed '1..1'` | the round-matched version averaged 3 of 10 |
+| RvS with the corrected prompt placement, initialised from v15, beats `rvs_dyna.pt` | **U** | nothing — the run died at epoch 4 on a deploy bug (PROVENANCE §11) | a promise, not a result |

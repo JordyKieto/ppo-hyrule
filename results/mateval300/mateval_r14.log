@@ -1,0 +1,70 @@
+derived --watch runs/mateval_v15_r14-r0/checkpoints from --run-name mateval_v15_r14
+per-episode rows -> runs/mateval_v15_r14.jsonl
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: moorish-prince (drift-ai-models) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 21qlrsdx
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /workspace/zelda-RL/wandb/run-20261031_031621-21qlrsdx
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run eval-mateval_v15_r14
+wandb: ⭐️ View project at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo
+wandb: 🚀 View run at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/21qlrsdx
+wandb: https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/21qlrsdx
+watching runs/mateval_v15_r14-r0/checkpoints every 60s
+  run gohma-kl-v15-r4 (group gohma-kl-v15), its update 40
+  trained on [3, 4, 5, 6, 7, 8] | suite: explicit
+  rank 0/1 evaluating slots [3, 4, 5, 6, 7, 8] x 19 = 114 episodes
+reclaimed 1 orphaned evalf_* dir(s) in /tmp: 1.7 GB
+  1/114 done, 109 queued, 0 defeats, dmg 2.00 (balanced 2.00 over 1 slots), ends {'death': 1}, 60s
+  4/114 done, 106 queued, 0 defeats, dmg 4.50 (balanced 4.50 over 4 slots), ends {'death': 4}, 120s
+  7/114 done, 103 queued, 0 defeats, dmg 4.14 (balanced 4.00 over 5 slots), ends {'death': 6, 'timeout': 1}, 180s
+  9/114 done, 101 queued, 0 defeats, dmg 4.00 (balanced 3.17 over 6 slots), ends {'death': 7, 'timeout': 2}, 240s
+  15/114 done, 95 queued, 0 defeats, dmg 3.80 (balanced 3.58 over 6 slots), ends {'death': 13, 'timeout': 2}, 300s
+  16/114 done, 94 queued, 0 defeats, dmg 3.75 (balanced 3.61 over 6 slots), ends {'death': 14, 'timeout': 2}, 360s
+  22/114 done, 88 queued, 0 defeats, dmg 3.45 (balanced 3.46 over 6 slots), ends {'death': 17, 'timeout': 4, 'success': 1}, 420s
+  25/114 done, 85 queued, 0 defeats, dmg 3.68 (balanced 3.73 over 6 slots), ends {'death': 19, 'timeout': 4, 'success': 2}, 480s
+  28/114 done, 82 queued, 0 defeats, dmg 3.89 (balanced 3.77 over 6 slots), ends {'death': 21, 'timeout': 4, 'success': 3}, 540s
+  32/114 done, 78 queued, 0 defeats, dmg 3.97 (balanced 3.78 over 6 slots), ends {'death': 24, 'timeout': 5, 'success': 3}, 600s
+  35/114 done, 75 queued, 0 defeats, dmg 3.80 (balanced 3.74 over 6 slots), ends {'death': 26, 'timeout': 6, 'success': 3}, 660s
+  40/114 done, 70 queued, 0 defeats, dmg 3.83 (balanced 3.74 over 6 slots), ends {'death': 29, 'timeout': 7, 'success': 4}, 720s
+  42/114 done, 68 queued, 0 defeats, dmg 3.69 (balanced 3.67 over 6 slots), ends {'death': 31, 'timeout': 7, 'success': 4}, 780s
+  46/114 done, 64 queued, 0 defeats, dmg 3.63 (balanced 3.56 over 6 slots), ends {'death': 33, 'timeout': 8, 'success': 5}, 840s
+  49/114 done, 61 queued, 0 defeats, dmg 3.59 (balanced 3.53 over 6 slots), ends {'death': 35, 'timeout': 9, 'success': 5}, 900s
+  51/114 done, 59 queued, 0 defeats, dmg 3.47 (balanced 3.44 over 6 slots), ends {'death': 36, 'timeout': 10, 'success': 5}, 960s
+  54/114 done, 56 queued, 0 defeats, dmg 3.43 (balanced 3.35 over 6 slots), ends {'death': 38, 'timeout': 11, 'success': 5}, 1020s
+  59/114 done, 51 queued, 0 defeats, dmg 3.58 (balanced 3.55 over 6 slots), ends {'death': 42, 'timeout': 12, 'success': 5}, 1080s
+  62/114 done, 48 queued, 0 defeats, dmg 3.71 (balanced 3.63 over 6 slots), ends {'death': 44, 'timeout': 12, 'success': 5, 'left_room': 1}, 1140s
+  64/114 done, 46 queued, 0 defeats, dmg 3.67 (balanced 3.59 over 6 slots), ends {'death': 45, 'timeout': 13, 'success': 5, 'left_room': 1}, 1200s
+  68/114 done, 42 queued, 0 defeats, dmg 3.56 (balanced 3.54 over 6 slots), ends {'death': 46, 'timeout': 16, 'success': 5, 'left_room': 1}, 1261s
+  71/114 done, 39 queued, 0 defeats, dmg 3.61 (balanced 3.58 over 6 slots), ends {'death': 49, 'timeout': 16, 'success': 5, 'left_room': 1}, 1321s
+  76/114 done, 34 queued, 0 defeats, dmg 3.70 (balanced 3.65 over 6 slots), ends {'death': 51, 'timeout': 17, 'success': 7, 'left_room': 1}, 1381s
+  79/114 done, 31 queued, 0 defeats, dmg 3.67 (balanced 3.63 over 6 slots), ends {'death': 54, 'timeout': 17, 'success': 7, 'left_room': 1}, 1441s
+  80/114 done, 30 queued, 0 defeats, dmg 3.62 (balanced 3.61 over 6 slots), ends {'death': 54, 'timeout': 18, 'success': 7, 'left_room': 1}, 1501s
+  83/114 done, 27 queued, 0 defeats, dmg 3.65 (balanced 3.63 over 6 slots), ends {'death': 54, 'timeout': 21, 'success': 7, 'left_room': 1}, 1561s
+  87/114 done, 23 queued, 0 defeats, dmg 3.70 (balanced 3.65 over 6 slots), ends {'death': 58, 'timeout': 21, 'success': 7, 'left_room': 1}, 1621s
+  89/114 done, 21 queued, 0 defeats, dmg 3.78 (balanced 3.70 over 6 slots), ends {'death': 59, 'timeout': 21, 'success': 8, 'left_room': 1}, 1681s
+  94/114 done, 16 queued, 0 defeats, dmg 3.78 (balanced 3.73 over 6 slots), ends {'death': 62, 'timeout': 23, 'success': 8, 'left_room': 1}, 1741s
+  96/114 done, 14 queued, 0 defeats, dmg 3.81 (balanced 3.75 over 6 slots), ends {'death': 64, 'timeout': 23, 'success': 8, 'left_room': 1}, 1801s
+  99/114 done, 11 queued, 0 defeats, dmg 3.76 (balanced 3.71 over 6 slots), ends {'death': 65, 'timeout': 25, 'success': 8, 'left_room': 1}, 1861s
+  101/114 done, 9 queued, 0 defeats, dmg 3.73 (balanced 3.71 over 6 slots), ends {'death': 67, 'timeout': 25, 'success': 8, 'left_room': 1}, 1921s
+  105/114 done, 5 queued, 0 defeats, dmg 3.78 (balanced 3.73 over 6 slots), ends {'death': 69, 'timeout': 27, 'success': 8, 'left_room': 1}, 1981s
+  106/114 done, 4 queued, 0 defeats, dmg 3.81 (balanced 3.74 over 6 slots), ends {'death': 70, 'timeout': 27, 'success': 8, 'left_room': 1}, 2041s
+  110/114 done, 0 queued, 0 defeats, dmg 3.78 (balanced 3.76 over 6 slots), ends {'death': 70, 'timeout': 30, 'success': 9, 'left_room': 1}, 2101s
+  113/114 done, 0 queued, 0 defeats, dmg 3.77 (balanced 3.75 over 6 slots), ends {'death': 72, 'timeout': 30, 'success': 10, 'left_room': 1}, 2161s
+  ALL   defeat  8.77%  death  63.2%  timeout  27.2%  bossHP 3.75  len 181s  (114 eps)
+  FULL-HP (the task): 3/57 = 5.26%
+    full_hp_10  n=57  defeat  5.26%  death  64.9%  bossHP 4.77
+    mid_hp_6_8  n=38  defeat  2.63%  death  65.8%  bossHP 2.32
+    half_hp_5   n=19  defeat 31.58%  death  52.6%  bossHP 3.58
+    near_lt200  n=38  defeat 21.05%  death  68.4%  bossHP 5.05
+    mid_200_400 n=38  defeat  2.63%  death  60.5%  bossHP 3.82
+    far_gt400   n=38  defeat  2.63%  death  60.5%  bossHP 2.39
+      slot  3 (10 HP, 188.5u)   10.5%  death    84%  n=19
+      slot  4 ( 8 HP, 436.0u)    5.3%  death    95%  n=19
+      slot  5 (10 HP, 346.7u)    5.3%  death    84%  n=19
+      slot  6 ( 6 HP, 357.0u)    0.0%  death    37%  n=19
+      slot  7 ( 5 HP, 37.9u)   31.6%  death    53%  n=19
+      slot  8 (10 HP, 448.0u)    0.0%  death    26%  n=19
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33meval-mateval_v15_r14[0m at: [34mhttps://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/21qlrsdx[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20261031_031621-21qlrsdx/logs[0m

@@ -10,6 +10,7 @@ Rules in a document did not prevent either (AGENTS 21/33/36 say exactly that). S
 where code CROSSES ONTO A POD: `fleet.cli.rsync` calls `enforce()` on every `scripts/*.py` it pushes and
 refuses the push on a violation. There is no step to remember, and the override is named and loud.
 
+    parses at all      -> ast.parse, before anything else, and not exemptable
     saves checkpoints  -> must back them up with ckpt_s3
     runs evaluations   -> must report through zelda_rl.eval_log.EvalSink (or eval_fleet's own wandb path)
     opens Dolphin      -> must pin torch to one thread (AGENTS 28)
@@ -21,6 +22,7 @@ failure modes are covered by tests/test_experiment_contract.py.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path
@@ -29,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY_FILE = Path(__file__).with_name("experiment_contract_legacy.txt")
 EXEMPT = re.compile(r"EXPERIMENT-CONTRACT:\s*exempt")
 OVERRIDE = "ZRL_FORCE_CONTRACT"
+HARD = "[not overridable] "                 # a file that cannot parse cannot run; see syntax_error()
 
 
 def legacy() -> set[str]:
@@ -64,12 +67,36 @@ def reports_metrics(src: str) -> bool:
                           r"held-?out|balanced", src))
 
 
+def syntax_error(src: str, name: str) -> str | None:
+    """The cheapest check there is, and the one that was missing.
+
+    An `EXPERIMENT-CONTRACT: exempt` note was pasted into the MIDDLE of a function in
+    `zelda_rl/policy_io.py`, which did two things at once: it made the module unimportable, and -- because
+    the exemption was a regex over raw text -- it silenced every other check in this file. All ten ranks of
+    `gohma-rvsv15` trained four epochs, synced ten ranks, and then died on `IndentationError` at their first
+    online eval, because the eval path imports that module. The gate they crossed read the broken file and
+    said nothing.
+
+    So syntax is checked FIRST, it is not exemptable, and it is not overridable: a file that does not parse
+    cannot run, and there is no reason to put it on a pod. It also makes the exemption marker honest --
+    a marker in a position that breaks the parse now fails here instead of disabling the contract.
+    """
+    try:
+        ast.parse(src, filename=name)
+    except SyntaxError as e:                                     # noqa: PERF203
+        return f"does not parse: {type(e).__name__}: {e.msg} (line {e.lineno})"
+    return None
+
+
 def violations(path: Path) -> list[str]:
     """What this one file breaks. Empty list = compliant (or exempt/legacy)."""
     try:
         src = path.read_text()
     except Exception:                                            # noqa: BLE001
         return []
+    syn = syntax_error(src, path.name)
+    if syn is not None:
+        return [HARD + syn]
     if EXEMPT.search(src) or path.name in legacy():
         return []
     out = []
@@ -82,6 +109,18 @@ def violations(path: Path) -> list[str]:
     if opens_dolphin(src) and "set_num_threads" not in src and "torch-threads" not in src:
         out.append("opens Dolphin without torch.set_num_threads(1) (AGENTS 28): the emulator starves and "
                    "the env raises 'emulation stalled'")
+    return out
+
+
+def expand_py(paths):
+    """Every .py under `paths`, following directories. See the comment at the fleet.cli.rsync call site."""
+    out = []
+    for p in paths:
+        p = Path(p)
+        if p.is_dir():
+            out += [f for f in sorted(p.rglob("*.py")) if "__pycache__" not in f.parts]
+        elif p.suffix == ".py":
+            out.append(p)
     return out
 
 
@@ -109,9 +148,10 @@ def enforce(paths, *, what: str = "push") -> None:
         for v in vs:
             lines.append(f"      - {v}")
     lines.append(f"  Fix it, add an `EXPERIMENT-CONTRACT: exempt -- <reason>` line, or set {OVERRIDE}=1 to "
-                 f"override deliberately.")
+                 f"override deliberately ({HARD.strip()} findings ignore the override).")
     msg = "\n".join(lines)
-    if os.environ.get(OVERRIDE) == "1":
+    hard = any(v.startswith(HARD) for vs in bad.values() for v in vs)
+    if os.environ.get(OVERRIDE) == "1" and not hard:
         print(msg + f"\n  {OVERRIDE}=1 -- proceeding anyway.", flush=True)
         return
     raise SystemExit(msg)

@@ -1,0 +1,50 @@
+derived --watch runs/mateval_rvs_r21-r0/checkpoints from --run-name mateval_rvs_r21
+per-episode rows -> runs/mateval_rvs_r21.jsonl
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: moorish-prince (drift-ai-models) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run rgvjkpts
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /workspace/zelda-RL/wandb/run-20261031_031622-rgvjkpts
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run eval-mateval_rvs_r21
+wandb: ⭐️ View project at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo
+wandb: 🚀 View run at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/rgvjkpts
+wandb: https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/rgvjkpts
+watching runs/mateval_rvs_r21-r0/checkpoints every 60s
+  run rvs (group None), its update 0
+  trained on unknown | suite: explicit
+  rank 0/1 evaluating slots [3, 4, 5, 6, 7, 8] x 19 = 114 episodes
+reclaimed 1 orphaned evalf_* dir(s) in /tmp: 1.7 GB
+  7/114 done, 103 queued, 0 defeats, dmg 1.43 (balanced 1.62 over 4 slots), ends {'death': 7}, 60s
+  13/114 done, 97 queued, 0 defeats, dmg 1.15 (balanced 1.03 over 6 slots), ends {'death': 9, 'timeout': 4}, 120s
+  24/114 done, 86 queued, 0 defeats, dmg 1.04 (balanced 0.96 over 6 slots), ends {'death': 19, 'timeout': 5}, 180s
+  32/114 done, 78 queued, 0 defeats, dmg 1.06 (balanced 1.02 over 6 slots), ends {'death': 24, 'timeout': 8}, 240s
+  41/114 done, 69 queued, 0 defeats, dmg 1.10 (balanced 1.07 over 6 slots), ends {'death': 31, 'timeout': 10}, 300s
+  49/114 done, 61 queued, 0 defeats, dmg 1.18 (balanced 1.15 over 6 slots), ends {'death': 38, 'timeout': 11}, 360s
+  55/114 done, 55 queued, 0 defeats, dmg 1.16 (balanced 1.13 over 6 slots), ends {'death': 42, 'timeout': 13}, 420s
+  63/114 done, 47 queued, 0 defeats, dmg 1.19 (balanced 1.15 over 6 slots), ends {'death': 46, 'timeout': 16, 'success': 1}, 480s
+  70/114 done, 40 queued, 0 defeats, dmg 1.20 (balanced 1.18 over 6 slots), ends {'death': 51, 'timeout': 18, 'success': 1}, 540s
+  78/114 done, 32 queued, 0 defeats, dmg 1.21 (balanced 1.17 over 6 slots), ends {'death': 55, 'timeout': 21, 'success': 2}, 600s
+  85/114 done, 25 queued, 0 defeats, dmg 1.20 (balanced 1.17 over 6 slots), ends {'death': 60, 'timeout': 23, 'success': 2}, 660s
+  92/114 done, 18 queued, 0 defeats, dmg 1.25 (balanced 1.21 over 6 slots), ends {'death': 65, 'timeout': 25, 'success': 2}, 720s
+  96/114 done, 14 queued, 0 defeats, dmg 1.20 (balanced 1.18 over 6 slots), ends {'death': 68, 'timeout': 26, 'success': 2}, 780s
+  103/114 done, 7 queued, 0 defeats, dmg 1.20 (balanced 1.18 over 6 slots), ends {'death': 73, 'timeout': 28, 'success': 2}, 840s
+  108/114 done, 2 queued, 0 defeats, dmg 1.19 (balanced 1.16 over 6 slots), ends {'death': 76, 'timeout': 30, 'success': 2}, 900s
+  113/114 done, 0 queued, 0 defeats, dmg 1.19 (balanced 1.18 over 6 slots), ends {'death': 78, 'timeout': 32, 'success': 3}, 960s
+  ALL   defeat  2.63%  death  68.4%  timeout  28.9%  bossHP 1.18  len 148s  (114 eps)
+  FULL-HP (the task): 0/57 = 0.00%
+    full_hp_10  n=57  defeat  0.00%  death  68.4%  bossHP 0.96
+    mid_hp_6_8  n=38  defeat  0.00%  death  65.8%  bossHP 0.50
+    half_hp_5   n=19  defeat 15.79%  death  73.7%  bossHP 3.21
+    near_lt200  n=38  defeat  7.89%  death  86.8%  bossHP 2.63
+    mid_200_400 n=38  defeat  0.00%  death  65.8%  bossHP 0.61
+    far_gt400   n=38  defeat  0.00%  death  52.6%  bossHP 0.32
+      slot  3 (10 HP, 188.5u)    0.0%  death   100%  n=19
+      slot  4 ( 8 HP, 436.0u)    0.0%  death   100%  n=19
+      slot  5 (10 HP, 346.7u)    0.0%  death   100%  n=19
+      slot  6 ( 6 HP, 357.0u)    0.0%  death    32%  n=19
+      slot  7 ( 5 HP, 37.9u)   15.8%  death    74%  n=19
+      slot  8 (10 HP, 448.0u)    0.0%  death     5%  n=19
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33meval-mateval_rvs_r21[0m at: [34mhttps://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/rgvjkpts[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20261031_031622-rgvjkpts/logs[0m

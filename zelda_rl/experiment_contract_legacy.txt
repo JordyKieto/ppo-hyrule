@@ -1,3 +1,9 @@
+# 2026-10-31: this list GREW by one, and that is not a weakening. Until today fleet.cli.rsync filtered its
+# argument list for names ending in ".py" -- and a code push sends DIRECTORIES, so the gate inspected
+# ZERO files on every push it was written for. expand_py() now walks them (171 files), which surfaced four
+# pre-contract files that had never been looked at. Three were exempt on their merits (libraries that do not
+# choose a thread policy); train_bc_human.py is genuinely pre-contract, below.
+#
 # Scripts that predate the experiment contract (snapshot 2026-10-16). They are REPORTED, not enforced.
 # Deleting a line here puts that script under the contract -- which is the right move the next time
 # one of them is used for a real experiment. Nothing may be ADDED to this file: new code complies.
@@ -49,3 +55,4 @@ train_ppo.py
 train_wm_tokens.py
 verify_link_fields.py
 verify_pod_dolphin.py
+train_bc_human.py

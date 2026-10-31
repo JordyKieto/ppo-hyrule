@@ -1,0 +1,46 @@
+derived --watch runs/mateval_rvs_r22-r0/checkpoints from --run-name mateval_rvs_r22
+per-episode rows -> runs/mateval_rvs_r22.jsonl
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: moorish-prince (drift-ai-models) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 0ss3gxq9
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /workspace/zelda-RL/wandb/run-20261031_031622-0ss3gxq9
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run eval-mateval_rvs_r22
+wandb: ⭐️ View project at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo
+wandb: 🚀 View run at https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/0ss3gxq9
+wandb: https://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/0ss3gxq9
+watching runs/mateval_rvs_r22-r0/checkpoints every 60s
+  run rvs (group None), its update 0
+  trained on unknown | suite: explicit
+  rank 0/1 evaluating slots [3, 4, 5, 6, 7, 8] x 19 = 114 episodes
+reclaimed 1 orphaned evalf_* dir(s) in /tmp: 1.7 GB
+  8/114 done, 102 queued, 0 defeats, dmg 1.25 (balanced 1.30 over 5 slots), ends {'death': 7, 'timeout': 1}, 60s
+  17/114 done, 93 queued, 0 defeats, dmg 1.41 (balanced 1.33 over 6 slots), ends {'death': 13, 'timeout': 4}, 120s
+  27/114 done, 83 queued, 0 defeats, dmg 1.59 (balanced 1.46 over 6 slots), ends {'death': 21, 'timeout': 4, 'success': 2}, 180s
+  38/114 done, 72 queued, 0 defeats, dmg 1.47 (balanced 1.46 over 6 slots), ends {'death': 28, 'timeout': 7, 'success': 3}, 240s
+  46/114 done, 64 queued, 0 defeats, dmg 1.43 (balanced 1.43 over 6 slots), ends {'death': 34, 'timeout': 9, 'success': 3}, 300s
+  57/114 done, 53 queued, 0 defeats, dmg 1.53 (balanced 1.47 over 6 slots), ends {'death': 41, 'timeout': 12, 'success': 4}, 360s
+  66/114 done, 44 queued, 0 defeats, dmg 1.50 (balanced 1.47 over 6 slots), ends {'death': 46, 'timeout': 15, 'success': 5}, 420s
+  74/114 done, 36 queued, 0 defeats, dmg 1.55 (balanced 1.54 over 6 slots), ends {'death': 52, 'timeout': 17, 'success': 5}, 480s
+  84/114 done, 26 queued, 0 defeats, dmg 1.62 (balanced 1.59 over 6 slots), ends {'death': 58, 'timeout': 19, 'success': 7}, 540s
+  92/114 done, 18 queued, 0 defeats, dmg 1.61 (balanced 1.60 over 6 slots), ends {'death': 62, 'timeout': 23, 'success': 7}, 600s
+  98/114 done, 12 queued, 0 defeats, dmg 1.61 (balanced 1.60 over 6 slots), ends {'death': 66, 'timeout': 24, 'success': 7, 'left_room': 1}, 660s
+  110/114 done, 0 queued, 0 defeats, dmg 1.60 (balanced 1.59 over 6 slots), ends {'death': 73, 'timeout': 28, 'success': 8, 'left_room': 1}, 720s
+  ALL   defeat  7.02%  death  64.9%  timeout  27.2%  bossHP 1.56  len 142s  (114 eps)
+  FULL-HP (the task): 0/57 = 0.00%
+    full_hp_10  n=57  defeat  0.00%  death  70.2%  bossHP 1.07
+    mid_hp_6_8  n=38  defeat  0.00%  death  71.1%  bossHP 0.95
+    half_hp_5   n=19  defeat 42.11%  death  36.8%  bossHP 4.26
+    near_lt200  n=38  defeat 21.05%  death  68.4%  bossHP 3.08
+    mid_200_400 n=38  defeat  0.00%  death  71.1%  bossHP 0.92
+    far_gt400   n=38  defeat  0.00%  death  55.3%  bossHP 0.68
+      slot  3 (10 HP, 188.5u)    0.0%  death   100%  n=19
+      slot  4 ( 8 HP, 436.0u)    0.0%  death   100%  n=19
+      slot  5 (10 HP, 346.7u)    0.0%  death   100%  n=19
+      slot  6 ( 6 HP, 357.0u)    0.0%  death    42%  n=19
+      slot  7 ( 5 HP, 37.9u)   42.1%  death    37%  n=19
+      slot  8 (10 HP, 448.0u)    0.0%  death    11%  n=19
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33meval-mateval_rvs_r22[0m at: [34mhttps://wandb.ai/drift-ai-models/zelda-rl-goal-ppo/runs/0ss3gxq9[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20261031_031622-0ss3gxq9/logs[0m

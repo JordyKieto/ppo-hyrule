@@ -12,6 +12,9 @@
     python -m fleet kill      --experiment E [--confirm]
 
 Pod layout: /workspace/zelda-RL (code, assets/, runs/, logs/), /workspace/dolphin/install, /workspace/venv.
+
+EXPERIMENT-CONTRACT: exempt -- matches on DOLPHIN_BIN because it BUILDS the pod env string.
+This file never imports torch and never opens an emulator; it is the gate that enforces the contract.
 """
 from __future__ import annotations
 
@@ -99,8 +102,13 @@ def rsync(pod: dict, src: list[str], dest: str, *, pull: bool = False, extra: li
     # already paid for because the script simply did not call tools that already existed
     # (zelda_rl/experiment_contract.py names both incidents). ZRL_FORCE_CONTRACT=1 overrides, loudly.
     if not pull:
-        from zelda_rl.experiment_contract import enforce
-        enforce([s_ for s_ in src if str(s_).endswith(".py")], what="push to " + pod.get("name", "pod"))
+        from zelda_rl.experiment_contract import enforce, expand_py
+        # expand_py walks directories. The first version filtered `src` for names ending in ".py", and a
+        # real code push sends DIRECTORIES ("zelda_rl", "scripts"), so the gate inspected nothing on every
+        # push it was written for -- the §43 failure mode (a tool that exists and is never handed real
+        # arguments) reproduced inside the fix for §43. A syntactically broken zelda_rl/policy_io.py went
+        # to 18 pods through this line and killed ten ranks at their first eval.
+        enforce(expand_py(src), what="push to " + pod.get("name", "pod"))
     rsh = f"ssh -i {SSH_KEY} -p {pod['port']} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30"
     remote = f"root@{pod['ip']}:"
     args = ["rsync", "-rlptz", "--no-owner", "--no-group", "-e", rsh, *(extra or [])]

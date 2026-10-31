@@ -986,3 +986,40 @@ file; deleting a line puts that script under the contract, which is the right mo
 real experiment. `tests/test_experiment_contract.py` asserts the check fires on each violation, stays quiet
 on a compliant file, honours the exemption marker, and **is actually wired into `rsync`** — the failure mode
 of the last two incidents was a tool nobody called.
+
+## 44. The gate was handed directories and filtered for files, so it had never inspected anything
+
+§43 built the experiment contract and wired it into `fleet.cli.rsync` — "the one function every line of code
+passes through on its way to a pod". The call was:
+
+```python
+enforce([s_ for s_ in src if str(s_).endswith(".py")], ...)
+```
+
+**A code push sends DIRECTORIES** (`zelda_rl`, `scripts`), so that comprehension was empty on every real push,
+and the gate had inspected **zero files** since the day it was written. It now walks them: 171.
+
+What got through it: an `EXPERIMENT-CONTRACT: exempt` note pasted into the **middle of a function** in
+`zelda_rl/policy_io.py`. Two failures at once — the module became unimportable, and because the exemption was
+a regex over raw text, the marker **silenced every other check in the contract**. All ten ranks of
+`gohma-rvsv15` resumed from v15, trained four epochs, synced ten-of-ten, and died on `IndentationError` at
+their first online eval, which imports that module through `eval_fleet`. Ten pods, ~$5/hr, no results.
+
+The dumbest possible check was the missing one. `ast.parse` is free and nothing ran it.
+
+**The rules.**
+
+1. **A gate's argument list is part of the gate.** §43's check was correct and its call site passed nothing.
+   When wiring a check into a path, assert on a REAL invocation — `expand_py(['zelda_rl'])` returning 171 is
+   the test, not `check(['a.py'])` returning a violation. `tests/test_contract_syntax.py` asserts both, and
+   asserts the old filter's blindness directly (`[s for s in ['zelda_rl'] if s.endswith('.py')] == []`).
+2. **Syntax first, and not exemptable.** A file that cannot parse cannot run, so there is no reason to put it
+   on a pod and no override worth honouring. `ZRL_FORCE_CONTRACT=1` does not wave a parse failure through.
+3. **An escape hatch matched by regex over raw text is an escape hatch that can be triggered by accident.**
+   Requiring the file to parse makes the marker honest: a marker in a position that breaks the parse now
+   fails loudly instead of disabling the contract.
+4. **Expanding a check's coverage will surface pre-existing files, and that is the check working.** Walking
+   directories flagged four files that had never been looked at. Three were exempt on their merits (libraries
+   that must not choose a thread policy — the entry points differ on purpose); one was genuinely
+   pre-contract. §43 said nothing may be added to the legacy list; one line was, with the reason recorded in
+   the file, because the list grew as a consequence of coverage going from 0 files to 171.

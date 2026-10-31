@@ -1767,3 +1767,61 @@ changed nothing that mattered. v22 is the first arm whose weights move at a rate
 - `--num-envs 8` on a 16-vCPU pod runs each Dolphin at **0.66× real time** (measured: 3,957 game-seconds in
   746 s across 8 envs, ≈53 steps/s per pod). §28 wants ~2 threads per instance; 4 envs is the configuration
   that respects it.
+
+## 10. Matched 300 s eval: v15 (PPO) vs Dyna-RvS — **M**
+
+The PPO-vs-RvS question had been re-litigated three times on mismatched instruments (RvS evaluated at a
+300 s episode cap, v15 quoted at 120 s, which hid roughly half of v15's kills). This is the matched run:
+same six slots, same cap, same harness, same episodes per slot.
+
+Harness: `scripts/eval_fleet.py --slots 3,4,5,6,7,8 --episodes-per-slot 19 --episode-seconds 300
+--num-envs 4`, W&B group `mateval300`, 8 CPU pods of fleet `gohma-cred` (4 per arm, ranks 14/16/17/19 =
+v15, 20/21/22/23 = RvS). **456 episodes per arm, 76 per slot, complete.** Rows:
+`results/mateval300/mateval_{v15,rvs}_r*.jsonl` (16 files, 912 rows, md5s in the directory).
+
+| | v15 `gohma-kl-v15-r4_latest.pt` | Dyna-RvS `rvs_dyna.pt` |
+|---|---|---|
+| defeats | **38 / 456 = 8.33%** | 18 / 456 = 3.95% |
+| `success_balanced` | **8.33%** | 3.95% |
+| `slots_nonzero` | **5 / 6** | 2 / 6 |
+| boss damage (of 10) | **3.526 ± 0.137** | 1.311 ± 0.081 |
+
+Defeat rate: two-proportion **z = +2.76** for v15. Boss damage, the graded headline (§34): **+2.215 ± 0.159,
+t = +13.91**. Per slot, v15 wins on 3/4/5/6/7 and RvS only on 5/7; off the easy slot (7) v15 averages 4.26 HP
+to RvS's 0.88, ~4.8× broader.
+
+**Conclusion: PPO (v15) beats offline Dyna-RvS decisively at matched instruments**, and the gap is far larger
+on the graded metric than the binary one — 14 SE versus 2.8. The earlier "RvS is not separable from v15"
+(from unmatched caps) and the later z=+3.03 partial read are both superseded by this row.
+
+Caveat recorded in the same breath: `rvs_dyna.pt` was trained with the **legacy prompt placement**, i.e. the
+conditioning vector concatenated at the tail of `obs`, which put three actor columns inside the model's
+global block and shifted the whole actor table by three (commit `3114e3c`). So this measures the RvS
+checkpoint we actually have, not RvS-with-a-correct-layout. The corrected-layout arm has **not** produced a
+number: see §11.
+
+## 11. `gohma-rvsv15` — launched, crashed at epoch 4, no result — **M** (the crash), **U** (the hypothesis)
+
+10 pods, RvS resumed from v15 by exact weight widening (`scripts/init_rvs_from_ppo.py`, max |Δ| = 0.000e+00
+across three prompts), corrected prompt placement (`obs 1036 = global 297 + cond 3 + 16 x 46`), live episodes
+feeding the corpus, FedAvg across 10 with the drift-tolerant aggregator.
+
+**Confirmed working, which was the point of the change:** `fleet sync @epoch 4: {'sync_ranks': 10,
+'sync_wait_s': 26.9, 'rounds_mixed': '1..1', 'aggregator': 0, 'sync_included_self': True}`. Before the
+round-independent "newest blob" aggregator, a 10-rank fleet with pods 104–120 epochs apart averaged 3 of 10.
+
+**Killed by a deploy bug, not by the method.** Every rank died at its first online eval on
+`IndentationError` in `zelda_rl/policy_io.py` — an exemption marker pasted mid-function, pushed through a
+contract gate that had never inspected a file (AGENTS §44). Four epochs of supervised progress exist and
+nothing else:
+
+| epoch | train loss | train acc | val acc | val WIN acc |
+|---|---|---|---|---|
+| 1 | 4.1507 | 7.9% | 17.0% | 37.0% |
+| 2 | 3.9874 | 10.9% | 18.0% | 38.7% |
+| 3 | 3.8864 | 12.2% | 18.2% | 39.0% |
+| 4 | 3.8094 | 13.9% | 18.9% | 38.9% |
+
+Those are **training-set** curves over four epochs; they say the loader and the widened init train, and
+nothing about play. Logs rescued to `runs/rescue_r*/logs/rvsv15_r*.log` before the fleet was terminated.
+Cost: 18 pods × ~34 min at $8.96/hr ≈ $5.

@@ -2,6 +2,10 @@
 
 Each instance gets its own user dir (config, NAND copy, pipes, frame dumps) so
 many can run side by side without touching the user's main Dolphin profile.
+
+EXPERIMENT-CONTRACT: exempt -- launches Dolphin but is a library; AGENTS §28 is the
+entry point's job (train_combat has --torch-threads, the collectors hardcode 1). Pinning here would
+silently override a training config.
 """
 from __future__ import annotations
 

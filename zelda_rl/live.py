@@ -1,4 +1,8 @@
-"""Live RAM attachment to a running Dolphin instance (macOS: mach; Linux: zelda_rl.linuxmem)."""
+"""Live RAM attachment to a running Dolphin instance (macOS: mach; Linux: zelda_rl.linuxmem).
+
+EXPERIMENT-CONTRACT: exempt -- attaches to a Dolphin that someone else launched; it never
+opens one, and it has no entry point whose thread policy it could set.
+"""
 from __future__ import annotations
 
 import struct
