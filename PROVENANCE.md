@@ -1952,3 +1952,60 @@ Three separate failures, each decisive on its own:
 **Conclusion.** The obs-space world model line is measured dead over 120 epochs, with the action-ablation
 control naming the mechanism. Recovering it changed nothing about the conclusion and everything about
 whether the conclusion is defensible: 775 lines of per-epoch readout now exist outside a terminated pod.
+
+## 15. `gohma-rvs2-anchor`: the anchor fix is real and the method still fails — **M**
+
+Resolves §13's **U**. 7 pods, same v15 widening as §12 (`rvs_anchor.pt.last.pt`, md5
+`c4877a79583812c15c864a653789b1c3`), cold Adam, epoch 1, `lr 3e-4`, `--win-share 0.3 --human-share 0.2`,
+human anchor whole on every rank. 768 episodes in `results/rvs_anchor/runs/evals/*.jsonl` +
+`s3://zelda-rl/results/rvs_anchor/` + W&B; checkpoints at
+`s3://zelda-rl/fleet/ckpt_auto/rvs/rvs_anchor.pt{,.last.pt}`.
+
+Verified on the pods, not from intent: `shard N/7: {'human': 100, ...}` with human steps **54,626 identical
+on all 7 ranks**, and `ACHIEVED: human 20.0% of the gradient, all wins 30.0%` every refresh.
+
+| epoch | anchor (100 demos/rank) | ±SE | ranks | §12 control (14 demos/rank) |
+|---|---|---|---|---|
+| 4 | 1.363 | 0.117 | 7 | — |
+| 8 | 1.411 | 0.062 | 7 | 2.095 |
+| 12 | 1.229 | 0.090 | 6 | 1.804 |
+| 16 | 0.986 | 0.128 | 6 | 1.431 |
+| 20 | 1.250 | 0.094 | 6 | 1.444 |
+
+| | slope | ±SE | t |
+|---|---|---|---|
+| **anchor** | **−0.0165** | 0.0083 | **−1.99** (borderline) |
+| **control** (§12) | −0.0639 | 0.0109 | −5.86 |
+| **difference** | **+0.0474** | 0.0137 | **+3.46** |
+
+**Defeats: 24 / 768 = 3.12%**, against v15's **8.33%** (§10) on 456 matched episodes.
+
+**What is established.** The anchor-fragmentation mechanism was real: at matched statistics the anchored run
+declines at about a quarter of the control's rate and the slope difference is **t = +3.46**. Sharding 100
+demonstrations into disjoint 14s and averaging seven separately-overfit models was causing most of the
+unlearning, and keeping the anchor whole with a pinned gradient share removes most of it.
+
+**What is not rescued.** The anchored run is still not rising (t = −1.99 is at the 2-SE boundary, on the
+wrong side), sits **below** the control at every matched epoch, and at ~1.25 balanced damage / 3.12% defeats
+is far from v15's 3.526 / 8.33%. Three independent results now say the same thing: full-episode undiscounted
+credit is irrelevant here (§12), the fragmentation bug is fixed and insufficient (§15), and at matched
+instruments PPO beats offline RvS by 14 SE on the graded metric (§10). **The offline-RvS line is closed; v15
+remains the best policy.** Fleet terminated 2026-10-31 07:51.
+
+### Retraction, and the instrument bug behind it
+
+Three claims were made from this run before its data was complete, each reversed by the next eval:
+
+| said | from | complete data |
+|---|---|---|
+| "flat — the collapse is stopped", slope −0.0160 t=−0.96 | 3 evals | — |
+| "falling", slope −0.0274 t=−2.84 | 5 points, **epoch 20 from 2 of 7 ranks** | — |
+| — | | **−0.0165 ± 0.0083, t=−1.99** |
+
+The epoch-20 point read **1.105 on two ranks** mid-eval and **1.250 on six**. So the reversal was not the
+model changing — it was a partial sample quoted as a measurement, which is §38 with the extra twist that
+the sample was not even finished. The correct bar, pre-registered and then ignored by me, was five complete
+points before any slope claim.
+
+**Now a check:** `scripts/fleet_signal.py` drops any point with fewer ranks reported than the best-covered
+point, and prints what it dropped. A partial eval can no longer reach a slope.

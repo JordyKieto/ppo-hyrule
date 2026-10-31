@@ -1,0 +1,131 @@
+--num-envs 8 (fleet) vs --eval-envs 4 (explicit): using 4 for the online eval, which is the only thing that opens envs here
+  shard 9/7: {'human': 100, 'loss': 71, 'win': 28} -> 199 of 800 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.0x faster and the average recombines the shards)
+corpus holds 1.7 GiB in RAM of a 30 GiB cgroup limit
+corpus: 199 episodes, 128 wins (64.3%), 105,091 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  steps: human 54,626 / other-wins 5,161 / losses 45,304 (wins 56.9% of steps)
+  multipliers: human 0.24, other-win 1.25, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 180 / val 19 (val wins: 12)
+  obs 1036 = global 297 + cond 3 + 16 x 46
+RESUMED from checkpoints/kept/rvs_anchor.pt.last.pt at epoch 1 (val-win acc was 0.0%)
+
+ epoch  train loss  train acc  val acc  val WIN acc
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: moorish-prince (drift-ai-models) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: setting up run 0kxmd3rk
+wandb: Tracking run with wandb version 0.30.0
+wandb: Run data is saved locally in /workspace/zelda-RL/wandb/run-20261031_142353-0kxmd3rk
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run gohma-rvs2-anchor-r9
+wandb: ⭐️ View project at https://wandb.ai/drift-ai-models/zelda-rl-rvs
+wandb: 🚀 View run at https://wandb.ai/drift-ai-models/zelda-rl-rvs/runs/0kxmd3rk
+eval sink: runs/evals/gohma-rvs2-anchor-r9.jsonl + wandb zelda-rl-rvs
+fleet sync: gohma-rvs2 rank 9/7, averaging every 4 epoch(s)
+     1      4.0296      10.5%    16.9%        20.2%
+     2      3.8969      13.5%    18.4%        23.2%
+     3      3.7142      16.0%    19.6%        26.4%
+     4      3.6035      18.2%    20.8%        29.0%
+  fleet sync @epoch 4: {'sync_ranks': 7, 'sync_wait_s': 63.41315841674805, 'weight_hash': 'fa3134f85432', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 1}
+  9/24 done, 11 queued, 0 defeats, dmg 2.00 (balanced 2.10 over 5 slots), ends {'death': 8, 'success': 1}, 60s
+  16/24 done, 4 queued, 0 defeats, dmg 1.88 (balanced 1.75 over 6 slots), ends {'death': 12, 'success': 1, 'timeout': 3}, 120s
+  21/24 done, 0 queued, 0 defeats, dmg 1.43 (balanced 1.44 over 6 slots), ends {'death': 15, 'success': 1, 'timeout': 5}, 180s
+  EVAL epoch 4: dmgB(balanced) 1.333 | pooled 1.333 | ret -4.1 | hpLost 31.33 | wins 1/24 | slots 6 | corpus 199eps/128wins
+  DYNA: absorbing 24 of the policy's own episodes from datasets/dyna_live3
+  shard 9/7: {'human': 100, 'loss': 74, 'win': 28} -> 202 of 824 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.1x faster and the average recombines the shards)
+corpus holds 1.9 GiB in RAM of a 30 GiB cgroup limit
+corpus: 202 episodes, 128 wins (63.4%), 110,918 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  datasets/dyna_live3: 3 episodes, 0 wins, 5,827 steps
+  steps: human 54,626 / other-wins 5,161 / losses 51,131 (wins 53.9% of steps)
+  multipliers: human 0.27, other-win 1.42, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 182 / val 20 (val wins: 9)
+     5      3.5862      19.0%    15.6%        58.0%
+     6      3.5162      20.4%    16.3%        60.0%
+     7      3.4517      21.5%    16.4%        61.2%
+     8      3.4051      22.6%    17.1%        63.0%
+  fleet sync @epoch 8: {'sync_ranks': 7, 'sync_wait_s': 42.237329959869385, 'weight_hash': 'ee13d036bc1b', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 2}
+  9/24 done, 11 queued, 0 defeats, dmg 1.44 (balanced 1.40 over 5 slots), ends {'death': 9}, 60s
+  21/24 done, 0 queued, 0 defeats, dmg 1.67 (balanced 1.51 over 6 slots), ends {'death': 16, 'timeout': 3, 'success': 2}, 120s
+  EVAL epoch 8: dmgB(balanced) 1.458 | pooled 1.458 | ret 8.5 | hpLost 29.67 | wins 2/24 | slots 6 | corpus 202eps/128wins
+  DYNA: absorbing 44 of the policy's own episodes from datasets/dyna_live3
+  shard 9/7: {'human': 100, 'loss': 76, 'win': 28} -> 204 of 844 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.1x faster and the average recombines the shards)
+corpus holds 2.0 GiB in RAM of a 30 GiB cgroup limit
+corpus: 204 episodes, 128 wins (62.7%), 109,126 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  datasets/dyna_live3: 5 episodes, 0 wins, 4,035 steps
+  steps: human 54,626 / other-wins 5,161 / losses 49,339 (wins 54.8% of steps)
+  multipliers: human 0.26, other-win 1.37, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 184 / val 20 (val wins: 13)
+     9      3.4446      22.0%    24.8%        54.0%
+    10      3.3850      23.2%    25.1%        55.1%
+    11      3.3421      24.2%    25.5%        56.7%
+    12      3.3076      25.0%    25.3%        56.9%
+  fleet sync @epoch 12: {'sync_ranks': 7, 'sync_wait_s': 32.6970579624176, 'weight_hash': '123587f2998a', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 3}
+  6/24 done, 14 queued, 0 defeats, dmg 2.17 (balanced 2.75 over 4 slots), ends {'death': 6}, 60s
+  13/24 done, 7 queued, 0 defeats, dmg 1.46 (balanced 1.42 over 6 slots), ends {'death': 10, 'timeout': 3}, 120s
+  21/24 done, 0 queued, 0 defeats, dmg 1.38 (balanced 1.21 over 6 slots), ends {'death': 15, 'timeout': 5, 'success': 1}, 180s
+  EVAL epoch 12: dmgB(balanced) 1.208 | pooled 1.208 | ret -3.2 | hpLost 26.67 | wins 1/24 | slots 6 | corpus 204eps/128wins | slope -0.0156 +- 0.0271 /epoch  t=-0.58  flat over 3 evals
+  DYNA: absorbing 61 of the policy's own episodes from datasets/dyna_live3
+  shard 9/7: {'human': 100, 'loss': 79, 'win': 28} -> 207 of 861 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.2x faster and the average recombines the shards)
+corpus holds 2.1 GiB in RAM of a 30 GiB cgroup limit
+corpus: 207 episodes, 128 wins (61.8%), 112,964 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  datasets/dyna_live3: 8 episodes, 0 wins, 7,873 steps
+  steps: human 54,626 / other-wins 5,161 / losses 53,177 (wins 52.9% of steps)
+  multipliers: human 0.28, other-win 1.47, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 187 / val 20 (val wins: 11)
+    13      3.3408      24.6%    22.2%        46.2%
+    14      3.2878      25.9%    22.4%        48.3%
+    15      3.2531      26.7%    22.7%        49.9%
+    16      3.2255      27.2%    23.2%        50.3%
+  fleet sync @epoch 16: {'sync_ranks': 7, 'sync_wait_s': 20.06037735939026, 'weight_hash': 'ce54bb112670', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 4}
+  6/24 done, 14 queued, 0 defeats, dmg 0.67 (balanced 0.50 over 4 slots), ends {'death': 5, 'timeout': 1}, 60s
+  13/24 done, 7 queued, 0 defeats, dmg 1.31 (balanced 1.28 over 6 slots), ends {'death': 10, 'timeout': 3}, 120s
+  20/24 done, 0 queued, 0 defeats, dmg 1.35 (balanced 1.35 over 6 slots), ends {'death': 15, 'timeout': 5}, 180s
+  EVAL epoch 16: dmgB(balanced) 1.333 | pooled 1.333 | ret -9.2 | hpLost 34.00 | wins 0/24 | slots 6 | corpus 207eps/128wins | slope -0.0062 +- 0.0133 /epoch  t=-0.47  flat over 4 evals
+  DYNA: absorbing 81 of the policy's own episodes from datasets/dyna_live3
+  shard 9/7: {'human': 100, 'loss': 82, 'win': 28} -> 210 of 881 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.2x faster and the average recombines the shards)
+corpus holds 2.2 GiB in RAM of a 30 GiB cgroup limit
+corpus: 210 episodes, 128 wins (61.0%), 123,243 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  datasets/dyna_live3: 11 episodes, 0 wins, 18,152 steps
+  steps: human 54,626 / other-wins 5,161 / losses 63,456 (wins 48.5% of steps)
+  multipliers: human 0.33, other-win 1.76, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 189 / val 21 (val wins: 13)
+    17      3.3700      24.6%    30.8%        63.9%
+    18      3.3462      25.0%    30.8%        66.5%
+    19      3.3198      25.4%    30.8%        66.2%
+    20      3.2898      26.0%    31.1%        66.5%
+  fleet sync @epoch 20: {'sync_ranks': 7, 'sync_wait_s': 5.143779516220093, 'weight_hash': 'c098a489bc57', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 5}
+  9/24 done, 11 queued, 0 defeats, dmg 1.33 (balanced 1.20 over 5 slots), ends {'death': 7, 'success': 1, 'timeout': 1}, 60s
+  15/24 done, 5 queued, 0 defeats, dmg 1.00 (balanced 1.08 over 6 slots), ends {'death': 10, 'success': 1, 'timeout': 4}, 120s
+  22/24 done, 0 queued, 0 defeats, dmg 1.18 (balanced 1.12 over 6 slots), ends {'death': 16, 'success': 2, 'timeout': 4}, 180s
+  EVAL epoch 20: dmgB(balanced) 1.083 | pooled 1.083 | ret 2.3 | hpLost 36.67 | wins 2/24 | slots 6 | corpus 210eps/128wins | slope -0.0156 +- 0.0094 /epoch  t=-1.67  flat over 5 evals
+  DYNA: absorbing 99 of the policy's own episodes from datasets/dyna_live3
+  shard 9/7: {'human': 100, 'loss': 84, 'win': 28} -> 212 of 899 episodes (human WHOLE on every rank per AGENTS §40.3; failures and PPO wins sharded, so an epoch is ~4.2x faster and the average recombines the shards)
+corpus holds 2.3 GiB in RAM of a 30 GiB cgroup limit
+corpus: 212 episodes, 128 wins (60.4%), 127,437 steps
+  datasets/human/gohma: 100 episodes, 100 wins, 54,626 steps
+  datasets/ppo/mix: 99 episodes, 28 wins, 50,465 steps
+  datasets/dyna_live3: 13 episodes, 0 wins, 22,346 steps
+  steps: human 54,626 / other-wins 5,161 / losses 67,650 (wins 46.9% of steps)
+  multipliers: human 0.35, other-win 1.87, loss 1.00  [human pinned to 20% of the gradient]
+  -> ACHIEVED: human 20.0% of the gradient, all wins 30.0%
+  train 191 / val 21 (val wins: 16)
+    21      3.3911      24.4%    26.3%        40.0%
+    22      3.3525      25.1%    26.3%        39.9%
+    23      3.3410      25.3%    26.1%        39.8%
+    24      3.3161      25.7%    25.8%        39.1%
+  fleet sync @epoch 24: {'sync_ranks': 7, 'sync_wait_s': 5.761023044586182, 'weight_hash': '6dd7322def6f', 'aggregator': 0, 'rounds_mixed': None, 'sync_included_self': True, 'sync_from_update': 6}
+  7/24 done, 13 queued, 0 defeats, dmg 0.86 (balanced 1.25 over 4 slots), ends {'death': 7}, 60s

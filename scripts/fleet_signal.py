@@ -141,6 +141,20 @@ def main() -> int:
         for m in members:
             for k, v in m["u"].items():
                 merged.setdefault(k, []).append(v)
+        # DROP THE IN-PROGRESS EVAL. Ranks finish an eval at different times, so the newest point is
+        # usually a partial: at epoch 20, two of seven ranks had reported and the pooled value read 1.105;
+        # with all six it was 1.250, which moved the slope from -0.0274 (t=-2.84, "falling") to -0.0165
+        # (t=-1.99, borderline). Quoting a partial as a measurement happened three times in one session --
+        # it is AGENTS §38 ("an eval is a sample, not a measurement") with the extra twist that the sample
+        # was not even complete. A point is admitted only once as many ranks have reported as the
+        # best-covered point has.
+        if merged:
+            full = max(len(v) for v in merged.values())
+            partial = {k: len(v) for k, v in merged.items() if len(v) < full}
+            if partial:
+                print(f"  (dropping {len(partial)} in-progress point(s) {sorted(partial)} with "
+                      f"{sorted(partial.values())} of {full} ranks reported)")
+            merged = {k: v for k, v in merged.items() if len(v) == full}
         pooled_arms.append({"exp": exp, "rank": f"x{len(members)}", "name": gname,
                             "u": {k: sum(v) / len(v) for k, v in merged.items()},
                             # the unit comes from a member that HAS data: members[0] may be a rank whose

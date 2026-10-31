@@ -1166,3 +1166,37 @@ Which is the §43/§44 shape once more: **a tool nobody has pointed at the live 
 The first number it printed (1.14 against six EVAL lines averaging 1.26) also had to be reconciled by hand
 before it could be quoted — it was correct for the three ranks that had reported at that instant, and that
 is five seconds well spent rather than a number repeated blind.
+
+## 48. A partial eval is not a small eval — it is a different population, and I quoted three of them
+
+§38 says an eval is a sample, not a measurement, and that a ranking needs the pooled mean with its SE. This
+section is the failure one level lower: **the newest point of a fleet's eval curve is usually INCOMPLETE,**
+because ranks finish at different times, and the ranks that finish first are not a random subset of ranks.
+
+**The incident.** On `gohma-rvs2-anchor` three slope claims were made in consecutive messages, each reversed
+by the next:
+
+| claim | basis | complete data |
+|---|---|---|
+| "flat — the collapse is stopped", −0.0160 ± 0.0167, t=−0.96 | 3 evals | |
+| "falling", −0.0274 ± 0.0097, t=−2.84 | epoch 20 from **2 of 7 ranks** | |
+| | | **−0.0165 ± 0.0083, t=−1.99** |
+
+The epoch-20 point read **1.105** on two ranks and **1.250** on six. Nothing about the model changed between
+those messages; the population did. And the slope at three points had an SE larger than the estimate — it
+was never quotable, and it was quoted as "the collapse is stopped", which is the kind of sentence a decision
+gets made from.
+
+**The rules.**
+
+1. **Admit a point only when it is as complete as the best-covered point.** `scripts/fleet_signal.py` now
+   drops under-covered points and prints `(dropping N in-progress point(s) ... with K of M ranks reported)`.
+   A partial eval cannot reach a slope.
+2. **Five COMPLETE points before any slope claim**, and say the n. §38 pre-registered this and the third
+   message of this run broke it, so the bar is now in the code rather than in a resolution.
+3. **Recompute the headline from the SAVED ROWS before writing it down.** The final numbers here came from
+   `results/rvs_anchor/runs/evals/*.jsonl` and differed from the live log read, which is how the partial was
+   caught at all. The log tail is for watching; the rows are for claiming.
+4. **A reversal is evidence about the instrument, not about the model.** Two reversals in forty minutes
+   means stop reporting and go fix the reader — which is what §38 said after the last two, and what was not
+   done until the third.
