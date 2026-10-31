@@ -1079,3 +1079,47 @@ of a process that could not start, and `fleet audit`'s truthful `0 WORKING` was 
 named the shape — *every number a program prints about its own output is a claim, not evidence* — and the
 missing half is that **a dismissal needs evidence too.** "Probably too early" is a hypothesis about a
 machine, and it is one ssh away from being checked.
+
+## 46. Every failure that cost a bring-up today was visible on the Mac in seconds. Nothing looked.
+
+Three fleets died on 2026-10-31 (§44, §44b, §45). The pattern is not that each bug was subtle — it is the
+**place each one was found**: by hand, on live pods, after a bring-up, minutes apart.
+
+| what died | found | was detectable locally by |
+|---|---|---|
+| 10 ranks, at their first online eval | reading a pod's log | parsing our own files |
+| 7 pods, no Dolphin, `human 0 mix 0` | hand-probing for `dolphin-emu` | running `enforce` on the real push argument |
+| 7 ranks, dead in <1 s, "launched" ×7 | hand-reading seven logs | parsing the exact launch argv |
+
+Three bring-ups, ~30 minutes of wall clock each, repeated, for errors a parse would catch. §21 and §33 and
+§36 all say a rule in prose gets broken; this is the next layer, and it is about WHERE a check runs. Every
+check this repo had ran **on a pod** — `fleet preflight`, `fleet audit`, `fleet_health.py` — so every one of
+them could only speak after the money started.
+
+`scripts/validate_launch.py` runs the launch on the Mac, before anything is pushed:
+
+- **A** every tracked `.py` parses, and the experiment contract passes on `REPO/` — the real push argument;
+- **B** every module under `zelda_rl/` **imports** — which is exactly what #1 broke and what no test covered;
+- **C** the trainer is run through `runpy` with the **exact argv `fleet launch` composes**, the 13 injected
+  flags included, with `parse_args` patched to exit the instant it succeeds. No dataset, no training, no
+  cooperation needed from the trainer.
+
+**`fleet launch` calls it and refuses to push on failure** (`--skip-validate` is the deliberate override),
+and `tests/test_validate_launch.py` asserts that wiring, because the failure mode of every tool in this
+repo is that nothing calls it (§43, §44).
+
+**The validator's own first version could not catch failure #3.** It patched `parse_args` to call
+`parse_known_args`, which *tolerates* unrecognised arguments — so the check written for "the trainer rejects
+`--run-name`" was structurally incapable of seeing it. The test caught that, because the test reproduces the
+real broken state instead of asserting on a healthy one. That is §36 rule 1 doing its job on the fourth
+instance of the same mistake in one day:
+
+> **Write the check, then break the code and watch the check fail. If you did not see it fail, you did not
+> write a check.**
+
+### The rule about WHERE, which is what this section adds
+
+**A check that can only run on a pod is a check that bills before it speaks.** When a failure is found on a
+machine, the question is not only "what check would have caught this" but "could that check have run before
+the pods existed". Parses, imports, argv, config arithmetic and contract gates all can. Put them on the Mac,
+in the path that pushes.

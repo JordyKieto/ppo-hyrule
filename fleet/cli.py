@@ -622,6 +622,18 @@ def cmd_launch(a) -> None:
         return pod
 
     want = select(st, a.ranks)
+    # VALIDATE LOCALLY FIRST. Three fleets died on 2026-10-31 for reasons visible on the Mac in seconds:
+    # an unparseable module, a contract gate that refused its own push, and a trainer that rejects the args
+    # THIS function injects. Preflight tests the pods; this tests the code, before a pod is touched.
+    if not a.skip_validate and a.script:
+        vr = subprocess.run([sys.executable, "-u", str(REPO / "scripts" / "validate_launch.py"),
+                             "--script", a.script, "--train-args", a.train_args or ""],
+                            capture_output=True, text=True, cwd=str(REPO))
+        if vr.returncode != 0:
+            print(vr.stdout + vr.stderr, flush=True)
+            raise SystemExit("launch validation failed (above). Nothing was pushed. "
+                             "--skip-validate overrides deliberately.")
+        log("launch validation passed (parses, imports, and the trainer accepts the injected argv)")
     if not a.skip_preflight:
         ok, bad = preflight(want)
         if bad:
@@ -1321,6 +1333,10 @@ def main() -> None:
     p.add_argument("--run-tag", default="", help="suffix for run names + wandb group (e.g. rupees7)")
     p.add_argument("--script", default="train_ppo.py", help="trainer under scripts/ (train_ppo.py | train_combat.py | collect_transitions.py)")
     p.add_argument("--skip-preflight", action="store_true", help="launch even on pods that fail readiness")
+    p.add_argument("--skip-validate", action="store_true",
+                   help="skip the local launch validation (parses, imports, injected argv). Deliberate "
+                        "override only: it is the check that catches an unparseable module or a trainer "
+                        "that rejects --run-name, both of which have killed whole fleets")
     p.add_argument("--collect", action="store_true",
                    help="the script is a COLLECTOR, not a trainer: omit --run-name/--num-envs/--fleet-* "
                         "(collect_transitions.py rejects them) and pass only --train-args")
