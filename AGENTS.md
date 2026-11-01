@@ -1200,3 +1200,62 @@ gets made from.
 4. **A reversal is evidence about the instrument, not about the model.** Two reversals in forty minutes
    means stop reporting and go fix the reader — which is what §38 said after the last two, and what was not
    done until the third.
+
+## 49. A representation can be healthy on every column you are printing and still encode nothing
+
+**The incident.** A masked-prediction JEPA on the 363-d structured state (`PROVENANCE.md` §16). Epoch 2 read
+`val_loss 0.0295`, `eff_rank 17.9/96`, `min_std 0.657` — a falling loss, no dead dimensions, a quarter of the
+latent in use. All three were meaningless. `nn.Embedding` defaults to N(0,1), so the type/slot/time embeddings
+had norm ~√96 ≈ 9.8 each against the field embeddings' 0.19 per cell: **position outweighed the entire game
+state 14× in norm and ~75× in variance.** The representation was ~98.7% a function of token position, the loss
+fell because a positional constant solves the objective, and the "eff_rank 17.9" was positional-embedding
+variance being counted as information.
+
+Two controls found it in ninety seconds and neither existed when the run was launched:
+
+- **shuffle**: predict a target token's representation from a **different clip's** representation at the same
+  token position. It scored **0.0029** against the model's 0.0302 — ten times better.
+- **variance split**: across-clip variance ÷ across-position variance. **0.013 for the trained encoder and
+  0.016 for an untrained one** — training had changed nothing.
+
+`collapse_stats` could not see any of it, because it reshapes to `(-1, d)` and takes a std, pooling variation
+across clips with variation across token positions. **A pooled variance cannot distinguish a representation of
+the input from a lookup table on position.** Both controls now print on every epoch line of `train_sjepa.py`,
+ahead of the loss, and shout `<<< SHUFFLE BEATS THE MODEL` / `<<< POSITIONAL COLLAPSE`.
+
+### The second-order lesson, which is the expensive one
+
+**An underpowered number must not drive a RECOMMENDATION either.** §48 pre-registered "five complete points
+before any slope claim" and I honoured it for claims — then at five points reported `state/position` as
+"+0.0026 ± 0.0030, t=+0.85, flat" and recommended killing the run twice on that basis. At twelve points the
+same quantity is **+0.0150 ± 0.0015, t=+10.29**. The arithmetic was right; the number was not decision-grade,
+and §48 as written only forbade *quoting* it. Say "not yet decision-grade" and keep the run, or say nothing.
+
+Corollary that made it worse: the recommendation was dressed in a *correct* mechanical diagnosis (the encoder
+was fed mask embeddings the papers put in the predictor — verified against both papers). **A true mechanism
+does not make a prediction built on it true.** §34 says the same thing about a good reason to add a reward term.
+
+### Five more instrument faults from the same session, each caught before it became a claim
+
+| fault | what it printed | now |
+|---|---|---|
+| probe scored `nan` as a loss | **"loses to untrained"** on 5 targets that are CONSTANT in the dataset — a fabricated negative | reported `n/a: target is CONSTANT`, excluded from the tally (§36 row 6) |
+| probe gave the encoder 192 features and the free-signal control 7,344 — a **38× capacity gap** | "loses to visible", unreadable: worse representation or 38× less to fit on? | both arms get their full grid; the widths are printed |
+| **`--fresh` resets the checkpoint but NOT the metrics jsonl** | a slope pooled across **two architectures** whose epoch numbers collided 1-2-3 | **STILL OPEN.** Withdrawn rows moved to `*.withdrawn.jsonl` by hand; `--fresh` must rotate or refuse (§32) |
+| `EvalSink.log` writes the jsonl **only `if rows`**, metrics otherwise go to W&B alone | a trainer reporting per-epoch aggregates is durable **nowhere** — how §14's 40 epochs were lost | worked around by passing `rows=[m]`; **the gap in `eval_log.py` is unfixed** |
+| a single `top -l 1` sample read **0.0% CPU** on a healthy trainer | "it's stalled" — nearly killed a working run | two reads of cumulative CPU time (`ps -o time=`). §23's list of lying instruments gains `top` |
+
+Three of these — the 14× imbalance, the pooled variance, the `--fresh` collision — are one shape: **a number
+that looked healthy.** §36 already named it for success signals (*"every number a program prints about its own
+output is a claim"*); this session says it is equally true of **health** signals, which are worse because
+nobody re-derives them.
+
+### The one that is a design rule, not a check
+
+When a probe reads a representation of state **X** to predict a quantity that is part of **X**, it is scoring
+the identity map and will read ~1.0 on everything. V-JEPA probes a complete clip for a label the pixels do not
+contain; this project's state vectors contain every candidate label. **So probe a MASKED encoding for the
+HIDDEN content**, and report the free-signal floor (a linear fit on whatever is still visible) beside it —
+`speed` is |vel| and `pos_t` is `pos_{t-1} + vel_t`, so a masked cell is often exact arithmetic on a visible
+one. On the first run that floor beat the encoder 0.855 to 0.521. Four earlier JEPA attempts here were never
+held to it.

@@ -258,3 +258,82 @@ keeping the reward's state in the latent. Stage 1's design is vindicated -- and 
 and measurable: reconstruction buys state fidelity and costs latent rank (8.5 vs 10.2), pure prediction buys rank
 and costs the state. Caveats: 6 epochs, one seed, 3 probe epochs (identical budget for both probe arms, so the
 comparison is fair even if the absolute numbers would improve).
+
+## The masked pretext (V-JEPA style) — run 2026-10-31, phase 1 only
+
+Everything above this line trains an encoder to **reconstruct** and then fits a **temporal** transition on it.
+This section is a different pretext, and it is the one the papers actually pose: mask part of the input,
+predict the target encoder's **representation** of the masked part from the visible remainder. No action, no
+future, no reward. Code: `zelda_rl/sjepa.py`, `scripts/train_sjepa.py`, `scripts/probe_sjepa.py`.
+Numbers, artefacts, caveats and a retraction: **`PROVENANCE.md` §16**. Read that before citing anything here.
+
+**Why it is worth a fifth attempt.** The four earlier ones all optimise `z_{t+1} = T(z_t, a_t)`, where the
+latent moves 0.023–0.05 of a random pair per step, so *copy `z_t`* is near-optimal — the VQ arm scored skill
++0.000 with its predictor provably copying. A masked pretext has no previous latent to copy.
+
+### The pieces, and the one design trap
+
+* **Grid.** A token is one (frame, entity). 1 Link + 16 actor slots × T frames. Fields enter as a SUM of
+  per-field embeddings — discrete fields get an embedding table (actor `id` 5 is not "between" 4 and 6),
+  continuous ones an affine on the z-scored value — so Link's 43 fields and an actor's 20 share one width.
+* **Masking** is V-JEPA's multi-block, translated to (time × entity × field): `entity_tube` (one actor gone
+  for the whole clip), `group_tube` (one KIND of field gone for every entity — all positions, all velocities),
+  `time_block` (a contiguous span of frames), `cell` (scattered holes). The three tubes exist because a
+  per-frame random mask is solvable by **temporal interpolation** on a 60 Hz game and would have produced an
+  excellent loss measuring nothing. 15 field groups, asserted to partition all 363 cells.
+* **The probe trap, stated because it is easy to get backwards.** V-JEPA probes a COMPLETE clip for a label the
+  pixels do not contain. Here every candidate label IS an input field, so probing an unmasked state for `id` or
+  `pos_x` is the identity map and scores ~1.0 on everything. **The probes therefore read a MASKED encoding and
+  predict the HIDDEN content.** That is the only version of the question with a non-trivial answer.
+* **Three floors, all mandatory** (§1): `trivial` (mean/majority), `untrained` (same architecture, random
+  weights, same mask), and `visible` — a ridge on the visible RAW cells. The last is the free-signal control
+  and it is the one that matters: `speed` = |vel|, `pos_t` = `pos_{t-1}` + `vel_t`. On the first (broken) run
+  `visible` beat the encoder 0.855 to 0.521 on hidden `targeted_row`. No earlier JEPA attempt in this repo was
+  ever held to this bar — `pure.pt` only ever compared against an untrained encoder.
+* **Two controls on the OBJECTIVE itself**, printed on every epoch line ahead of the loss, because the loss is
+  not the result (§8) and a headline that appears alone gets read alone (§34):
+  - `shuffle` — predict a target token's representation using a **different clip's** representation at the same
+    token position. If this matches the model, the targets do not depend on the input.
+  - `clip/pos` — across-clip variance ÷ across-position variance. `collapse_stats` pools the two and therefore
+    **cannot see positional collapse**; it read eff_rank 17.9/96 and min_std 0.657 as healthy on a
+    representation that was 98.7% a function of token position.
+
+### Result in one line
+
+9 of 10 frozen probes beat both `untrained` and `visible` — counting alive enemies at **0.181 MAE** against
+the free-signal control's 0.539, `nearest_dist` 44.1 vs 71.7 world units, semantic margins 10–12 SE. **One
+seed.** The pretext's own objective still loses to `shuffle` 3.0× (down from 8.1×), so the probes clear and the
+objective does not.
+
+### Known deviations from the papers — both shipped in the implementation, neither proposed first (§13)
+
+Verified against the primary sources: I-JEPA's context encoder "only processes the visible context patches",
+and V-JEPA **removes** masked patches from the input, concatenating learnable mask tokens with the encoder
+OUTPUT before the predictor.
+
+1. **Mask embeddings are fed to the ENCODER** here (MAE-style). The papers put mask tokens in the PREDICTOR.
+2. **Per-field mask embeddings** (54 learned vectors) where the papers use **one shared** vector plus a
+   positional embedding.
+
+At 75–85% masking these make ~80% of a token clip-invariant, which is a real mechanism for the positional
+collapse seen on the first run. The encoder works *despite* them, so fixing it is an **upside arm against this
+as baseline**, not a rescue. The fix is small and falls out of the paper's structure: drop `mask_emb` from the
+encoder sum and normalise by the count of VISIBLE cells, after which a fully-masked token carries position
+only — which IS the paper's shared positional mask token, at no parameter cost.
+
+### What to run next, in order
+
+1. **Seeds 1 and 2** at the §16 config. Cheapest thing here, and one seed is not a measurement (§7).
+2. **Per-arm ridge λ sweep** in the probe. A single λ=1.0 regularises LayerNorm'd encoder features and a
+   75%-zero `visible` matrix unequally, so the margins are not yet defensible.
+3. **Fix the low-shot fractions** — `--min-n` floored 1% and 10% to the same 200 rows, so those two columns
+   are identical numbers and the axis never ran.
+4. **The paper-faithful encoder** as arm 2.
+5. **Phase 2 (action conditioning) is not started**, deliberately — §13 rule 5.
+
+### And the blocker for the task anyone actually cares about
+
+All of this is **Deku Baba**. The 363-d structured state was never recorded for Queen Gohma — only the
+featurised `obs`, which is dense with derived fields (`gohma_eye_dist` = |`gohma_eye_rel_pos`|) and contains
+`prev_action_*`, so masking it scores arithmetic and action echo. `datasets/ppo/gohma_steps` is **0 bytes**.
+Gohma needs `collect_transitions.py` to write `state` beside `obs`, then a fresh collection.

@@ -2012,3 +2012,170 @@ points before any slope claim.
 
 **Now a check:** `scripts/fleet_signal.py` drops any point with fewer ranks reported than the best-covered
 point, and prints what it dropped. A partial eval can no longer reach a slope.
+
+## 16. Session 2026-10-31: a masked-prediction JEPA on the structured state — the pretext CLEARS its controls — **M**
+
+**WM track.** The first thing in this project to beat both an untrained encoder and a free-signal control.
+Also six instrument faults, each caught before it became a claim, and one claim of mine that was wrong and is
+retracted below.
+
+### What was never run before this
+
+`LATENT_WORLD_MODEL.md` §1–§30, `JEPA_PLAN.md` and `WM_EXPERIMENT_REGIME.md` are **four** JEPA attempts and all
+four optimise the same pretext: `z_{t+1} = T(z_t, a_t)`. Every one lost to the identity, and the mechanism is
+recorded — the latent moves 0.023–0.05 of a random pair per step, so copying is near-optimal (the VQ arm proved
+it: skill **+0.000** with tune error bit-identical to identity).
+
+I-JEPA (2301.08243) and V-JEPA (2404.08471) do not pose that task. They mask part of the **input** and predict
+the target encoder's representation of the masked part from the visible remainder. There is no persistence
+shortcut because there is no previous latent. **That pretext had never been run here.** This is it, phase 1:
+no action, no future, no reward.
+
+### Substrate, and why it is Deku Baba and not Gohma
+
+Masking runs on `zelda_rl/state_layout.py`'s flat state — Link's 43 raw engine fields + 16 actor rows × 20 =
+**363** — not the 483/1033-d PPO `obs`. `obs` is a featuriser's output and is dense with derived redundancy
+(`goal_delta` = goal_pos − link_pos, `nearest_target_dist` = |rel_pos|, `gohma_eye_dist` = |`gohma_eye_rel_pos`|,
+`time_left` listed twice, and `prev_action_*` — the §5 control echo). Masking a derived field while its inputs
+stay visible scores **arithmetic**, which is the free-signal failure `AGENTS.md` §1 exists for.
+
+`state (T, 363)` was only ever recorded for **Deku Baba**: `datasets/transitions/v3-*` at **203,822 frames**
+local, and v5 at 91.5 M. For **Gohma** only `obs` was saved, and `datasets/ppo/gohma_steps` is **0 bytes**.
+Taking this to Gohma therefore needs a collector change to write `state` beside `obs`, plus a fresh collection.
+**Not done, and it is the blocker for applying any of this to the boss.** Packed v5 in S3 is also unusable as
+is: `link_dim: 36, actor_dim: 14` — the tokeniser's egocentric output, not the raw state.
+
+### The run — `p1`, one seed
+
+`scripts/train_sjepa.py`, `zelda_rl/sjepa.py`. dim 96 / depth 3 / heads 4 / pred_depth 2 / EMA 0.996,
+clip_len 8, stride 12, mask ratio 0.75, tok_target_frac 0.5, batch 256, lr 1e-3, **12 epochs**, seed 0,
+**0.67 M params**, CPU (6 threads, ~170 s/epoch). 16,938 clips from 203,822 frames, split **by episode**
+(339 train / 59 val) — a frame split leaks, since neighbouring frames of a 60 Hz game are near-identical.
+
+Masking is V-JEPA's multi-block, structured: `entity_tube` (one actor gone for the whole clip), `group_tube`
+(one *kind* of field gone for every entity), `time_block`, `cell`. Achieved ratio 0.791.
+
+| metric | ep1 → ep12 | slope ± SE | t |
+|---|---|---|---|
+| **state/position variance ratio** | 0.159 → **0.291** | **+0.0150 ± 0.0015** | **+10.29** |
+| eff_rank / 96 | 2.23 → 3.31 | +0.0755 ± 0.0081 | +9.37 |
+| min_std | 0.212 → 0.335 | +0.0067 ± 0.0021 | +3.26 |
+| val loss | 0.1725 → 0.0815 | −0.0061 ± 0.0013 | −4.74 |
+| shuffle floor | 0.0212 → **0.0273** | +0.0005 ± 0.0001 | +3.42 |
+
+### The probe result — frozen encoder, no gradient, three floors
+
+`scripts/probe_sjepa.py`, 2,589 held-out clips, probed at frame 4. Probes read a **masked** encoding and
+predict the **hidden** content: probing an unmasked state for a field that IS an input is the identity map and
+would score ~1.0 on everything. Floors: `trivial` (mean/majority), `untrained` (same architecture, random
+weights, same mask), `visible` (ridge on the visible raw cells — the free-signal control). Feature widths
+matched: sjepa/untrained **13,056**, visible **7,344**.
+
+| probe | trivial | visible | untrained | **SJEPA** |
+|---|---|---|---|---|
+| `link_targeted_row` (acc) | 0.496 | 0.718 | 0.714 | **0.919** |
+| `link_melee_anim` (acc) | 0.327 | 0.593 | 0.603 | **0.798** |
+| `link_action_fn_rel` (acc) | 0.378 | 0.603 | 0.627 | **0.791** |
+| `link_melee_state` (acc) | 0.882 | 0.885 | 0.877 | **0.945** |
+| `count_alive` (MAE) | 0.772 | 0.539 | 0.565 | **0.181** |
+| `count_present` (MAE) | 0.771 | 0.549 | 0.563 | **0.193** |
+| `nearest_dist` (world units) | 74.3 | 71.7 | 93.1 | **44.1** |
+| `link_floor_height` (MAE) | 4.16 | 3.11 | 4.54 | **2.08** |
+| `link_dist_interact_wall` (MAE) | 2.13 | 2.66 | 4.21 | **1.60** |
+| `link_bg_flags` (acc) | 0.968 | 0.965 | 0.962 | 0.968 — **TIE, struck** |
+
+**9/10, not 10/10.** The script printed 10/10; `bg_flags` ties the do-nothing floor to three decimals and beats
+`visible` by 0.006 ≈ 0.9 SE, so it is struck by hand here. Semantic margins are 10–12 SE at n≈690. Counting is
+the strongest result: **0.181 MAE against the free-signal control's 0.539**, inferring how many enemies are
+alive when every contributing cell is hidden.
+
+Five `row1_*` probes report **n/a: target is CONSTANT** — actor slot 1 never varies in v3. Correct behaviour,
+and see fault 2 below for what it did first.
+
+### What this does NOT establish
+
+- **One seed.** §7: six seeds of one config once spanned 1.38×–3.43× here. This is seed 0 alone.
+- **The pretext still loses to its own trivial control.** `shuffle` (emit an unrelated clip's target
+  representation) is 0.0273 against the model's 0.0815 — **3.0×**, down from 8.1× at epoch 1. Improving toward
+  it, not past it. Phase 1 is *not* cleared on the training objective; it is cleared on the probes.
+- **Single ridge λ=1.0 across differently-scaled arms.** Encoder features are LayerNorm'd; `visible` is ~75%
+  zeros after masking. One λ regularises them unequally, so the margins need a per-arm λ sweep before being
+  defended.
+- **The low-shot axis did not run.** `--min-n 200` floored both 1% and 10% to the same 200 rows, so those two
+  columns are *identical numbers*. Real at n=200, but it tested one fraction twice.
+- **Two deviations from the papers, shipped in the implementation rather than proposed** (§13). Verified
+  against both papers: I-JEPA's context encoder "only processes the visible context patches" and V-JEPA
+  **removes** masked patches, putting learnable mask tokens in the **predictor**. I fed per-field mask
+  embeddings to the **encoder** (MAE-style), and used 54 distinct vectors where the papers use one shared
+  vector plus a positional embedding. The encoder works *despite* this. Fix staged, not applied.
+
+### RETRACTION: I recommended killing this run, twice, from an underpowered slope
+
+At **5** epochs I reported `state/position` as "+0.0026 ± 0.0030, t=+0.85 — flat" and recommended stopping and
+redesigning. At **12** epochs the same quantity is **+0.0150 ± 0.0015, t=+10.29**. The five-epoch number was
+not wrong arithmetic; it was not decision-grade, and I let it drive a recommendation instead of labelling it so.
+I also asserted "this run can only produce a confident negative about a mis-implemented pretext" — contradicted
+by the result above, and withdrawn. §48 pre-registered five complete points as the bar for a slope *claim*; it
+says nothing about a *recommendation*, and that is the gap I fell through. The architectural diagnosis behind
+the recommendation remains factually correct; the prediction built on it was wrong.
+
+### The six instrument faults, all caught by controls before any reached a conclusion
+
+| # | fault | what it read | caught by |
+|---|---|---|---|
+| 1 | positional embeddings outweighed the whole game state **14×** (`nn.Embedding` defaults to N(0,1), norm √96 ≈ 9.8 each; field embeddings 0.19/cell) | val loss **0.030** at epoch 2, and an untrained encoder scored identically | shuffle control: an unrelated clip scored **0.0029**, 10× better than the model |
+| 2 | `collapse_stats` pools variance over (clip, frame, entity), so positional variance reads as informativeness | eff_rank 17.9/96, min_std 0.657 — both "healthy" on a 98.7%-positional representation | the across-clip / across-position split |
+| 3 | field sum divided by `n`, not `√n` — over-corrects, attenuating Link (43 fields) **1.5×** against an actor (20) | nothing; it would have surfaced later as "Link decodes worse" | reading the definition after writing the wrong claim in its own docstring |
+| 4 | probe scored `nan` as a loss | printed **"loses to untrained"** for 5 targets that are *constant* in v3 — a fabricated negative | the `nan` appearing in all three arms at once |
+| 5 | probe gave the encoder 192 features and the `visible` control 7,344 — a **38× capacity gap** | "loses to visible" was unreadable: worse representation, or 38× less to regress on? | reviewing the design before trusting its verdict |
+| 6 | **`--fresh` resets the checkpoint but not the metrics jsonl.** EvalSink appends, so the killed run's epochs 1–3 sat in the same file *colliding* with the new run's 1–3 | a pooled slope across **two architectures**: "0.0879 → 0.1051, not distinguishable from flat" | a missing column (`shuffle_floor`) tripping the script — luck, not design |
+
+Faults 1, 2 and 6 are one shape: **a number that looked healthy.** Fault 6 is §32 verbatim (retracted rows
+re-admitted) and fault 4 is §36 row 6 (a check that flags correct work). `--fresh` still needs to rotate or
+refuse an existing jsonl — **that is an open item, not a fixed one.**
+
+### Artefacts
+
+| path | md5 | bytes |
+|---|---|---|
+| `runs/sjepa/p1.last.pt` (epoch 12, + optimiser) | `fcad90898b4c93085c742e754cb33d09` | 9,881,105 |
+| `results/sjepa/p1_epochs.jsonl` (12 clean epochs; `runs/` is gitignored, so the metrics are exported to `results/` like every other history here) | `ec0cf678af712cc9031dc7bc3e43cdc3` | 5,982 |
+| `results/sjepa/p1_epochs.withdrawn.jsonl` (3 broken-tokeniser epochs, **do not re-admit** — their epoch numbers collide with the real run's 1-3) | `298c156accdb3770662c7fcc6caadf2a` | 1,269 |
+| `results/sjepa/p1_probe.json` | `1d8e6c8d808a247e6a1150beafe97e13` | 8,454 |
+| `configs/sjepa_prep_v3.json` (fitted scales + 221 vocab entries) | `f8e1246375adbf0687fec6a0aa18eae0` | 5,192 |
+| `logs/sjepa_p1.log`, `logs/sjepa_p1_probe.log` | `fcddc74051c6cdd8e3be809a9d7a45d8`, `3055f114cf09df1fd5b464d51ab9e6fa` | 3,492 / 3,915 |
+
+In S3, verified by listing the destination and comparing bytes (§16), not by the upload's exit code:
+`s3://zelda-rl/fleet/ckpt_auto/p1/p1.last.pt` (9,881,105) and `.../p1/p1.jsonl` (5,982).
+
+No W&B run: this was CPU-local under `ZRL_ALLOW_NO_WANDB=1`, so the jsonl + S3 copy is the record. `EvalSink`
+has a gap worth knowing — `log()` writes the jsonl **only `if rows`** and otherwise sends metrics to W&B
+alone, so a trainer reporting per-epoch aggregates with no per-episode rows is durable **nowhere**. That is how
+the WM fleet's ~40 epochs of key-event numbers were lost (§14). `train_sjepa.py` passes `rows=[m]` to work
+around it; **the gap in `eval_log.py` itself is unfixed.**
+
+### Reproduce
+
+```sh
+ZRL_ALLOW_NO_WANDB=1 .venv/bin/python -u scripts/train_sjepa.py \
+  --data 'datasets/transitions/v3-main' --data 'datasets/transitions/v3-moves' \
+  --data 'datasets/transitions/v3-approach' --data 'datasets/transitions/v3-scenarios' \
+  --out runs/sjepa/p1.pt --prep configs/sjepa_prep_v3.json --fit-prep \
+  --clip-len 8 --stride 12 --mask-ratio 0.75 --dim 96 --depth 3 --heads 4 --pred-depth 2 \
+  --batch 256 --lr 1e-3 --epochs 12 --torch-threads 6 --seed 0 --fresh --run-name p1
+
+.venv/bin/python -u scripts/probe_sjepa.py --ckpt runs/sjepa/p1.last.pt \
+  --data 'datasets/transitions/v3-main' --data 'datasets/transitions/v3-moves' \
+  --data 'datasets/transitions/v3-approach' --data 'datasets/transitions/v3-scenarios' \
+  --limit-clips 2500 --stride 16 --feat grid --min-n 200 --out results/sjepa/p1_probe.json
+```
+
+### Next, in order — none of it run
+
+1. **Seeds 1 and 2** at this exact config. One seed is not a measurement (§7), and it is the cheapest thing here.
+2. **Per-arm λ sweep** on the probe, so the margins are defensible.
+3. **Fix the low-shot fractions** (`--min-n` must not floor them to the same n).
+4. **The paper-faithful encoder as an arm against this as baseline** — mask tokens out of the encoder, one
+   shared mask vector. Staged patch, deliberately unapplied.
+5. **Phase 2 (action conditioning) is NOT started.** §13 rule 5: one authorisation, one experiment.
+6. **Gohma needs the collector to write `state`.** Everything above is Deku Baba.

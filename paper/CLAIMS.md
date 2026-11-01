@@ -122,6 +122,11 @@ could not be defended six months later. Fill a row when the measurement happens,
 | W10 | Up-weighting the motion loss ×10 improves motion | **U** | −0.193 → −0.079, 3 epochs, one seed. The only thing that has ever moved it |
 | W11 | Nav-grid resolution is the motion bottleneck | **U → doubtful** | +0.068 small scale, −0.012 at full scale; and the cell is 28.8×57.1, not the 142×66 I first published |
 | W12 | The token WM's autoregressive rollout diverges by ~429 world units in a few hundred steps | **M** | `scripts/wm_replay.py`, reproducible per checkpoint |
+| W13 | A MASKED-prediction JEPA on the structured state yields a representation that beats both an untrained encoder and a free-signal control | **M** (one seed) | 9/10 frozen probes, `results/sjepa/p1_probe.json`, `PROVENANCE.md` §16. Counting 0.181 MAE vs visible 0.539; `nearest_dist` 44.1 vs 71.7 world units; semantic margins 10-12 SE at n=690 |
+| W14 | This is the first pretext in the project whose representation is not beaten by a random-weight encoder of the same architecture | **M** (one seed) | contrast: `train_jepa_pure.py` was WORSE than untrained on 7 of 10 reward fields (link_pos 35.1 vs 29.0). Both in `PROVENANCE.md` §16 |
+| W15 | The masked pretext's own training objective still loses to a trivial control | **M** | shuffle floor 0.0273 vs model 0.0815 at epoch 12 (3.0x), improving from 8.1x at epoch 1. So the PROBES clear; the objective does not. `runs/evals/p1.jsonl` |
+| W16 | Masked-JEPA representation quality improves monotonically with training on this substrate | **U** | state/position +0.0150 +- 0.0015/epoch (t=+10.29) and eff_rank +0.0755 +- 0.0081 (t=+9.37) over 12 epochs -- but ONE SEED, 12 epochs, and no saturation observed. Needs seeds 1-2 |
+| W17 | Any of the above transfers to Queen Gohma | **U -- cannot be run** | the 363-d structured state was never recorded for Gohma; only the featurised `obs` exists, and `datasets/ppo/gohma_steps` is 0 bytes. Needs a collector change plus a fresh collection |
 
 ## Method claims that need a control before use
 

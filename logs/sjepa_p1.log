@@ -1,0 +1,24 @@
+clips: 16938 of T=8 from 398 episodes / 203822 frames (6 episodes shorter than T, skipped)
+split: 14697 train clips / 2241 val clips over 339/59 episodes
+prep: 33 continuous + 21 discrete fields (221 vocab entries total)
+  note: hp_cap: std 0.00e+00 over 117576 cells -- constant in this split
+  note: seeds: std 0.00e+00 over 117576 cells -- constant in this split
+  note: door_timer: std 0.00e+00 over 117576 cells -- constant in this split
+wrote configs/sjepa_prep_v3.json
+device cpu | 0.67M params | mask 0.75 {'entity_tube': 0.3, 'group_tube': 0.3, 'time_block': 0.2, 'cell': 0.2}
+eval sink: runs/evals/p1.jsonl (NO WANDB -- jsonl + S3 only)
+ep   1 shuffle 0.0212 vs val 0.1725 | clip/pos 0.159 eff_rank 2.2/96 min_std 0.211 | train 0.4013 | mask 0.791 tgt_tok 0.767 grad 0.2 oov 0 | 178s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   2 shuffle 0.0212 vs val 0.1207 | clip/pos 0.146 eff_rank 2.6/96 min_std 0.286 | train 0.1601 | mask 0.791 tgt_tok 0.768 grad 0.5 oov 0 | 185s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   3 shuffle 0.0211 vs val 0.1134 | clip/pos 0.147 eff_rank 2.7/96 min_std 0.243 | train 0.1347 | mask 0.791 tgt_tok 0.768 grad 0.3 oov 0 | 167s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   4 shuffle 0.0206 vs val 0.1134 | clip/pos 0.153 eff_rank 2.7/96 min_std 0.243 | train 0.1182 | mask 0.791 tgt_tok 0.769 grad 0.5 oov 0 | 183s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   5 shuffle 0.0205 vs val 0.1051 | clip/pos 0.168 eff_rank 2.8/96 min_std 0.275 | train 0.1084 | mask 0.791 tgt_tok 0.766 grad 0.3 oov 0 | 170s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   6 shuffle 0.0202 vs val 0.1015 | clip/pos 0.180 eff_rank 2.8/96 min_std 0.288 | train 0.1026 | mask 0.791 tgt_tok 0.768 grad 0.3 oov 0 | 276s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   7 shuffle 0.0205 vs val 0.0907 | clip/pos 0.217 eff_rank 2.8/96 min_std 0.314 | train 0.0902 | mask 0.790 tgt_tok 0.767 grad 0.3 oov 0 | 176s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   8 shuffle 0.0208 vs val 0.0807 | clip/pos 0.238 eff_rank 2.9/96 min_std 0.292 | train 0.0828 | mask 0.791 tgt_tok 0.767 grad 0.4 oov 0 | 251s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep   9 shuffle 0.0219 vs val 0.0803 | clip/pos 0.266 eff_rank 3.0/96 min_std 0.282 | train 0.0792 | mask 0.791 tgt_tok 0.768 grad 0.2 oov 0 | 151s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep  10 shuffle 0.0235 vs val 0.0816 | clip/pos 0.277 eff_rank 3.1/96 min_std 0.304 | train 0.0799 | mask 0.791 tgt_tok 0.768 grad 0.4 oov 0 | 148s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep  11 shuffle 0.0256 vs val 0.0920 | clip/pos 0.269 eff_rank 3.2/96 min_std 0.271 | train 0.0793 | mask 0.791 tgt_tok 0.769 grad 0.3 oov 0 | 165s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+ep  12 shuffle 0.0273 vs val 0.0815 | clip/pos 0.291 eff_rank 3.3/96 min_std 0.335 | train 0.0806 | mask 0.791 tgt_tok 0.767 grad 0.2 oov 0 | 170s  <<< SHUFFLE BEATS THE MODEL: the target reps do not depend on the input
+done. encoder for probing: runs/sjepa/p1.last.pt
+NEXT, and the result is NOT the loss above:
+  .venv/bin/python -u scripts/probe_sjepa.py --ckpt runs/sjepa/p1.last.pt --data 'datasets/transitions/v3-main'

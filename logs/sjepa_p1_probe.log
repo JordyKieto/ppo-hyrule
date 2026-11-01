@@ -1,0 +1,40 @@
+clips: 2589 of T=8 from 398 episodes / 41275 frames (2 episodes shorter than T, skipped)
+probing 2589 clips, T=8, frame 4, mask ratio 0.75 {'entity_tube': 0.3, 'group_tube': 0.3, 'time_block': 0.2, 'cell': 0.2}
+feature widths: sjepa=13056 untrained=13056 visible=7344  (matched by construction: a 38x capacity gap to the control made the verdict unreadable)
+
+probe                             kind     n_te   trivial   visible  untrained     SJEPA  verdict
+semantic/link_action_fn_rel       class     683    0.3777    0.6032     0.6266    0.7906  beats both
+semantic/link_bg_flags            class     690    0.9681    0.9652     0.9623    0.9681  beats both
+semantic/link_melee_anim          class     692    0.3266    0.5925     0.6026    0.7977  beats both
+semantic/link_melee_state         class     688    0.8823    0.8852     0.8765    0.9448  beats both
+semantic/link_targeted_row        class     692    0.4957    0.7182     0.7139    0.9191  beats both
+semantic/row1_cat                 class     692   n/a: target is CONSTANT (1 distinct value) in this dataset -- nothing to predict
+semantic/row1_fn_rel              class     681   n/a: target is CONSTANT (1 distinct value) in this dataset -- nothing to predict
+semantic/row1_id                  class     690   n/a: target is CONSTANT (1 distinct value) in this dataset -- nothing to predict
+semantic/row1_present             class     687   n/a: target is CONSTANT (1 distinct value) in this dataset -- nothing to predict
+semantic/row1_state_idx           class     691   n/a: target is CONSTANT (1 distinct value) in this dataset -- nothing to predict
+spatial/count_alive               reg       527    0.7716    0.5391     0.5651    0.1813  beats both
+spatial/count_present             reg       590    0.7706    0.5494     0.5632    0.1925  beats both
+spatial/link_dist_interact_wall   reg       687    2.1278    2.6579     4.2095    1.6026  beats both
+spatial/link_floor_height         reg       684    4.1609    3.1135     4.5374    2.0784  beats both
+spatial/nearest_dist              reg       543   74.3265   71.6912    93.1307   44.0607  beats both
+
+LOW-SHOT (head refitted on a fraction of the hidden train set; --min-n floors it at 200)
+probe                               n_full  n@0.01   n@0.1   sj@0.01   un@0.01   vi@0.01    sj@0.1    un@0.1    vi@0.1
+semantic/link_action_fn_rel           1608     200     200    0.7716    0.4993    0.5681    0.7716    0.4993    0.5681
+semantic/link_bg_flags                1585     200     200    0.9667    0.9638    0.9623    0.9667    0.9638    0.9623
+semantic/link_melee_anim              1606     200     200    0.7934    0.4884    0.5795    0.7934    0.4884    0.5795
+semantic/link_melee_state             1602     200     200    0.9360    0.8765    0.8910    0.9360    0.8765    0.8910
+semantic/link_targeted_row            1562     200     200    0.9032    0.7225    0.7081    0.9032    0.7225    0.7081
+spatial/count_alive                   1215     200     200    0.1757    0.4841    1.7211    0.1757    0.4841    1.7211
+spatial/count_present                 1365     200     200    0.1744    0.4772    1.8347    0.1744    0.4772    1.8347
+spatial/link_dist_interact_wall       1588     200     200    1.2839    2.5963    1.8977    1.2839    2.5963    1.8977
+spatial/link_floor_height             1597     200     200    1.8508    3.4333    3.1443    1.8508    3.4333    3.1443
+spatial/nearest_dist                  1303     200     200   41.7432   68.8484   67.8356   41.7432   68.8484   67.8356
+
+SJEPA beats BOTH floors on 10/10 scored probes.
+AGENTS 1/2: `trivial` is the do-nothing floor, `untrained` is the same architecture with random
+weights, `visible` is a ridge on the visible raw cells (the free-signal control). A win needs to
+clear untrained AND visible -- clearing only `trivial` means the task has structure, not that
+this encoder found any.
+wrote results/sjepa/p1_probe.json
