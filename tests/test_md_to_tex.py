@@ -71,6 +71,21 @@ def main():
         check(f"captioned table, {label}",
               "\\captionof{table}{A caption.}" in tex and "Table:" not in tex, True)
 
+    # --- run-in headings ---------------------------------------------------------------
+    # Roughly half the paragraphs in the paper that open with bold are NOT headings: they
+    # open mid-sentence on an emphasised quantity. Promoting one of those to a heading cuts
+    # the sentence in half, and it still compiles, so nothing else would catch it.
+    for text, want in [
+        ("**Outcomes.** Three of them.", True),
+        ("**The stun chain.** A stun must be manufactured.", True),
+        ("**76.2%** of the time it reads zero", False),      # mid-sentence emphasis
+        ("**Twenty terms are zeroed** in this preset", False),  # no terminal period
+        ("**(M.** Recomputed for this paper.", False),       # an evidence-class marker
+        ("**M**", False),                                    # too short, nothing follows
+    ]:
+        got = M.paragraph_heading(text)
+        check(f"run-in heading: {text[:32]!r}", got is not None, want)
+
     # --- the bibliography gate -----------------------------------------------------------
     TBL = """| key | authors | title | venue | used for | status |
     |---|---|---|---|---|---|

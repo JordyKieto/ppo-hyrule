@@ -14,7 +14,7 @@ CROSS-LISTS
   cs.AI   (Artificial Intelligence)
 
 COMMENTS FIELD
-  30 pages, 5 figures, 20 tables, 37 references. Code, claim audit, full provenance and model checkpoints:
+  31 pages, 5 figures, 20 tables, 37 references. Code, claim audit, full provenance and model checkpoints:
   https://github.com/JordyKieto/ppo-hyrule and https://huggingface.co/jordykieto/ppo-hyrule
   Video of the agent defeating the boss: https://youtu.be/FBD1wEsdY3E
 

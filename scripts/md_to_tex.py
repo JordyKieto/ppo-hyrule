@@ -210,6 +210,30 @@ def table(rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
+def paragraph_heading(text: str) -> "str | None":
+    """A run-in heading, if this paragraph opens with a titular bold lead-in.
+
+    Only a lead-in that is a complete titular phrase qualifies, which is why this is a
+    predicate and not a regex substitution. Roughly half the paragraphs in this paper that
+    begin with bold are not headings at all -- they open mid-sentence on an emphasised
+    quantity, as in "**76.2%** of the time" or "**trivial floor**" -- and turning those
+    into headings would cut the sentence in half.
+
+    The test is: the bold span ends a sentence, is short enough to be a title, is followed
+    by more prose, and does not open with a bracket (the evidence-class markers "(M." and
+    "(M" start paragraphs and end with a period but are annotations, not headings).
+    """
+    m = re.match(r"^\*\*(.+?)\*\*\s+(\S.*)$", text, re.S)
+    if not m:
+        return None
+    title, rest = m.group(1).strip(), m.group(2)
+    if not title.endswith("."):
+        return None
+    if title.startswith("(") or len(title) < 4 or len(title) > 120:
+        return None
+    return r"\paragraph{" + inline(title) + "} " + inline(rest)
+
+
 def convert(md: str) -> str:
     lines = md.split("\n")
     out: list[str] = []
@@ -281,12 +305,23 @@ def convert(md: str) -> str:
             # paragraph above them, and floating nineteen of them through a 26-page paper
             # separates each from the sentence it answers. This numbers and captions them
             # in place.
-            out += [r"\begin{center}",
-                    r"\captionof{table}{" + inline(caption) + "}",
-                    r"\label{tab:" + key + "}",
-                    r"\end{center}",
-                    r"\vspace{-1.2em}",
-                    table(rows)]
+            head = [r"\captionof{table}{" + inline(caption) + "}",
+                    r"\label{tab:" + key + "}"]
+            # A minipage cannot break across a page, so the caption cannot be stranded at
+            # the foot of one with its table overleaf -- which \nopagebreak did not prevent
+            # and which happened to three of these twenty. Only short tables are boxed this
+            # way: a long one has to be allowed to split, and is unlikely to be orphaned
+            # because it will not fit in the remaining space either way.
+            if len(rows) <= 14:
+                # A float, not a minipage. A minipage also keeps the caption with its
+                # table, but when it does not fit in the space left it leaves that space
+                # BLANK; a float lets the following text fill the page and places the
+                # table at the top of it instead. Orphan fixed either way, gap only one.
+                out += [r"\begin{table}[!htbp]", r"  \centering", *["  " + h for h in head],
+                        table(rows), r"\end{table}"]
+            else:
+                out += [r"\begin{center}", *head, r"\end{center}",
+                        r"\nopagebreak[4]", r"\vspace{-1.2em}", table(rows)]
             continue
         if re.match(r"^\s*\|", ln):                                # pipe table, inline
             close_list()
@@ -363,7 +398,8 @@ def convert(md: str) -> str:
         para = [ln]
         while i + 1 < len(lines) and lines[i + 1].strip() and not re.match(r"^(#|\||>|```|\s*[-*]\s|\d+\.\s|---$)", lines[i + 1]):
             i += 1; para.append(lines[i])
-        out.append(inline(" ".join(x.strip() for x in para)))
+        text = " ".join(x.strip() for x in para)
+        out.append(paragraph_heading(text) or inline(text))
         i += 1
     close_list()
     if in_abstract:
