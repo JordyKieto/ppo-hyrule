@@ -19,6 +19,7 @@ checkpoint.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -103,6 +104,10 @@ def inline(t: str) -> str:
             x = x.replace("/", "/\\allowbreak{}").replace(r"\_", r"\_\allowbreak{}")
         return r"\texttt{" + x + "}"
 
+    # {{fig:name}} becomes a real cross-reference, so a figure number cannot drift from the
+    # prose the way a hand-typed "Figure 3" does when a figure is inserted above it. Parked
+    # before escaping, like any other raw LaTeX.
+    t = re.sub(r"\{\{fig:(\w+)\}\}", lambda m: park(r"Figure~\ref{fig:" + m.group(1) + "}"), t)
     t = re.sub(r"`([^`]+)`", lambda m: park(tt(m.group(1))), t)
     t = re.sub(r"\[([^\]]+)\]\(([^)]+)\)",
                lambda m: park(r"\href{" + m.group(2).replace("%", r"\%").replace("#", r"\#") + "}{"
@@ -177,6 +182,23 @@ def convert(md: str) -> str:
                 buf.append(lines[i]); i += 1
             i += 1
             out += [r"\begin{Verbatim}[fontsize=\footnotesize,frame=single,framesep=4pt]", *buf, r"\end{Verbatim}"]
+            continue
+        m = re.match(r"^!\[(.*)\]\(([^)]+)\)\s*$", ln)             # figure
+        if m:
+            close_list()
+            caption, path = m.group(1), m.group(2)
+            key = re.sub(r"\W+", "", os.path.splitext(os.path.basename(path))[0])
+            # A figure wider than it is tall is set across the full column; the strip-shaped
+            # teaser would otherwise be set at a size nobody can read.
+            out += [
+                r"\begin{figure}[" + ("!ht" if "teaser" in path else "tbp") + "]",
+                r"  \centering",
+                r"  \includegraphics[width=\linewidth]{" + path + "}",
+                r"  \caption{" + inline(caption) + "}",
+                r"  \label{fig:" + key + "}",
+                r"\end{figure}",
+            ]
+            i += 1
             continue
         if re.match(r"^\s*\|", ln):                                # pipe table
             close_list()

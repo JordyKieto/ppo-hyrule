@@ -14,7 +14,7 @@ CROSS-LISTS
   cs.AI   (Artificial Intelligence)
 
 COMMENTS FIELD
-  24 pages, 19 tables. Code, claim audit, full provenance and model checkpoints:
+  27 pages, 5 figures, 19 tables. Code, claim audit, full provenance and model checkpoints:
   https://github.com/JordyKieto/ppo-hyrule and https://huggingface.co/jordykieto/ppo-hyrule
   Video of the agent defeating the boss: https://youtu.be/FBD1wEsdY3E
 
@@ -26,10 +26,12 @@ LICENCE
   Suggested: arXiv.org perpetual, non-exclusive licence. Choose at submission time.
 
 WHAT TO UPLOAD
-  paper.tar.gz in this directory, rebuilt by ./build.sh. It contains paper.tex and nothing
-  else: the document has no figures, no bibliography file and no custom classes, so
-  arXiv's TeX Live can build it unaided. build.sh also compiles it in an empty temporary
-  directory and fails if that does not produce a 24-page PDF.
+  paper.tar.gz in this directory, rebuilt by ./build.sh. It contains paper.tex and the
+  figures/ directory it includes, and nothing else: there is no bibliography file and no
+  custom class, so arXiv's TeX Live can build it unaided. build.sh checks that every
+  \includegraphics target is actually inside the archive, compiles the archive in an empty
+  temporary directory, and fails if that does not produce a PDF of the page count stated
+  above with no overfull boxes.
 
 PACKAGES THE SOURCE USES, all present in arXiv's TeX Live
   geometry, fontenc, newtxtext/newtxmath, microtype, amsmath, graphicx, booktabs,

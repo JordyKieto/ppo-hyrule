@@ -45,6 +45,13 @@
 \thispagestyle{firstpage}
 
 
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\linewidth]{figures/teaser.png}
+  \caption{One episode of the policy defeating Queen Gohma, from the full-health start, at the frames the mechanism turns on. She takes damage only while stunned, and a stun has to be manufactured: the agent shoots her out of the ceiling with a slingshot seed, then hits her on the floor, and later uses Deku Nuts to the same end. The last panel is the end of the recording: the episode terminates on her defeat, so the capture stops while she is going over and before she disintegrates. All six panels are identically gamma-corrected to lift the shadows of the first two, with no other adjustment. The full unedited episode is linked in section 11, and every attempt made while recording, won or lost, is listed beside it.}
+  \label{fig:teaser}
+\end{figure}
+
 \textbf{Model-free reinforcement learning from live game memory in \emph{The Legend of Zelda: Ocarina of Time}, and four things that did not beat it.}
 
 Technical report, 1 November 2026. Every quantitative statement here carries an evidence class in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md}{claim audit} and traces to an artefact in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record}. Nothing below should be read as a result unless it is marked \textbf{M}, measured, there. Claims this project made internally and later overturned are listed in section 12 rather than deleted, which is a deliberate part of the report rather than an oversight.
@@ -173,6 +180,13 @@ A later experiment, not reported as a result in this paper, raises damage to 20 
 
 The policy is an entity-factored recurrent actor-critic: the actor table is pooled by a shared per-actor network, then a recurrent core feeds actor and critic heads. Training is recurrent PPO, and across machines we average weights every update rather than averaging gradients. \textbf{We claim no architectural novelty and ran no head-to-head ablation}: this architecture was never compared against a flat network at scale, so it is a choice we made and not a finding, and nothing in the rest of the paper rests on it.
 
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/architecture.png}
+  \caption{The policy. Each actor in the room becomes a row in a ragged table, every row goes through the same small network, and the rows are pooled with a mask so one set of weights handles any number of enemies. The pooled vector is concatenated with a global block that holds the room, the timers and Link's own state, and a recurrent core carries what has happened so far in the fight. Widths are read from the reported checkpoint, not from prose. We claim no architectural novelty and ran no head-to-head ablation.}
+  \label{fig:architecture}
+\end{figure}
+
 \subsection{Compute, and what it cost}
 
 Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109 at the largest, at \$0.48 to \$0.56 per machine-hour. World models ran on single H100 80GB cards at \$3.49 to \$3.99 an hour. \textbf{Nothing in this work used an A100}, although one pod was requested as one and the provider substituted an H100. Our own logs recorded this as "A100 or H100" for months, and that was wrong.
@@ -253,6 +267,13 @@ So the projectile hit that looks productive, the red-eye shot on the ceiling, co
 
 Two behaviours correlate \textbf{negatively} with damage dealt across the 100 wins: larvae hit at \textbf{-0.598} and time she spends on the ceiling at \textbf{-0.559}. Fighting the larvae is what a human does when the fight is going badly. Any method that imitates the corpus uniformly learns that behaviour in proportion to how often it appears.
 
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/anatomy.png}
+  \caption{The anatomy of one win, 191 seconds. Her health falls only inside the shaded windows, and every window but three was opened by the agent. The longest stretch with no damage dealt is 72 seconds, during which the policy is clearing larvae, surviving and trying to re-engage. This is one episode and is shown as a mechanism, not as a rate: Figure~\ref{fig:profile} is the measurement.}
+  \label{fig:anatomy}
+\end{figure}
+
 \subsection{Why this is hard for a policy gradient, stated precisely}
 
 The advantage horizon of our optimiser is \texttt{1 / (1 - gamma * lambda)}. At the settings used by every run in this project, gamma 0.995 and lambda 0.95, that is 18.3 steps, or \textbf{1.8 seconds} at 10 Hz, against a fight that takes 45 to 154 seconds.
@@ -291,6 +312,13 @@ Our best boss policy is \texttt{gohma-kl-v15}, referred to below as v15. The mea
 \end{center}
 
 \textbf{(M.} Recomputed for this paper from the 456 rows, not quoted from a log. The pooled row reproduces the figure recorded at the time, which is the check that the split is being read correctly.\textbf{)}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/profile.png}
+  \caption{The same 456 episodes read two ways. Left, the binary: the confidence intervals of the four middle starts all overlap, so on defeat rate alone only the extremes separate, and starts 4 and 6 order the opposite way from the right panel with nothing to choose between them. Right, the graded quantity, as a share of the health each start hands the policy: it orders all six at a few percent of standard error. The pooled rate is an average over a curriculum we chose and moves when the mix moves.}
+  \label{fig:profile}
+\end{figure}
 
 Three readings, in order of importance.
 
@@ -549,13 +577,22 @@ v17 & 3.19 to 2.86 & \textbf{-0.022} * & 52.35 to 37.55 \\
 \end{tabularx}
 \end{center}
 
-\texttt{*} marks a slope distinguishable from zero. \textbf{The project improved 8.7 times with every step statistically solid and it was reported as six consecutive failures.} A defeat requires ten successful openings; damage counts each one, so one signal can show a trend on a few hundred episodes and the other cannot.
+\texttt{*} marks a slope distinguishable from zero. \textbf{The project improved 8.7 times with every step statistically solid and it was reported as six consecutive failures.}
+
+\textbf{What the table is computed from, and what Figure~\ref{fig:versions} is computed from, because they are not the same artefact.} The rows above were produced while the fleet was alive, from the pods' own training logs, pooled across the ranks of each run. Those pods are gone. What survives is the exported run history for each version, which is the aggregator rank alone, and the figure is drawn from that so a reader can re-derive it. The two agree on everything the argument uses: the same direction on all seven versions the export covers, the same two regressions, the same ordering, and first-third and last-third means within 0.15 of the quoted endpoints. They disagree on per-version significance, and in the conservative direction: on one rank rather than pooled ranks, three of the seven clear \texttt{|t| > 2} instead of all of them. The 8.7-fold claim spans v10 to v15 and v10 predates per-slot logging, so v10 is in the table and not in the figure. Readers who want the pooled form have the table; readers who want to re-run the arithmetic have the figure and the exported histories. A defeat requires ten successful openings; damage counts each one, so one signal can show a trend on a few hundred episodes and the other cannot.
 
 The wrong metric then caused harm rather than merely hiding progress. An approach-shaping term, \texttt{g\_approach}, was added in v15 on the strength of a defeat-rate band analysis. The last two rows are the versions that tripled its coefficient and that added deficit sampling, and both are regressions against the policy they resumed from, confirmed on the mix-invariant per-start form (t = -4.75 and -3.78) so neither is a curriculum artefact. \textbf{We stop short of saying the term caused the plateau}, which we did assert internally before checking: the slope also tracks each version's starting level, and a later arm that removed the term from the same weights did not recover the earlier slope. Our own claim audit marks that causal reading confounded. What is attributable is narrower and still useful: two changes motivated by the sparse binary were measurably harmful, and the saturation at 3.2 to 3.4 is a property of the task across eight versions and five reward configurations.
 
 \textbf{The rules this produces.} Rank candidate metrics by how well they separate the comparison you actually want to make, not by their name. The binary responds only when the whole ten-hit chain completes, so every partial improvement is invisible to it, while the graded quantity moves with each hit. The claim is about the metric's response to the underlying change and not about its spread, since larger variance is not by itself more information. The empirical form is the one to quote: on the same 456 episodes per arm, boss damage separates our two best methods at t = 13.91 where the defeat rate manages z = 2.76. Make the headline the quantity the reward's largest terms pay for. Report a trend with its standard error, because "flat" and "rising" are claims about a slope. And never let a sparse metric justify adding a reward term.
 
 That last rule has a theoretical companion. Ng, Harada and Russell (ICML 1999) proved that only a shaping term of the form \texttt{gamma * Phi(s') - Phi(s)}, a difference of a potential over states, leaves the optimal policy unchanged; any other additive term can change what is optimal. None of our shaping terms, \texttt{g\_approach} included, is of that form, so the reward we ran is not policy-invariant by construction and a regression from adding one is the expected failure rather than a surprise. Section 14 gives the measured price of the same mechanism in an earlier version.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/versions.png}
+  \caption{Seven versions laid end to end, the same runs read through both instruments. Above, boss damage, the graded quantity the reward principally pays for. Below, the defeat rate, the binary every status report was read through. Thick bars are the first-third and last-third means, the same estimator in both panels. The graded signal climbs across the first five versions and falls on the last two; the binary, on the same data, is noise at this episode count. The two versions drawn in red are the ones added to fix a plateau the binary appeared to show.}
+  \label{fig:versions}
+\end{figure}
 
 \subsection{A metric that moves with the sampling distribution cannot compare policies}
 

@@ -1,5 +1,7 @@
 # The Legend of PPO: Learning to Fight in Hyrule
 
+![One episode of the policy defeating Queen Gohma, from the full-health start, at the frames the mechanism turns on. She takes damage only while stunned, and a stun has to be manufactured: the agent shoots her out of the ceiling with a slingshot seed, then hits her on the floor, and later uses Deku Nuts to the same end. The last panel is the end of the recording: the episode terminates on her defeat, so the capture stops while she is going over and before she disintegrates. All six panels are identically gamma-corrected to lift the shadows of the first two, with no other adjustment. The full unedited episode is linked in section 11, and every attempt made while recording, won or lost, is listed beside it.](figures/teaser.png)
+
 **Model-free reinforcement learning from live game memory in *The Legend of Zelda: Ocarina of Time*, and
 four things that did not beat it.**
 
@@ -210,6 +212,8 @@ average weights every update rather than averaging gradients. **We claim no arch
 head-to-head ablation**: this architecture was never compared against a flat network at scale, so it is a
 choice we made and not a finding, and nothing in the rest of the paper rests on it.
 
+![The policy. Each actor in the room becomes a row in a ragged table, every row goes through the same small network, and the rows are pooled with a mask so one set of weights handles any number of enemies. The pooled vector is concatenated with a global block that holds the room, the timers and Link's own state, and a recurrent core carries what has happened so far in the fight. Widths are read from the reported checkpoint, not from prose. We claim no architectural novelty and ran no head-to-head ablation.](figures/architecture.png)
+
 ### 2.4 Compute, and what it cost
 
 Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109
@@ -317,6 +321,8 @@ time she spends on the ceiling at **-0.559**. Fighting the larvae is what a huma
 badly. Any method that imitates the corpus uniformly learns that behaviour in proportion to how often it
 appears.
 
+![The anatomy of one win, 191 seconds. Her health falls only inside the shaded windows, and every window but three was opened by the agent. The longest stretch with no damage dealt is 72 seconds, during which the policy is clearing larvae, surviving and trying to re-engage. This is one episode and is shown as a mechanism, not as a rate: {{fig:profile}} is the measurement.](figures/anatomy.png)
+
 ### 4.1 Why this is hard for a policy gradient, stated precisely
 
 The advantage horizon of our optimiser is `1 / (1 - gamma * lambda)`. At the settings used by every run in this
@@ -377,6 +383,8 @@ seconds is withdrawn (section 12).
 
 **(M.** Recomputed for this paper from the 456 rows, not quoted from a log. The pooled row reproduces the
 figure recorded at the time, which is the check that the split is being read correctly.**)**
+
+![The same 456 episodes read two ways. Left, the binary: the confidence intervals of the four middle starts all overlap, so on defeat rate alone only the extremes separate, and starts 4 and 6 order the opposite way from the right panel with nothing to choose between them. Right, the graded quantity, as a share of the health each start hands the policy: it orders all six at a few percent of standard error. The pooled rate is an average over a curriculum we chose and moves when the mix moves.](figures/profile.png)
 
 Three readings, in order of importance.
 
@@ -766,7 +774,19 @@ quantity the reward principally pays for, the same runs read:
 | v17 | 3.19 to 2.86 | **-0.022** * | 52.35 to 37.55 |
 
 `*` marks a slope distinguishable from zero. **The project improved 8.7 times with every step statistically
-solid and it was reported as six consecutive failures.** A defeat requires ten successful openings; damage
+solid and it was reported as six consecutive failures.**
+
+**What the table is computed from, and what {{fig:versions}} is computed from, because they are not the same
+artefact.** The rows above were produced while the fleet was alive, from the pods' own training logs, pooled
+across the ranks of each run. Those pods are gone. What survives is the exported run history for each version,
+which is the aggregator rank alone, and the figure is drawn from that so a reader can re-derive it. The two
+agree on everything the argument uses: the same direction on all seven versions the export covers, the same
+two regressions, the same ordering, and first-third and last-third means within 0.15 of the quoted endpoints.
+They disagree on per-version significance, and in the conservative direction: on one rank rather than pooled
+ranks, three of the seven clear `|t| > 2` instead of all of them. The 8.7-fold claim spans v10 to v15 and
+v10 predates per-slot logging, so v10 is in the table and not in the figure. Readers who want the pooled form
+have the table; readers who want to re-run the arithmetic have the figure and the exported histories.
+ A defeat requires ten successful openings; damage
 counts each one, so one signal can show a trend on a few hundred episodes and the other cannot.
 
 The wrong metric then caused harm rather than merely hiding progress. An approach-shaping term, `g_approach`,
@@ -795,6 +815,8 @@ unchanged; any other additive term can change what is optimal. None of our shapi
 included, is of that form, so the reward we ran is not policy-invariant by construction and a regression from
 adding one is the expected failure rather than a surprise. Section 14 gives the measured price of the same
 mechanism in an earlier version.
+
+![Seven versions laid end to end, the same runs read through both instruments. Above, boss damage, the graded quantity the reward principally pays for. Below, the defeat rate, the binary every status report was read through. Thick bars are the first-third and last-third means, the same estimator in both panels. The graded signal climbs across the first five versions and falls on the last two; the binary, on the same data, is noise at this episode count. The two versions drawn in red are the ones added to fix a plateau the binary appeared to show.](figures/versions.png)
 
 ### 9.2 A metric that moves with the sampling distribution cannot compare policies
 
