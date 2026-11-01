@@ -42,6 +42,12 @@ PREAMBLE = r"""\documentclass[11pt]{article}
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage[font=small,labelfont=bf,skip=6pt]{caption}
+% Default float parameters reserve so much of a page for text that a half-page figure is
+% deferred to a float page of its own, which left one figure alone on a mostly blank page.
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.75}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.80}
 \usepackage{xcolor}
 \usepackage{fancyhdr}
 \usepackage{fancyvrb}

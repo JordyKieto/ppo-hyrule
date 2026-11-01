@@ -287,7 +287,7 @@ def fig3_versions():
     assert neg == ["v16", "v17"], f"expected v16 and v17 to be the regressions, got {neg}"
     print(f"  regressions: {neg}  (matches section 9)")
 
-    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(7.2, 4.4), height_ratios=[2.1, 1],
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(7.2, 3.8), height_ratios=[2.2, 1],
                                   sharex=True)
     x0 = 0
     ticks, ticklabels = [], []
@@ -379,7 +379,7 @@ def fig4_arch():
     assert d["head"] == d["nact"]
 
     fig, ax = plt.subplots(figsize=(7.2, 2.7))
-    ax.set_xlim(0, 100)
+    ax.set_xlim(-1, 103)
     ax.set_ylim(7, 42)
     ax.axis("off")
 
@@ -447,11 +447,6 @@ def fig4_arch():
     ax.text(79.5, 10.4, "hidden state, carried\nacross the episode", fontsize=6.0,
             color=GREEN, ha="center", va="top", linespacing=1.3)
 
-    fig.text(0.5, -0.03,
-             "Widths are read from the reported checkpoint's tensors. The actor table is ragged: "
-             "empty rows are masked out of the pool, so one set of weights handles any number of "
-             "enemies.",
-             ha="center", fontsize=6.6, color=MUTED)
     return _save(fig, "architecture.png")
 
 
