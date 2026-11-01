@@ -142,9 +142,30 @@ def test_preset_turns_on_each_of_the_five_behaviours():
     # 5 rush the stun: RAISED, never duplicated
     assert b["w_approach"] > cur("w_approach"), "behaviour 5: approach_stunned's weight"
     assert b["g_sword_ready"] > cur("g_sword_ready"), "behaviour 5: sword_ready_stunned's weight"
-    # and the outcome terms are untouched
-    for k in ("g_boss_damage", "g_boss_defeat", "g_boss_hp_progress", "g_death_penalty", "g_seed_stun"):
-        assert k not in b or b[k] == cur(k), f"{k} is an OUTCOME (or the largest shaping term) -- untouched"
+    # and the outcome terms move ONLY where the author asked, 2026-11-01. This guard used to assert that the
+    # preset touched no outcome term at all; it fired when g_boss_damage was raised, which is the guard doing
+    # its job. It is not deleted, it is narrowed to the two deliberate changes, so any OTHER outcome edit
+    # still fails here.
+    for k in ("g_boss_defeat", "g_boss_hp_progress", "g_death_penalty"):
+        assert k not in b or b[k] == cur(k), f"{k} is an outcome term and must stay untouched"
+    assert b["g_boss_damage"] == 20.0, "the author raised damage 4 -> 20 so the outcome dominates the shaping"
+    assert "g_boss_damage_cap" not in b, "damage stays UNCAPPED"
+    assert b["g_seed_stun"] == 5.0 and b["g_seed_stun_cap"] == 15.0, "seed stun cut from 15.0/60.0"
+
+    # every behaviour term is on one scale: coefficient 5, cap 10. g_nut_wasted is the stated exception,
+    # uncapped because a capped penalty makes later waste free.
+    for k in ("g_grass_cut", "g_seed_pickup", "g_nut_pickup", "g_link_heal", "g_item_approach",
+              "w_lockon", "w_lock_step", "g_facing", "w_approach", "g_sword_ready", "g_nut_wasted"):
+        assert b[k] == 5.0, f"{k} should be at the common coefficient 5.0, got {b[k]}"
+    for k in ("g_grass_cut_cap", "g_pickup_cap", "g_link_heal_cap", "g_item_approach_cap",
+              "w_lockon_cap", "lock_step_cap", "g_facing_cap", "w_approach_cap", "g_sword_ready_cap"):
+        assert b[k] == 10.0, f"{k} should be at the common cap 10.0, got {b[k]}"
+    assert "g_nut_wasted_cap" not in b, "the waste PENALTY stays uncapped, deliberately"
+
+    # the three caps added for this preset default to 0, which the tracker reads as unbounded, so every
+    # historical preset keeps its original behaviour. This is what stops the rescale contaminating v15.
+    for k in ("w_lockon_cap", "w_approach_cap", "g_link_heal_cap"):
+        assert getattr(base, k) == 0.0, f"{k} must default to 0 (unbounded) so older presets are unchanged"
 
 
 def test_no_positive_red_eye_term_is_restored():

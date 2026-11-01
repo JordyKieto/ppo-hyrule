@@ -464,7 +464,7 @@ class GohmaTracker(CombatTracker):
             self.last_damage_t = self.t
             ev["link_damage"] = -dhp
         elif dhp > 0 and not prev.dead:
-            pay("link_heal", c.g_link_heal * dhp, "out")
+            self._capped(pay, "link_heal", c.g_link_heal * dhp, c.g_link_heal_cap or float("inf"), "out")
             ep["hp_healed"] += dhp
             # One credit per heart, not per step: a recovery heart adds 16 HP units over several frames, so
             # counting every rising step would multiply one heart into four. There is no other healing source
@@ -545,7 +545,7 @@ class GohmaTracker(CombatTracker):
             if locked:
                 ep["lock_steps"] += 1
                 if prev.targeted != g.ptr and ep["lockons"] < c.lockon_cap:
-                    pay("lockon", c.w_lockon, "shape")
+                    self._capped(pay, "lockon", c.w_lockon, c.w_lockon_cap or float("inf"))
                     ep["lockons"] += 1
                     ev["lockon"] = True
                 self._capped(pay, "lock_hold", c.w_lock_step, c.lock_step_cap)
@@ -578,7 +578,9 @@ class GohmaTracker(CombatTracker):
             if gs in GOHMA_STUNNED:                                # close the distance for the sword window
                 d0, d1 = math.dist(g_prev.pos, prev.pos) if g_prev else math.nan, math.dist(g.pos, cur.pos)
                 if math.isfinite(d0) and math.isfinite(d1) and d1 > c.g_sword_range:
-                    pay("approach_stunned", float(np.clip(c.w_approach * (d0 - d1) / 100.0, -0.5, 0.5)), "shape")
+                    self._capped(pay, "approach_stunned",
+                                 float(np.clip(c.w_approach * (d0 - d1) / 100.0, -0.5, 0.5)),
+                                 c.w_approach_cap or float("inf"))
                 if cur.held_item == HELD_SWORD and d1 < c.g_sword_range:
                     self._capped(pay, "sword_ready_stunned", c.g_sword_ready, c.g_sword_ready_cap)
                 # behaviour 5's counter: steps from this knockdown's onset to Link first inside sword range.

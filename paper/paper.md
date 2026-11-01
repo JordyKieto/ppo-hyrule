@@ -21,7 +21,8 @@ Two tasks. The first, a three-enemy melee encounter, is solved by recurrent PPO 
 CPU machines. The second, the dungeon boss Queen Gohma, is not solved, and the useful content of this report
 is why. Gohma takes damage only while stunned, and a stun must be manufactured. From a full-health start a kill is
 ten sword hits spread across roughly five such openings, inside a fight that takes a human 154 seconds. Our best policy defeats her on 8.33% of
-456 evaluation episodes and removes 3.53 of her 10 health on average.
+456 evaluation episodes and removes 3.53 health on average, pooled over starts that begin at 5 to 10 of her 10
+health.
 
 Four alternatives were measured against that policy under matched conditions and **all four lost**: cloning
 human play, folding those demonstrations into the policy gradient, learning offline from return-conditioned
@@ -41,7 +42,7 @@ graded quantity the reward actually pays for, the same six versions rose **8.7 t
 statistically solid, and the two changes launched to break the apparent plateau were both measurable
 regressions. We give the
 per-start profile rather than a pooled rate, because the pooled rate moves with a curriculum we choose, and we
-record nine claims this project published and then withdrew.
+record eleven claims this project published and then withdrew.
 
 ---
 
@@ -67,7 +68,7 @@ record nine claims this project published and then withdrew.
    them apart.
 6. **A metric methodology, derived from its own failures.** Mix-invariance, selector resolution, the
    maximum-of-N bias, pooling as a measurement with its own failure modes, and the difference between a
-   discount and a policy-gradient weight (section 9), each with the specific wrong decision it caused.
+   discount and a policy-gradient weight (section 4.1), each with the specific wrong decision it caused.
 
 ### What we do not claim
 
@@ -85,7 +86,8 @@ Stated here rather than buried, because the paper's own argument is that claims 
 - **We do not claim the entity-factored recurrent architecture is better than a flat network.** It was never
   ablated head to head. No architectural novelty is claimed anywhere in this report.
 - **We do not claim the human's strategy is inferior.** The demonstrator won 100 of 100. What we show is that
-  imitating those demonstrations, by nine distinct mechanisms, did not improve a policy trained without them.
+  imitating those demonstrations, by fifteen distinct mechanisms of which nine ran long enough to fit a slope,
+  did not improve a policy trained without them.
 - **We do not claim a new algorithm.** Every method here is taken from the literature and applied.
 
 ---
@@ -102,6 +104,11 @@ Every memory offset is taken from the [OoT decompilation](https://github.com/zel
 inspection, with the retail Player structure at the decompilation's offset minus `0x10`. One shared definition
 (`zelda_rl/state_layout.py`) is imported by both the data collector and every model, so the two cannot drift.
 
+Reading structured state out of an emulator instead of rendering pixels is not our idea. Firoiu, Whitney and
+Tenenbaum (arXiv:1702.06230) did it for *Super Smash Bros. Melee* under the same emulator family, reading each
+player's position, velocity and action state from memory every frame; section 14 states what we take from them
+and what we do not claim.
+
 Reading memory is not a shortcut past the hard part. The state is a variable set of actors over twenty fields
 each, and the quantity that matters most for combat, an enemy's current **action routine**, is a function
 pointer we decode into a named behaviour state. A Deku Baba telegraphs its lunge; Gohma's eye turns red before
@@ -117,29 +124,57 @@ across.
 
 Actions are a discrete product of nine world-relative directions and a button set. The melee task uses 63
 actions; the boss task needs 108, adding slingshot, Deku Nut, first-person aiming, and the Z-plus-shield and
-Z-plus-nut combinations.
+Z-plus-nut combinations. **Z-targeting** is the game's own lock-on, which fixes the camera and Link's facing on
+a chosen enemy; it is referred to by that name throughout because that is what the button does.
 
 Reward is computed by one tracker (`zelda_rl/combat.py`) shared by the real environment and the learned one, so
-the two cannot disagree by construction. The boss configuration used by every result here zeroes 39 shaping
-terms and pays principally for damage dealt (+4.0 per health point) and the kill (+60).
+the two cannot disagree by construction.
+
+**The reward configuration is pinned per policy, not quoted from the current file.** That file is edited
+between experiments, so a sentence describing "the reward" describes whatever it happens to be on the day it
+is read. `../docs/REWARD_PROVENANCE.md` resolves the exact coefficients for every reported policy directly
+from the commit it trained under. For v15, which carries every headline number here: 39 shaping terms
+zeroed, damage at **+4.0 per health point**, the kill at **+60**, a stun credit of 15.0 paid only when it is
+converted into damage, and one distance term at 0.5 with a cap of 3. A later experiment, not reported as a
+result in this paper, raises damage to 20 and rescales the shaping. It is a separate preset precisely so that
+the numbers above keep meaning what they meant.
 
 ### 2.3 Policy and optimisation
 
-The policy is an entity-factored recurrent actor-critic: a 16 by 24 actor table through a shared per-actor MLP
-with an identity embedding, masked mean and max pooling, a 256-unit GRU, then actor and critic heads. Training
-is recurrent PPO on 60-step chunks, each replayed from its stored hidden state. Across machines we average
-weights every update rather than averaging gradients.
+The policy is an entity-factored recurrent actor-critic: the actor table is pooled by a shared per-actor
+network, then a recurrent core feeds actor and critic heads. Training is recurrent PPO, and across machines we
+average weights every update rather than averaging gradients. **We claim no architectural novelty and ran no
+head-to-head ablation**: this architecture was never compared against a flat network at scale, so it is a
+choice we made and not a finding, and nothing in the rest of the paper rests on it.
 
-### 2.4 Compute
+### 2.4 Compute, and what it cost
 
-Twenty 16-vCPU cloud machines for reinforcement learning, A100 or H100 for world models. The melee task cost
-**$51 and 4 hours 52 minutes** for the policy that solved it. Taking 41.8 M environment steps as the
-denominator, that is **$1.22 per million** at **2,386 steps per second** fleet-wide. Two caveats on those
-figures: the step count reconstructed from the exported histories is 44.35 M rather than 41.8 M, and the cost
-covers the phase that produced the final policy rather than the whole session, which was $61.50 over six
-hours including a discarded run.
+Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109
+at the largest, at $0.48 to $0.56 per machine-hour. World models ran on single H100 80GB cards at $3.49 to
+$3.99 an hour. **Nothing in this work used an A100**, although one pod was requested as one and the provider
+substituted an H100. An earlier draft of this report said "A100 or H100"; that was wrong.
 
----
+The whole project consumed about **2,300 machine-hours and $1,381**, split **$1,115 for the reinforcement
+learning track and $266 for the world model track**. It generated **509.6 million environment steps**, which
+is **14,154 hours of game time**, roughly 1.6 years of play, at about **$2.71 per million steps**. The melee
+task of section 3 is the one phase costed from a verified artefact: **$51 and 4 hours 52 minutes** for the
+policy that solved it over 41.8 million steps, **$1.22 per million**, against $61.50 for the whole six-hour
+session including a discarded run. The rest of the project is twice as expensive per step, which is what a
+long tail of short diagnostic fleets costs rather than a change in efficiency. One reconciliation to state
+rather than hide: the step count rebuilt from the exported histories is 44.35 million, not the 41.8 million
+our logs record, and we have not resolved which is right.
+
+**The caveat matters more than the totals, and it is a finding about provenance rather than about cost.**
+Only **18% of that spend is measured**. Our provider keeps a per-pod billing ledger that survives
+termination, and we read **43.7 H100-hours and $172.69** of world model training out of it, pod by pod,
+months later. That ledger covers GPU machines only: a CPU pod billing at the moment we queried it returns no
+records, and terminated pods are not listed by any endpoint. The remaining **82%** is reconstructed as
+machines times hourly rate times the span between the first and last timestamp our experiment tracker holds
+for that session. Rates and machine counts come from our own launch logs and are reliable; the durations are
+not, and they err low, since bootstrap and idle time falls outside that span. Two fleets are not
+reconstructible at all: a 109-machine data collection whose only surviving trace is the shard directories it
+wrote, and a 34-machine fleet the provider terminated without a reason while we were not watching. We report
+those as missing rather than as estimates. `../PROVENANCE.md` section 19 carries the per-phase table.
 
 ## 3. Task one: the melee encounter is solved
 
@@ -377,9 +412,11 @@ number: oversampling decision moments is monotone at matched evaluation, 0.16 th
 corpus's -0.598 correlation predicts. Across all those arms: **0 defeats in 400 episodes**. Damage scales,
 winning does not.
 
-The mechanism is not mysterious. The clone is trained teacher-forced, so every step conditions on the human's
-real observation history and it never learns to recover from the states its own mistakes produce. 81% of its
-episodes end in death.
+The mechanism is not mysterious, and it is not new. This is the compounding-error problem of Ross, Gordon and
+Bagnell (AISTATS 2011): the clone is trained teacher-forced, so every step conditions on the human's real
+observation history and it never learns to recover from the states its own mistakes produce, with regret that
+grows quadratically in the horizon. 81% of its episodes end in death. What our numbers add is the magnitude at
+a 154 second horizon with a demonstrator that won 100 of 100.
 
 ### 6.2 Frame accuracy is an anti-selector
 
@@ -444,6 +481,12 @@ Adding a penalty on the clone's **actions** at those same states is harmful and 
 policy pulls the latter toward the former, which is the obvious thing to say afterwards and was not obvious
 before it was measured.
 
+This is the **imitation gap** named by Weihs, Jain and colleagues (ADVISOR, NeurIPS 2021): when the teacher
+acts on information or capability the student does not have, imitating it is actively harmful and can be
+beaten by pure reinforcement learning. Our instance has two unusual features, set out in section 14: the
+demonstrator is not privileged, since the human sees exactly the observation the policy sees, and the
+demonstrator is far stronger at the task rather than a crutch for a weak learner.
+
 ### 6.4 What did work offline, and what it says
 
 Return-conditioned behaviour cloning, trained on the same 100 human wins **plus** a few hundred of the policy's
@@ -470,7 +513,7 @@ is not monotonically better: 200 beats all 495 at t = +2.43.
 
 It still loses to the policy gradient. At matched 300 second caps, 456 episodes per arm, same harness:
 
-| | v15 (PPO) | best offline (Dyna-RvS) |
+| | v15, the policy gradient | best offline arm, return-conditioned cloning with model-generated data |
 |---|---|---|
 | defeats | **38 / 456 = 8.33%** | 18 / 456 = 3.95% |
 | starts won from | **5 of 6** | 2 of 6 |
@@ -496,15 +539,23 @@ does not rise.
 ## 7. The world model did not get far enough
 
 Four phases over two months, each with its own architecture family, dataset scale and reason for being
-abandoned. The baseline throughout is **persistence**, the prediction that nothing changes, and skill is
-`1 - model error / persistence error`, so negative means worse than doing nothing.
+abandoned. The baseline throughout is **persistence**, the prediction that nothing changes, and **skill** is
+`1 - model error / persistence error`: zero means exactly as good as doing nothing, positive is better than
+doing nothing, and negative is worse. Every number in this section is a skill score in that sense.
+
+The baseline is not ours. Copying the last frame is long established as the floor in video prediction, where
+it is known to beat learned models on mostly static data (Babaeizadeh et al., arXiv:1911.01655; Villegas
+et al., arXiv:1706.08033), and the NeurIPS 2026 paper "Your world model may be worse than copying the last
+frame" reports that of 20 recent world-model papers, 12 give a prediction-quality number and 9 of those give
+nothing to read it against. This section therefore confirms a known and under-reported failure mode rather
+than discovering one; section 14 states the narrower thing we think is ours.
 
 | phase | scale | verdict |
 |---|---|---|
 | latent transition models, 6 configurations | 203k transitions | every one **loses to persistence**, best -1.14, worst -7.24 |
 | object-centric causal model | same | the adopted paper's actual method was never run; what trained was its baseline |
 | entity tokens, fleet scale | **20.5 M** transitions | **validation loss fell 1.8 times while rollout skill collapsed from +0.003 to -0.41** |
-| tokens plus history, single H100 | **91.5 M** transitions, resident in VRAM | positive through 5 steps, -2.44 at 1800 |
+| tokens plus history, single H100 | **91.5 M** transitions, resident in VRAM | positive through 5 steps; the 1800-step figure is not a finding, see section 10 |
 | boss observation model | 4.7 M transitions, 120 epochs | **getting worse at -0.0874 ± 0.0218 per epoch, t = -4.00** |
 
 **(M** for every row. The first three rows are Deku Baba models on Deku Baba data; only the last is the boss.
@@ -543,11 +594,6 @@ Three diagnostic findings generalise beyond this game:
   1.35M-parameter MLP matches both attention models at one step, so one-step skill does not discriminate
   architectures at all.
 
-One operational finding, recorded because it was expensive and avoidable: a reference implementation of the
-method we were copying specified a rollout depth of 10. We used 600. At 600 the model degrades at
--0.1675 ± 0.0562 per epoch (t = -2.98); at the reference's depth of 10 it sits at persistence. The number 600
-came from a passage in our own earlier write-up describing a **measured regression**, not a recommendation.
-
 ---
 
 ## 8. One representation result that clears its controls
@@ -557,9 +603,12 @@ predict the next latent from the current latent and action. All four lost to the
 reason that was eventually measured: the latent moves 0.023 to 0.05 of a random pair's distance per step, so
 copying is near-optimal.
 
-The masked-prediction objective of I-JEPA and V-JEPA does not pose that task. It masks part of the **input**
-and predicts a target network's representation of the masked part from the visible remainder. There is no
-persistence shortcut because there is no previous latent. **That objective had never been run here.**
+The masked-prediction objective of I-JEPA (arXiv:2301.08243) and V-JEPA (arXiv:2404.08471) does not pose that
+task. It masks part of the **input** and predicts a target network's representation of the masked part from the
+visible remainder. There is no persistence shortcut because there is no previous latent. **That objective had
+never been run here.** Masking over decision data is not ours either: MTM (Wu et al., ICML 2023) already
+trains one network to reconstruct trajectories of states and actions from random subsets of themselves. What
+we claim is the masking structure and the free-signal floor, and section 14 says why.
 
 We ran it on the raw 363-field structured state, not the featurised policy observation, because the latter is
 dense with derived redundancy: masking a field whose inputs remain visible scores arithmetic rather than
@@ -567,9 +616,12 @@ understanding. Masking is structured in the same spirit as V-JEPA's multi-block 
 entity by field: a whole actor removed for a whole clip, a whole kind of field removed for every actor, a time
 block, or scattered cells. Achieved mask ratio 0.791.
 
-Then the encoder is frozen and probed, with three floors. The probe reads a **masked** encoding and predicts
-the **hidden** content, because probing an unmasked state for a field that is an input to it scores the
-identity map.
+Then the encoder is frozen and probed. The probe reads a **masked** encoding and predicts the **hidden**
+content, because probing an unmasked state for a field that is an input to it scores the identity map. There
+are three floors to clear, and they are the three columns before the model's own in the table below: the
+**trivial floor**, which is always predicting the majority class or the mean; the **free-signal control**, a
+ridge regression fitted on the cells that are still visible, which matters because a masked cell is often
+exact arithmetic on a visible one; and an **untrained network of identical architecture**.
 
 | probe | trivial floor | free-signal control | untrained, same architecture | **masked model** |
 |---|---|---|---|---|
@@ -611,6 +663,12 @@ paper-faithful arm has not been run against it.
 This section is the one we would keep if we could keep only one. In this project, measurement error exceeded
 method error.
 
+Most of what follows confirms rather than discovers. Henderson et al. (AAAI 2018) and Agarwal et al. (NeurIPS
+2021) established that few-seed point estimates mislead, that aggregates need interval estimates, and that
+conclusions flip when this is done properly; our measured noise floors, our winner's curse and our
+selector arithmetic are instances of their argument with the specific wrong decision each one caused attached.
+Section 14 marks the two parts we have not found stated elsewhere.
+
 ### 9.1 A sparse binary cannot steer a task like this
 
 Every "is it improving" answer came from the defeat rate, a binary at 1 to 10%. On that signal, six consecutive
@@ -651,6 +709,13 @@ information. The empirical form is the one to quote: on the same 456 episodes pe
 our two best methods at t = 13.91 where the defeat rate manages z = 2.76. Make the
 headline the quantity the reward's largest terms pay for. Report a trend with its standard error, because
 "flat" and "rising" are claims about a slope. And never let a sparse metric justify adding a reward term.
+
+That last rule has a theoretical companion. Ng, Harada and Russell (ICML 1999) proved that only a shaping term
+of the form `gamma * Phi(s') - Phi(s)`, a difference of a potential over states, leaves the optimal policy
+unchanged; any other additive term can change what is optimal. None of our shaping terms, `g_approach`
+included, is of that form, so the reward we ran is not policy-invariant by construction and a regression from
+adding one is the expected failure rather than a surprise. Section 14 gives the measured price of the same
+mechanism in an earlier version.
 
 ### 9.2 A metric that moves with the sampling distribution cannot compare policies
 
@@ -708,7 +773,7 @@ reversed from that in forty minutes.
 winning value is a likely draw from the null, there is no selector, only a lottery with a percentage printed
 on it. State the sample size the selector needs and compare it to the one it has.
 
-### 9.5 What a claim has to clear here
+### 9.4 What a claim has to clear here
 
 Four independent measurements of the noise floor, all on identical configurations:
 
@@ -724,6 +789,21 @@ A three-seed group mean carries ±0.1 here, so nothing below about 0.3 damage is
 offline seeds at identical settings produced **opposite** significant slopes, +0.032 (t = 2.2) and -0.030
 (t = -2.4), which is the plainest available statement that one seed's slope is not a measurement.
 
+### 9.5 A number read out of a post-mortem instead of a recommendation
+
+The world-model result of section 7 was run at a rollout depth of 600. The author's own earlier Dyna work, the
+code and manifests of which were available throughout, trains at a depth of **10**, and that setting is
+recorded in its checkpoint manifest where one command would have found it. The price of the discrepancy is
+measured: at depth 600 the model degrades at **-0.1675 ± 0.0562 per epoch (t = -2.98)**, and at the
+reference's depth of 10 it sits at persistence instead.
+
+Where 600 came from is the part worth generalising. It appears in an earlier write-up of our own, in a passage
+describing a horizon mixture that had been **measured as a regression**. A number quoted inside a
+post-mortem is a record of what failed, not a setting to adopt, and we read it as the latter. Two rules follow,
+both about the instrument rather than the method: ask for the reference implementation of a method before
+building it, because a manifest answers depth, discount and batch size for free; and when taking a
+hyperparameter from a document, take it from what that document concluded, not from its narrative.
+
 ---
 
 ## 10. Limitations and threats to validity
@@ -738,8 +818,9 @@ offline seeds at identical settings produced **opposite** significant slopes, +0
 - **The melee per-state result is one watched episode per state**, so it is qualitative and is not a rate.
 - **The wall map used by the world model covers 209 of 1,024 cells**, only where the agent happened to collide
   with something.
-- **The long-horizon world-model numbers are thin**: about 31,000 of 52 million possible starts qualify at the
-  longest horizon, and all of them are timeout episodes by construction.
+- **The long-horizon world-model numbers are thin**, which is why section 7 does not present them as a
+  finding: the 1800-step skill of -2.44 rests on about 31,000 of 52 million possible starts qualifying at that
+  horizon, and all of them are timeout episodes by construction.
 - **Reproducing on macOS requires a code-signed interpreter** to attach to emulator memory. Linux does not.
 - **The masked-representation substrate exists on one machine.** The 203,822-frame raw-state datasets behind
   section 8 are not mirrored off-site. The checkpoint is durable and its input is not, so that result is
@@ -941,8 +1022,9 @@ contribution, not any single arm.
 
 ## 15. Conclusion
 
-An agent reading a commercial game's memory learns real combat: it clears a three-enemy encounter from every
-start state, and on a dungeon boss it manufactures stuns, clears adds and lands ten-hit kills on 8.33% of
+An agent reading a commercial game's memory learns real combat: it clears a three-enemy encounter from all ten
+local start states, one watched episode each and so qualitative rather than a rate, and on a dungeon boss it
+manufactures stuns, clears larvae and lands ten-hit kills on 8.33% of
 evaluation episodes across six trained starts, reaching 28.95% from the most favourable and 0 of 76 from the
 least.
 

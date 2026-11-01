@@ -316,6 +316,9 @@ class CombatConfig:
     lockon_cap: int = 6
     w_lock_step: float = 0.005         # per step locked on a live target
     lock_step_cap: float = 1.0
+    w_lockon_cap: float = 0.0        # 0 = uncapped, kept for back-compat; GOHMA_BEHAVIOUR sets it
+    w_approach_cap: float = 0.0      # cumulative cap on approach_stunned; the per-step +/-0.5 clip stays
+    g_link_heal_cap: float = 0.0     # cap on healing credit, so hearts cannot outpay the boss
     w_approach: float = 0.5            # per 100 units closer to the nearest live target (when not locked)
     w_shield_face: float = 0.01        # per step shielding while facing a live target within shield_radius
     shield_cap: float = 0.5
@@ -775,39 +778,24 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
 # capped penalty makes every later waste free.
 GOHMA_BEHAVIOUR: dict[str, float | bool] = {
     **GOHMA_SIMPLE,
-    # ---- 1. farm items, hearts especially. `simple` zeroed all three pickup channels as "distractions from a
-    # boss fight"; the measured fight says the opposite -- she is unreachable for 67% of the episode and the
-    # policy spent 134 of 191 seconds taking damage down to half a heart while collecting nothing.
-    "g_grass_cut": 0.2, "g_grass_cut_cap": 1.0,       # shipped value; cap 6.0 -> 1.0. Grass is the SOURCE of
-    #   the drops (En_Kusa drops seeds/nuts/hearts) and the policy has cut exactly 0 tufts in 5,610 logged
-    #   episodes, so this term has never once paid out. 5 tufts of the room's 8 reaches the cap.
-    "g_seed_pickup": 0.05, "g_nut_pickup": 0.15, "g_pickup_cap": 1.5,   # shipped values, cap 6.0 -> 1.5
-    "g_link_heal": 0.25,                               # 0.1 -> 0.25. At 16 HP units per heart that is +4.00
-    #   per heart, which is EXACTLY what `w_link_damage` 0.25 charges for losing one. Symmetry is the whole
-    #   argument for the number: a heart recovered is worth what a heart lost costs, and no more, so healing
-    #   can never pay better than not being hit. This replaces a separate heart term -- g_link_heal is live
-    #   under every preset, so "pay more for hearts" is this coefficient and nothing else.
-    "g_item_approach": 0.3, "g_item_approach_cap": 1.5,   # NEW. 0.3 per 100 units of net progress, so the cap
-    #   binds after 500 units of closing -- about the width of the room, i.e. the gradient survives all the
-    #   way to a pickup from anywhere Link can be. Sized below g_approach's 0.5 because loot is a side errand.
-    # ---- 2. stop wasting Deku Nuts. g_nut_miss 0.3 (realised waste: no stun followed) is LEFT ALONE; this is
-    # the PREDICTABLE half -- a nut thrown where it provably cannot convert.
-    "g_nut_wasted": 0.5,                               # NEW, uncapped. v10 threw 5.64 nuts/episode for 3.01
-    #   misses (-2.20/episode of g_nut_miss) and the watched episode threw 13 for 4 stuns. At 0.5 a wholly
-    #   wasted nut budget costs about what g_nut_miss already costs, i.e. this doubles the existing pressure
-    #   rather than inventing a new scale, and it does so BEFORE the outcome instead of after.
-    # ---- 3. lock on. 15% of ticks in the watched episode against the human corpus's 63%, 8 acquisitions in a
-    # three-minute fight. These two terms exist and `simple` zeroed them; the shipped values are restored.
-    "w_lockon": 0.3, "w_lock_step": 0.005,
-    # ---- 4. face what you are fighting.
-    "g_facing": 0.01, "g_facing_cap": 1.5,             # NEW. Episodes run ~1,570 steps, so the cap binds after
-    #   150 facing steps -- under 10% of an episode. Deliberately a nudge: the counter is the point, and a
-    #   per-step positional term that can pay for a whole episode is how g_spacing was farmed.
-    # ---- 5. rush in when she is stunned. The terms EXIST and FIRE; only the weights move.
-    "w_approach": 1.0,                                 # 0.5 -> 1.0 (approach_stunned). Measured firing at
-    #   +0.735/episode at 0.5, i.e. ~147 units of closing while she is down, under a +/-0.5 per-step clip.
-    "g_sword_ready": 0.04, "g_sword_ready_cap": 2.0,   # 0.02 / 1.0 -> 0.04 / 2.0. Measured at +0.271 of a 1.0
-    #   cap, i.e. 27% realised, so the term is active and the behaviour is not.
+    # ---- the author's rescale, 2026-11-01. Outcome up, stun chain down, every watched behaviour on one
+    # scale: coefficient 5.0, cap 10.0. Caps were added for w_lockon, w_approach and g_link_heal, which had
+    # none. g_nut_wasted stays UNCAPPED because it is a penalty and a capped penalty makes later waste free.
+    "g_boss_damage": 20.0,                             # 4.0 -> 20.0, uncapped. With the progress multiplier a
+    #   full-health kill is 480 of outcome against 135 of shaping ceiling, i.e. shaping falls from 39% of the
+    #   achievable total to 22%. Raising the outcome is what buys that, not trimming the shaping.
+    "g_seed_stun": 5.0, "g_seed_stun_cap": 15.0,       # 15.0/60.0 -> 5.0/15.0. It was the largest single term
+    #   in the reward and the policy earned it about once in twenty wins.
+    "g_grass_cut": 5.0, "g_grass_cut_cap": 10.0,
+    "g_seed_pickup": 5.0, "g_nut_pickup": 5.0, "g_pickup_cap": 10.0,
+    "g_link_heal": 5.0, "g_link_heal_cap": 10.0,       # per HP unit, so the cap binds inside one heart
+    "g_item_approach": 5.0, "g_item_approach_cap": 10.0,
+    "g_nut_wasted": 5.0,                               # uncapped, deliberately
+    "w_lockon": 5.0, "w_lockon_cap": 10.0,
+    "w_lock_step": 5.0, "lock_step_cap": 10.0,
+    "g_facing": 5.0, "g_facing_cap": 10.0,
+    "w_approach": 5.0, "w_approach_cap": 10.0,         # the per-step +/-0.5 clip still applies
+    "g_sword_ready": 5.0, "g_sword_ready_cap": 10.0,
 }
 
 

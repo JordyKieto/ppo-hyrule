@@ -2485,3 +2485,253 @@ of the time, which is the term I would expect to do least.
 
 **Also worth recording against the watched episode:** it reported lock-on at 15% of ticks; across 31 pods at
 update 1 the same checkpoint reads **39–40%**. Another single-episode figure that does not generalise.
+
+---
+
+## 19. Compute and cost accounting for the whole project — **M** on the GPU side, **I** on the CPU side, **U** on two fleets
+
+Numbered 19 rather than 18 because section 18 was already taken by the `gohma-beh` bring-up. Appended, nothing
+above it edited.
+
+### 19.1 First, what RunPod actually logs, because the plan assumed it logs everything
+
+RunPod's REST v1 API **does** have a billing history endpoint, and this repo's tooling has never called it.
+`fleet/runpod_api.py` uses only `GET/POST /pods`, `GET /pods/{id}` and `DELETE /pods/{id}`. The spec at
+`https://rest.runpod.io/v1/openapi.json` lists three more:
+
+```
+GET /billing/pods            # grouping=podId|gpuTypeId, bucketSize=hour|day|week|month|year, startTime, endTime
+GET /billing/networkvolumes
+GET /billing/endpoints
+```
+
+`/billing/pods` returns `{amount, timeBilledMs, diskSpaceBilledGB, podId, time}` per bucket, for pods that no
+longer exist. That is a real per-pod ledger going back months. **M**, queried 2026-11-01.
+
+**And it covers GPU pods only.** Tested three ways, all read-only:
+
+| probe | result |
+|---|---|
+| `grouping=podId`, `podId=83wryruyzxxyga` (a CPU pod billing **right now** at $0.48/hr) | `[]` |
+| whole account, `2026-09-13` (the Deku Baba session: 20 CPU pods, $61.50 spent) | `[]` |
+| whole account, `2026-11-01` (33 CPU pods live at $18.08/hr) | `[]` |
+| sum over `grouping=gpuTypeId` for 2026-08-01..2026-11-02 | $2,142.08, which **equals** the sum over `grouping=podId` to the cent |
+
+So every dollar the billing API knows about is a GPU dollar. The CPU fleets, which are more than 98% of this
+project's machine-hours, are **absent from RunPod's own records**. Two further gaps:
+
+- **Terminated pods are not listed anywhere.** `GET /pods?desiredStatus=TERMINATED` and `?desiredStatus=EXITED`
+  both return `[]`, and GraphQL `myself { pods }` returns live pods only. There is no pod-name to pod-id
+  mapping for a killed fleet, so even where billing exists it can only be attributed to this project by
+  matching a pod id that this repo happened to write down.
+- **`fleet kill` empties the state file.** 20 of 32 files in `runs/fleet/*.json` have `"pods": []`. The 117 pod
+  ids that survive locally are the fleets that were never killed through the tool.
+
+**What the account does report, read-only:** GraphQL `myself { clientBalance currentSpendPerHr spendLimit }`
+→ `$95.79`, `$18.287/hr`, limit `$80` at 2026-11-01 18:53 UTC. `clientLifetimeSpend` is `UNAUTHORIZED` for
+this key, so there is no lifetime total to check a reconstruction against.
+
+**The account is shared with other projects.** August's $1,274.81 is RTX 3090 / 4090 work predating this
+project, and the 167-pod A40 burst and 50-pod H200 bursts of early October are not ours. Attribution is by pod
+id, not by date.
+
+### 19.2 The GPU side, measured per pod from RunPod — **M**
+
+Seven GPU pods, and only seven, are attributable to this repository: three by a surviving
+`runs/fleet/*.json`, four by `created … id=` lines in `runs/fleet/{gohma_wm,wm_fleet}_create.log`. One of those
+ids (`6orad6kxdu8v0x`) is also named in section 14. Amounts and hours are RunPod's, not ours.
+
+| pod id | experiment | billed as | $/hr | billed h | billed $ | dates | class |
+|---|---|---|---|---|---|---|---|
+| `lrpjot8514h4ov` | `wm-a100` r0 — token WM + JEPA on packed v5 | H100 80GB HBM3 | 3.49 | 12.82 | **45.20** | 09-22/23 | M |
+| `zq0jy1vd86ebsz` | `tokenwm` r0 | H100 80GB HBM3 | 3.49 | 7.19 | **25.36** | 09-23 | M |
+| `gnvgy3m51omxgj` | `wm-grid` r0 | H100 80GB HBM3 | 3.49 | 1.18 | **4.17** | 09-27 | M |
+| `5f7vy4zdcuy8kg` | `gohma-wm` r0 — obs-space WM | H100 80GB HBM3 | 3.99 | 6.83 | **27.46** | 10-16 | M |
+| `6orad6kxdu8v0x` | `gohma-wm` r1 | H100 80GB HBM3 | 3.99 | 5.21 | **20.93** | 10-16 | M |
+| `kgo45586rxoeqn` | `gohma-wm` r2 | H100 80GB HBM3 | 3.99 | 5.22 | **20.98** | 10-16 | M |
+| `vccvqsdqc7i0ue` | `gohma-wm` r3 | H100 80GB HBM3 | 3.99 | 5.21 | **20.96** | 10-16 | M |
+| the same four | EXITED volumes nobody deleted | storage only | — | 0 | **7.33** | 10-17..31 | M |
+| `6orad6kxdu8v0x` | restart for the section 14 recovery | H100 80GB HBM3 | 3.99 | 0.055 | **0.30** | 10-31 | M |
+| | | | | **43.72** | **$172.69** | | **M** |
+
+Three things fall out of that table that nothing else in this file records:
+
+1. **This project has zero A100 hours.** `wm-a100` was created with the priority list
+   `A100 80GB PCIe, A100-SXM4-80GB, H100 80GB HBM3` and RunPod gave it an **H100**. The only A100-SXM4 hours on
+   the account (10.5 h, 2026-10-05) belong to another project. Every GPU hour here is an H100 80GB HBM3.
+   Anywhere this repo says "A100 or H100", the answer is H100. **M**.
+2. **The four `gohma-wm` volumes billed $7.33 of storage over fourteen days** after RunPod exited them on
+   2026-10-16, at about $0.52/day for the set, because nobody deleted them. That is the cost of the lapse that
+   section 14 later exploited to recover the epoch-120 checkpoint, so it bought something; it was not
+   deliberate.
+3. **The recovery restart cost $0.30 for 3.3 minutes**, which confirms section 14's claim that r1 "billed only
+   for the transfer" with an artefact instead of an intention.
+
+One discrepancy, recorded rather than resolved: `gohma-wm` r0 was created 2026-10-16 07:06 local and RunPod
+exited all four at 20:56 UTC, which is 13.8 h of elapsed time against 6.83 h billed. The balance ran out during
+that session (section 8), so billing probably stopped before the pods did. The **billed** figure is what this
+table reports. **I** on the explanation.
+
+### 19.3 The CPU side, reconstructed — **I**, and the method is stated so it can be re-derived or disputed
+
+RunPod has nothing, so every CPU row is `pods x $/hr x wall clock`. The three inputs come from:
+
+- **pods and $/hr**: a surviving `runs/fleet/*.json`, or the `experiment total $X/hr` line a `fleet create` log
+  prints. Measured per-pod rates are $0.48 or $0.56 for a 16-vCPU pod; the four surviving fleet files average
+  $0.512 to $0.548 per pod, so $0.53 is used where only a pod count survives.
+- **wall clock**: first `created_at` to last `heartbeat_at` across the session's W&B runs, pulled live from the
+  API for the sessions `results/` does not hold.
+- **the assumption, stated once**: that the pods were up continuously between the first and last recorded
+  activity and were killed at the end. Where a create log exists and is earlier than the first W&B run, the
+  difference is bootstrap time that is billed and is **not** in the row. **Every I row is therefore a lower
+  bound.**
+
+| phase | dates | pods | type | $/hr | wall clock | cost | class |
+|---|---|---|---|---|---|---|---|
+| `kokiri-v2` rupee navigation (pre-task) | 09-12/13 | 20 | CPU 16v | 10.24 | 6.68 h | $68 | I |
+| **`deku-combat` — Deku Baba SOLVED** | 09-13 | 20 | CPU 16v | 10.24–10.38 | 6.00 h | **$61.50** | **M** |
+| `gohma` v1–v10 and v10-ext | 09-14/16 | 20 | CPU 16v | 10.80 | 25.67 h | $277 | I |
+| `dream-deku-baba`, PPO inside the dream | 09-19 | 14 | CPU 16v | ~7.28 | 3.69 h | $27 | I |
+| `v4-collect` 20.5 M transitions + `wm100` FedAvg | 09-22 | 39 | CPU 16v | ~20.28 | 4.60 h | $93 | I |
+| **`v5` collection, 91.5 M transitions** | 09-22/23 | **109** | CPU 16v | ~56.68 | **unrecorded** | **U** | **U** |
+| `gohma-band` v11/v12/v13 | 09-26/27 | 20 | CPU 16v | 10.32 | 7.12 h | $73 | I |
+| `gohma-kl` v14/v15 + 2-pod evaluator | 10-05/06 | 22 | CPU 16v | 11.28 | 3.37 h | $38 | I |
+| `gohma-kl` v16/v17/v18 + evaluator | 10-13 | 21 | CPU 16v | 10.76 | 3.72 h | $40 | I |
+| BC / latent / IBRL, 15 arms — **the fleet that vanished** | 10-15/16 | 34 | CPU 16v | 17.84 | 9.90 h | $177 | I |
+| RvS sweep (23 cells) + latent-align + pure RvS | 10-16 | 48 | CPU 16v | ~25.00 | 7.72 h | $193 | I |
+| `gohma-cred` v20/v21/v22 + `rvs2` + `mateval300` | 10-30/31 | 19 | CPU 16v | ~10.07 | 14.85 h | $150 | I |
+| `gohma-beh`, two arms — **live at the time of writing** | 11-01 | 33 | CPU 16v | **18.08** | 0.56 h so far | $10 and rising | M (rate) |
+| **CPU subtotal, excluding the U row** | | | | | **2,301 pod-hours** | **$1,208** | **I** |
+
+### 19.4 Totals, by track
+
+| | spend | machine-hours | largest single pod count | class |
+|---|---|---|---|---|
+| **RL track** (Deku Baba, Gohma, BC, RvS, credit, behaviours) | **$1,115** | 2,122 CPU pod-hours | 48 | $71 M, $1,044 I |
+| **WM track** (latent, causal, token, JEPA, obs-space, Dyna) | **$266** | 179 CPU pod-hours + **43.7 H100-hours** | 109 (collection, U) | $173 M, $93 I |
+| **Grand total** | **$1,381** | 2,301 CPU + 43.7 GPU | 109 | — |
+| of which **measured** from an artefact | **$244** (18%) | | | M |
+| of which **inferred** from timestamps and rates | **$1,136** (82%) | | | I |
+| of which **unrecoverable** | one 109-pod fleet, one 34-pod fleet's exact up-time | | | U |
+
+The track split puts the WM track's GPU training beside the CPU pods that collected its data; the `v4-collect`
+and `v5` collection fleets are WM-track rows even though they ran the RL policy, because the data existed for
+the world model. `dream-deku-baba` is counted in the RL track: it is PPO, inside a model the WM track had
+already paid for.
+
+**Every number in the two tables above is denominated in money that was already spent.** The $1,381 is not a
+budget estimate; it is 2,345 machine-hours of a known hourly rate. The honest way to state the uncertainty is
+that the hourly rates and pod counts are solid (**M** for 7 of 13 phases, from the tool's own logs) and the
+**durations** are where the error lives, always in the direction of under-counting, because bootstrap and idle
+time are outside the W&B window.
+
+### 19.5 Environment steps, game time, and cost per million
+
+| source | env steps | basis | class |
+|---|---|---|---|
+| `kokiri-v2` pre-task | 36,912,000 | exported `global_step` x group size | M |
+| Deku Baba `gru-v2` + `v2b` | 41,800,000 | section 3.1 (44,352,000 by the same method, incl. the discarded tail) | M |
+| Gohma PPO, all exported versions with a step record | 298,113,600 | `global_step` x group size over 30 groups | M |
+| RvS sweep + latent-align | 15,955,200 | same | M |
+| `transitions/v4` collection | 20,545,657 | dataset count, section 4.3 | M |
+| `transitions/v5` collection | 91,522,473 | dataset count, section 2 | M |
+| Gohma obs-space WM corpus | 4,703,423 | section on the Gohma world model | M |
+| **recoverable total** | **509,552,353** | | **M** |
+| `gohma-v10` (399 updates, 40 W&B ranks of a 20-pod fleet) | 9.6 M to 383 M | no `global_step` in the export; the rank count is not the pod count | **U** |
+| the `gohma` 76-run group (55 updates) | up to 100 M | same | **U** |
+| `gohma_steps2` collection, 22,214 episodes | steps not recorded | episode count only | U |
+
+**509.6 M environment steps is 14,154 game-hours at 10 Hz, about 1.6 years of Ocarina of Time played
+end to end.** Dream steps are excluded: `dream-deku-baba` logged 572 M steps inside a learned model, which are
+not environment steps and must never be added to this column.
+
+| denominator | cost per million env steps | class |
+|---|---|---|
+| whole project, $1,381 over 509.6 M | **$2.71** | I |
+| RL track only, $1,115 over 392.8 M | **$2.84** | I |
+| Deku Baba, the one fully measured phase: $51 over 41.8 M | **$1.22** | M (already in `paper/paper.md` 2.4) |
+
+The project is about twice as expensive per million steps as the task it solved, which is what a long tail of
+short diagnostic fleets costs.
+
+### 19.6 What is unrecoverable, named per phase
+
+| what | why | could it still be closed? |
+|---|---|---|
+| **`v5` collection, 109 pods, 2026-09-22/23** | no state file (`runs/fleet/v5.json` has `"pods": []`), no create log, no W&B group because collectors do not log to W&B, no kill log. The only trace is 109 `rank*/` directories under `datasets/transitions/v5/`. CPU, so RunPod has nothing | **No.** The pod ids no longer exist anywhere, and terminated pods are not listed by the API |
+| **`v4-collect`, 39 pods, exact up-time** | same, except 57 W&B runs bound the training window; the collection window itself is not bounded | Partly, from the S3 object timestamps of `zelda/transitions/v4-*` |
+| **The 34-pod fleet lost at 2026-10-15 20:14 local** | RunPod returned 0 pods with no termination reason and nothing in that session issued a kill. The end of billing is therefore the last W&B heartbeat, which is an upper bound on work and a lower bound on billing | No |
+| **`gohma` v1–v10 session, 25.7 h vs 33.9 h** | the create log is 09-14 23:42 UTC and the last watch log 09-16 09:35 UTC, but W&B activity ends 09-16 02:11 UTC. Whether 7.5 h of idle pods were billed is not recorded. This is the largest single uncertainty in the table: $277 at the lower bound, $366 at the upper | No |
+| **`gohma-col` and `gohma-s3` idle minutes, 2026-10-16** | already flagged U earlier in this file ("Cost not recorded at the time"), with the instruction to recover it from W&B against the kill log "while the pods still exist". The pods do not exist. **That U is now permanent** | No |
+| **Every CPU pod's exact billed hours, all phases** | RunPod does not record CPU pods in `/billing/pods`, as 19.1 establishes by probe | No, not retrospectively |
+| **`gohma-v10`'s env steps** | the exported representative run has no `global_step`, and 40 W&B ranks on a 20-pod fleet means relaunches, so rank count is not pod count | Possibly, by exporting every rank's history rather than the representative one |
+
+### 19.7 The one thing to start logging, which would have made this section a query
+
+`fleet kill` is the moment every figure above becomes unrecoverable, and it is the moment that currently
+destroys the record: it overwrites the state file with `"pods": []`. Three lines at that point close the whole
+gap permanently, for CPU pods as well as GPU:
+
+1. **`fleet kill` appends to `runs/fleet/ledger.jsonl` instead of clearing state**: one row per pod with
+   `experiment, rank, pod_id, cost_per_hr, created_at, killed_at, vcpu, gpu`. Pod id plus the two timestamps is
+   everything `/billing/pods` would have given, for the 98% of pods it does not cover.
+2. **`fleet create` writes the same row on creation**, so a fleet that dies before any kill (2026-10-15,
+   2026-10-16) still has `created_at` and a rate on disk.
+3. **`scripts/export_wandb.py` gains `zelda-rl-rvs`, `zelda-rl-dyna` and `zelda-rl-oocdm` to `PROJECTS`.** It
+   currently lists four of the seven zelda projects on the W&B account, which is the same omission that nearly
+   lost the 2026-10-15 arms (recorded earlier in this file) repeating on three more projects. `results/` holds
+   nothing after 2026-10-16 as a result, so sections 9 through 18 have no exported artefact and their
+   timestamps in 19.3 came from the live API rather than from this repository.
+
+Per AGENTS 21 and 33, none of that is worth writing down as a rule. It is three writes inside functions that
+already run.
+
+### 19.8 How to re-derive 19.1 and 19.2
+
+```sh
+# the endpoint list, including the three billing paths the fleet client does not use
+curl -s -H "Authorization: Bearer $RUNPOD" https://rest.runpod.io/v1/openapi.json | python3 -c 'import json,sys;[print(p) for p in sorted(json.load(sys.stdin)["paths"])]'
+
+# the GPU ledger, per pod, for the whole project window
+curl -s -H "Authorization: Bearer $RUNPOD" \
+  "https://rest.runpod.io/v1/billing/pods?startTime=2026-09-01T00:00:00Z&endTime=2026-11-02T00:00:00Z&bucketSize=day&grouping=podId"
+
+# the control that says CPU pods are absent: a live CPU pod, billing now, returns []
+curl -s -H "Authorization: Bearer $RUNPOD" \
+  "https://rest.runpod.io/v1/billing/pods?startTime=2026-11-01T00:00:00Z&endTime=2026-11-02T00:00:00Z&bucketSize=hour&grouping=podId&podId=83wryruyzxxyga"
+
+# balance and current burn
+curl -s -X POST "https://api.runpod.io/graphql?api_key=$RUNPOD" -H 'Content-Type: application/json' \
+  -d '{"query":"{myself{clientBalance currentSpendPerHr spendLimit}}"}'
+```
+
+The pod ids that make the attribution in 19.2 are in `runs/fleet/{wm-a100,wm-grid,tokenwm}.json` and in the
+`created … id=` lines of `runs/fleet/gohma_wm_create.log` and `runs/fleet/wm_fleet_create.log`.
+
+### 19.9 Draft for `paper/paper.md` section 2.4 — not applied here, the file belongs to someone else
+
+> ### 2.4 Compute
+>
+> Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109
+> at the largest, at $0.48 to $0.56 per machine-hour. World models ran on single H100 80GB cards at $3.49 to
+> $3.99 an hour. Nothing in this work used an A100, although one pod was requested as one and the provider
+> substituted an H100.
+>
+> The whole project consumed about **2,300 machine-hours and $1,381**, split **$1,115 for the reinforcement
+> learning track and $266 for the world model track**. It generated **509.6 million environment steps**, which
+> is **14,154 hours of game time**, or about **$2.71 per million steps**. The melee task of section 3 is the
+> one phase costed from a verified artefact: **$51 and 4 hours 52 minutes** for the policy that solved it, 41.8
+> million steps, **$1.22 per million**, against $61.50 for the whole six-hour session including a discarded
+> run. The rest of the project is twice as expensive per step, which is what a long tail of short diagnostic
+> fleets costs rather than a change in efficiency.
+>
+> The caveat matters more than the totals. Only **18% of that spend is measured**. Our provider keeps a
+> per-pod billing ledger that survives termination, and we read **43.7 H100-hours and $172.69** of world model
+> training out of it, pod by pod, months later. That ledger covers GPU machines only: a CPU pod billing at the
+> moment we queried it returns no records, and terminated pods are not listed by any endpoint. The remaining
+> **82%** is reconstructed as machines times hourly rate times the span between the first and last timestamp
+> our experiment tracker holds for that session. Rates and machine counts come from our own launch logs and
+> are reliable; the durations are not, and they err low, since bootstrap and idle time falls outside that
+> span. Two fleets are not reconstructible at all: a 109-machine data collection whose only surviving trace is
+> the shard directories it wrote, and a 34-machine fleet the provider terminated without a reason while we
+> were not watching. We report those as missing rather than as estimates.

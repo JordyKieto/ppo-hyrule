@@ -1,10 +1,90 @@
 # Claim audit
 
-One row per claim a paper could make, with the evidence class and the artefact it rests on. Classes are defined
-in `../PROVENANCE.md`. **Nothing above U goes in a paper; nothing at U goes in without being closed first.**
+**Two halves, and they do different jobs.** Part A is one row per claim the paper makes, **in paper order**,
+which is the instrument the sibling papers use and what a reader checking the paper needs. Part B below it is
+the research log in discovery order, R1..R110 and W1..W17, which is where the measurements were recorded as
+they happened and which Part A cites.
 
-The purpose of this file is that in past projects the numbers survived and the *provenance* did not, so a claim
-could not be defended six months later. Fill a row when the measurement happens, not when the paper is written.
+Classes are defined in `../PROVENANCE.md`: **M** measured with a recoverable artefact, **Q** qualitative,
+**I** inferred, **A** author-confirmed, **U** unverified. **Nothing at U goes in the paper without being
+closed first**, and the paper says so where a U appears.
+
+---
+
+## Part A: one row per paper claim, in paper order
+
+| section | claim as the paper states it | class | rests on |
+|---|---|---|---|
+| Abstract, 3 | Recurrent PPO solves the three-Baba melee encounter | **M** | R1; fleet history `results/vxejacj7/` |
+| 3 | It clears 10 of 10 start states, 0 deaths | **Q** | R2. One watched episode per state. The paper labels it Q inline |
+| 3 | 72.9% success / 80.7% Babas killed over G120-150 | **M** | aggregator rank only. The 78%/83% fleet mean is **not recoverable**; paper says so |
+| 2.4 | $51 and 4 h 52 m, $1.22 per million env steps, 2,386 steps/s | **M** for cost and clock, **I** for the per-step figures | R3; W&B timestamps + kill log. Exported histories reconstruct 44.35 M steps against the 41.8 M quoted; both stated |
+| 4 | 678 of 678 damage events required a stun | **M** | R55, 100-win corpus |
+| 4 | The engine's own "vulnerable" flag covers 1.3% of real damage | **M** | R55 |
+| 4 | Conversion is 100% / 95.2% / 40.6% / 0% by her state at impact | **M** | R57, 371 impacts |
+| 4 | Larva hits correlate -0.598 with damage, ceiling time -0.559 | **M** | R58 |
+| 4 | The boss tracker never calls the generic one, so no approach reward existed in v1-v14 | **A** | R15, confirmed by reading both implementations |
+| 4.1 | The advantage horizon is 1.8 s against a 45-154 s fight | **M** | R30, `tests/test_credit_horizon.py` |
+| 4.1 | The direct terminal-residual contribution to an early advantage is negligible | **M** | same. The paper explicitly does **not** claim the critic path is negligible |
+| 5.1 | Per-start defeat rate 28.95% to 0 of 76, with Wilson intervals | **M** | R105; recomputed for the paper from 456 rows in `results/mateval300/` |
+| 5.1 | The graded metric orders all six starts where the binary resolves only the extremes | **M** | R106, same rows |
+| 5.1 | No single start variable explains the ordering | **I** | R107. Six starts cannot separate three factors; no model fitted |
+| 5.2 | 192 knockdowns across 38 wins: 136 nut, 10 seed, 46 her own descent | **M** | R108, same rows |
+| 5.2 | Item preference explains why imitation hurt | **not claimed.** Offered as a hypothesis | state visitation, timing and recovery all differ; nothing isolates it |
+| 5.3 | Damage rose 0.38 to 3.32 across eight versions | **M** for the lineage level change, **I** for per-version slopes | R25. Each version resumes from the last, so the slopes are not independent |
+| 5.3 | Damage saturates at 3.2 to 3.4 | **M** | R28, eight versions, five reward configurations |
+| 6.1 | 74.5% held-out accuracy, 0.33 of 10 damage, 1 win in 80 | **M** | R53. The 13-game clone's row file is **gone**; only W&B remains |
+| 6.1 | Event-stratified cloning is monotone in weight, 0 defeats in 400 | **M** | R60, R64 |
+| 6.2 | Frame accuracy anticorrelates with online damage, r = -0.875 | **M** | R81, 14 arms |
+| 6.2 | v15 matches the human on 3% of frames, below the 20.1% majority floor | **M**, n=1 update, one rank | R46. Human's state distribution, greedy actions. One-directional |
+| 6.3 | Fifteen arms, none produced a trend above v15 | **I, not M** | R51. Episode-weighted, one rank per arm, bar from a different aggregation. The paper prints this caveat |
+| 6.3 | Representation alignment neutral, action-level alignment harmful | **M** | R68, R69, three seeds each |
+| 6.4 | Pure return-conditioned cloning reaches 1.76 damage, 3.3% defeats | **M**, at a **120 s cap** | R75, R76. The paper flags the cap; defeat rates not comparable with 300 s numbers |
+| 6.4 | Training on wins alone is the worst corpus | **M** | R72 |
+| 6.4 | At matched 300 s caps PPO beats offline RvS, t = +13.91 on damage | **M** | `results/mateval300/`, 912 rows |
+| 6.4 | Off the easiest start v15 averages 3.48 to 0.88 | **M** | recomputed for this paper. Was published internally as 4.26; corrected |
+| 6.4 | Corpus size 800 to 1,800 is worth +0.17 ± 0.14 | **M (null)**, one seed per size, unequal step budgets | R87. Absence of a detectable effect, not a measured null |
+| 7 | Six latent configurations lose to persistence | **M** | W1 |
+| 7 | Validation loss fell 1.8x while rollout skill collapsed | **M** | W2 |
+| 7 | The boss model gets worse at -0.0874 ± 0.0218 per epoch over 120 epochs | **M** | recovered run, `recovered/gohma-wm-r1/` |
+| 7 | Under the action-shuffle control the model's predictions are invariant | **M**, aggregate over all 1,033 fields | W41. Paper states the dilution limit; the restricted test was **not run** |
+| 7 | Dream-trained policies won 0 of 607 real episodes | **M** | D2, `results/dyna3_loop_evals.json` |
+| 7 | 43% of states are action-insensitive | **M** | W8, 150 counterfactual pairs. **Deku Baba**, not the boss model |
+| 7 | L1 against MSE moved aggregate skill -0.379 to +0.392 | **M** | W6 |
+| 8 | 9 of 10 probes beat both floors (10 of 10 before striking a tie) | **M**, **one seed** | W13, `results/sjepa/p1_probe.json` |
+| 8 | First representation here not beaten by random weights | **M**, one seed | W14 |
+| 8 | The pretraining objective still loses to its trivial control | **M** | W15 |
+| 8 | The probe is not capacity-matched: 13,056 against 7,344 features | **M** | PROVENANCE 16 |
+| 8 | Two deviations from I-JEPA and V-JEPA shipped rather than proposed | **A** | PROVENANCE 16 |
+| 9.1 | The binary read flat while damage rose 8.7x | **M** | R25, R26 |
+| 9.1 | The approach term caused the plateau | **not claimed. I, confounded** | R23. Confounded by starting level; the paper says an earlier draft claimed it |
+| 9.1 | Two changes motivated by the sparse binary were regressions | **M** | R23 per-slot form, t = -4.75 and -3.78 |
+| 9.2 | v11's apparent momentum was one start at 50% weight | **M** | R19 |
+| 9.2 | Pooled success cannot compare policies across curricula | **M** | R18, `tests/test_band_metrics.py` |
+| 9.3 | The checkpoint selector had no resolution | **M** | R22 |
+| 9.3 | The grid winner's +32% collapses to +0.065 ± 0.117 | **M** | R34 |
+| 9.3 | Three pooling errors all moved p toward significance | **M** | PROVENANCE, AGENTS 32 |
+| 9.4 | Four measured noise floors | **M** | R66, R90 |
+| 11 | The two recorded episodes and their attempt counts | **M** | `media/*/attempts.json`, md5s in PROVENANCE 17.2 |
+| 11 | Eight larvae killed in the recorded win | **contradicted by its own log**, which records five. Paper states the discrepancy as unresolved | |
+| 14 | What is novel and what is not | **A**, against the verified citations in `LITERATURE.md` | |
+
+### Not claimed anywhere in the paper
+
+| | why |
+|---|---|
+| Generalisation to unseen start states | the four excluded starts are collinear with distance and health; no matched comparison exists |
+| That the credit horizon is the binding constraint | we show it supplies little direct credit; we never ran the experiment that would test it |
+| That the approach term caused the plateau | confounded by starting level |
+| That the masked representation transfers to the boss | the raw state was never recorded for Gohma |
+| That the entity-factored recurrent policy beats a flat network | never ablated head to head |
+| That the human's strategy is inferior | the demonstrator won 100 of 100 |
+| A new algorithm, or architectural novelty | every method here is taken from the literature |
+| That reading emulator memory is novel | Firoiu et al. 2017 did it under the same emulator family |
+
+---
+
+## Part B: the research log, in discovery order
 
 ## RL track
 
