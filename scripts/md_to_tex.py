@@ -131,6 +131,9 @@ def inline(t: str) -> str:
                 x = x.replace("-", "-\\allowbreak{}")   # like a checkpoint name overflows
         return r"\texttt{" + x + "}"
 
+    # Code spans are parked FIRST, so a citation or cross-reference written inside
+    # backticks as an EXAMPLE stays an example rather than becoming a real one.
+    t = re.sub(r"`([^`]+)`", lambda m: park(tt(m.group(1))), t)
     # [@key] and [@key1; @key2] become real citations.
     t = re.sub(r"\[@([\w\d]+(?:\s*;\s*@[\w\d]+)*)\]",
                lambda m: park(r"\cite{" + ",".join(
@@ -149,7 +152,6 @@ def inline(t: str) -> str:
     # prose the way a hand-typed "Figure 3" does when a figure is inserted above it. Parked
     # before escaping, like any other raw LaTeX.
     t = re.sub(r"\{\{fig:(\w+)\}\}", lambda m: park(r"Figure~\ref{fig:" + m.group(1) + "}"), t)
-    t = re.sub(r"`([^`]+)`", lambda m: park(tt(m.group(1))), t)
     # Inline math is LaTeX already: escaping it prints \$\delta\_\{t\}\$ as literal text
     # and then halts the engine with "Missing $ inserted".
     #
@@ -443,7 +445,12 @@ def bibliography(md: str, path: "Path | None" = None) -> str:
         if cols is None or need not in cols:
             raise SystemExit(f"{path}: table needs a '{need}' column, found {cols}")
 
-    cited = set(re.findall(r"\[@([\w\d]+(?:\s*;\s*@[\w\d]+)*)\]", md))
+    # Strip code spans and fenced blocks first, for the same reason inline() parks them: a
+    # citation shown inside backticks as an EXAMPLE is not a citation, and counting it makes
+    # the gate demand a reference row for a key that does not exist.
+    scan = re.sub(r"```.*?```", "", md, flags=re.S)
+    scan = re.sub(r"`[^`]*`", "", scan)
+    cited = set(re.findall(r"\[@([\w\d]+(?:\s*;\s*@[\w\d]+)*)\]", scan))
     keys = {k.strip().lstrip("@") for group in cited for k in group.split(";")}
     bykey = {r["key"]: r for r in rows}
 

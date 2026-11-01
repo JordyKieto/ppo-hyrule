@@ -108,6 +108,10 @@ def main():
     check("a verified, cited entry is emitted", out is not None and "\\bibitem{good1}" in out, True)
 
     # positive control: a key with no row would print as [?] in the PDF and nothing else warns
+    # A citation shown inside backticks is documentation, not a citation.
+    out, err = bib("write one as `[@somekey]`, and cite [@good1] for real")
+    check("example citation in backticks is ignored", err is None, True)
+
     out, err = bib("text [@missing] more")
     check("cited but absent is refused", err is not None and "missing" in err, True)
 
