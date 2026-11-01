@@ -1,86 +1,106 @@
-# zelda-RL
+# legend-of-ppo
 
-RL agents that play *The Legend of Zelda: Ocarina of Time* (Wii VC) in Dolphin, observing **live game RAM** (zero-copy, ~25 µs per step) instead of pixels. Develop and evaluate on a Mac; train on a RunPod CPU fleet coordinated over Upstash.
+**The Legend of PPO: learning to fight in Hyrule.** Reinforcement learning agents that play *The Legend of
+Zelda: Ocarina of Time* in an unmodified Dolphin emulator, reading the game's **live memory** instead of
+pixels: every actor's position, velocity, health and decoded animation routine, zero-copy, about 25
+microseconds per step.
 
-[**Paper draft**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Methodology trail**](docs/LATENT_WORLD_MODEL.md) · [**Dataset card**](datasets/transitions/deku-baba/README.md) · [**Figures**](results/)
+[**Paper**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Provenance**](PROVENANCE.md) ·
+[**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md)
 
-## Research direction
+---
 
-Learn a **transition model over structured state**, optimise policies entirely inside it, and transfer them to the emulator — which is used only as an authoritative judge, never for policy gradients. The organising idea is that the right thing to predict is not raw next state but state compressed through a representation **already shaped by competent behaviour**: freeze a behaviour-cloning encoder `E`, then learn `ẑ_{t+1} = M(E(s_t), a_t)` against `E(s_{t+1})`, with auxiliary heads keeping the quantities optimisation needs. The encoder discards what competent play never depended on, so the dynamics model is never charged with reconstructing the game.
+## What it does
 
-The claim is stated as a comparison, not a preference: the same dynamics model is trained over a behaviour-shaped latent, a reconstruction-shaped one of equal width, a random projection, and raw state. See [paper/paper.md](paper/paper.md) §7. The encoder half is **built and measured** (§6); the dynamics model is not — read [paper/CLAIMS.md](paper/CLAIMS.md) before treating anything as a result.
-
-## Status
-
-| Piece | State |
+| | |
 |---|---|
-| Deku Baba combat, model-free PPO | **Solved.** G150 clears **10/10** start states locally, 0 deaths; 77% fleet training success; 40.7 M env steps ([docs/COMBAT_TASK.md](docs/COMBAT_TASK.md)) |
-| Transition dataset | **Released.** 109,817 transitions, 168 episodes, six competence tiers ([dataset card](datasets/transitions/deku-baba/README.md)) |
-| Frozen BC encoder + state decoder | **Done.** 128-d latent reconstructs the reward function's inputs on held-out slots (Baba behaviour state 0.999, row HP 0.908, lock-on 1.000); reward events recovered at AP 0.89 ([paper §6](paper/paper.md)) |
-| Latent dynamics model | **Built.** Encoder/decoder/predictor trained jointly (`joint_v3`); reward is the real `CombatTracker` on decoded states ([methodology](docs/LATENT_WORLD_MODEL.md)) |
-| Dream-trained policy | **Running.** PPO inside the model, recurrent policy at parity with the model-free run, targeting 41 M dream steps — [wandb `nqild5b2`](https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo/runs/nqild5b2). Not yet evaluated in the emulator |
-| Queen Gohma (boss), model-free | Task, reward, obs v7 and slingshot/nut actions built and validated on recorded human fights; not solved ([docs/GOHMA_TASK.md](docs/GOHMA_TASK.md)) |
+| **Melee combat: solved.** | Three Deku Babas, cleared from 10 of 10 start states with 0 deaths. 78% success fleet-wide over 41.8 M environment steps, for **$51 and 4 h 52 m** on twenty CPU machines. |
+| **A dungeon boss: not solved, and the interesting part.** | Queen Gohma defeated on **8.33% of 456 held-out episodes**, 3.53 of her 10 health taken. The rate ranges from **28.95% to 0 of 76** across six start states, ordered by how much of the fight the start hands the agent. |
+| **100 human victories did not help.** | A clone of them reaches 74.5% next-action accuracy and 0.33 of 10 health, 1 win in 80. Fifteen ways of folding the demonstrations into the policy gradient produced **no improving arm**. |
+| **A learned world model did not help.** | 120 epochs ends further from "nothing changes" than it started, and shuffling the action changes its prediction by a factor of 1.00. Policies dreamed inside it won **0 of 607** real episodes. |
+| **One representation result clears its controls.** | A masked-prediction objective over the raw 363-field state beats both an untrained network of the same architecture and a free-signal control on **9 of 10** frozen probes. One seed. |
 
-## Artifacts
+The boss result is worth one more line, because it is the part that is hard to see from the percentages.
+Gohma takes damage only while stunned, and a stun has to be manufactured. A kill is ten such openings. Under
+the credit horizon these runs used, the +60 for killing her reaches the first decision of an episode at
+**0.000% of face value**, so everything the policy knows about assembling that chain, it learned from local
+shaping with effectively no gradient from the outcome.
 
-| What | Where |
+## Watch it
+
+| clip | what it is |
 |---|---|
-| Start savestates + manifest | [`datasets/zelda/combat/deku-baba/`](datasets/zelda/combat/deku-baba/README.md) → `s3://zelda-rl/zelda/combat/deku-baba/states/` |
-| Checkpoints | `s3://zelda-rl/zelda/combat/deku-baba/checkpoints/` (final: `G150_deku-combat-gru-v2b_u00120.pt`) |
-| Training curves | wandb [`drift-ai-models/zelda-rl-combat-ppo`](https://wandb.ai/drift-ai-models/zelda-rl-combat-ppo): groups `deku-combat-gru-v2` (G1–30), `deku-combat-gru-v2b` (G31–154) |
-| **Transition dataset** | [`datasets/transitions/deku-baba/20260918-134229/`](datasets/transitions/deku-baba/README.md) — 109,817 transitions, 168 episodes, 17 MB, committed · mirror `s3://zelda-rl/zelda/combat/deku-baba/transitions/20260918-134229/` |
-| **Frozen BC encoder** | `s3://zelda-rl/zelda/combat/deku-baba/encoders/bc-decode-final.pt` — 128-d latent + state decoder ([paper §6](paper/paper.md)) |
-| Room-exit episodes | `datasets/transitions/deku-baba-exits/` — 27 walkouts; the released dataset has 0 ([why](docs/LATENT_WORLD_MODEL.md#6-room-exit-no-examples-existed)) |
+| [`media/deku-slot1/`](media/deku-slot1/) | the solved melee task end to end: the agent walks in from the room entrance, wakes all three Babas and clears the room. 26.7 s, kills at 7.3, 22.4 and 26.8 s. |
+| [`media/gohma-slot5/`](media/gohma-slot5/) | a Queen Gohma defeat from the full-health start, 10 of 10 health on the ceiling 347 units away: larvae cleared, all ten health taken. |
 
-The bucket is private (aws profile `race-wm`). Game data (savestates, NAND, ROM) is never committed to git.
+Each directory carries an `attempts.json` listing **every** attempt, won or lost, so a clip is never read as
+a typical episode. That start wins 10.53% of the time, and all eight of its recorded wins kill larvae and take
+all ten health, so the clip is representative of a win there and the attempt count says how often a win
+happens.
+
+```sh
+scripts/record_wins.py --ckpt <policy> --slot N --slots-dir <dir> --out-dir media/<name> --wins 1
+```
+
+## The part that generalises
+
+Measurement error exceeded method error in this project, and [paper.md section 9](paper/paper.md) is the
+write-up. The short version:
+
+- **A defeat is a 1 to 10% binary.** Read through it, six consecutive versions looked flat and two experiments
+  were launched to break the apparent plateau. Read through boss damage, the graded quantity the reward pays
+  for, the same runs rose **8.7 times** with every step statistically solid. One of the experiments launched to
+  fix the plateau measurably caused one.
+- **A rate averaged over start states you choose is not a property of the policy.** One version's apparent
+  momentum was a single start at 50% curriculum weight while nine starts sat at exactly zero for 37 updates.
+- **A selector needs resolution before it selects anything.** A checkpoint chooser ranking on 16-episode
+  subsets at a 1.68% base rate was picking one lucky win in sixteen, which any checkpoint produces one time in
+  five.
+- **The maximum of N noisy estimates is biased upward.** A 12-cell grid's winner read +32%; confirmed at
+  matched sample size it is +0.065 ± 0.117.
+- **The noise floor is measured, four independent ways**, and two groups of three identical runs differ at
+  t = 2.1 while being pure seed noise.
+
+Nine claims this project published and then overturned are in [paper.md section 12](paper/paper.md), with the
+control that killed each one.
 
 ## Layout
 
-| Path | What |
+| path | what |
 |---|---|
-| `zelda_rl/` | Dolphin control (pipes, hotkeys), live RAM attach (macOS mach / Linux shm), observations, combat task + reward tracker, PPO (entity + GRU) |
-| `scripts/` | `train_combat.py`, `train_ppo.py` (goal/rupees), `collect_transitions.py` (dataset), `train_bc_decode.py` (frozen encoder + state decoder), `eval_decode_events.py` (event detection), `eval_bc.py` (BC in the emulator), `play.py`, `fleet_watch.py`, probes |
-| `fleet/` | `python -m fleet`: RunPod create/bootstrap/launch/status/kill, Upstash weight averaging |
-| `paper/` | [paper.md](paper/paper.md) the draft · [CLAIMS.md](paper/CLAIMS.md) the per-claim evidence audit |
-| `results/` | `make_figures.py` regenerates every paper table and figure from committed artifacts; `figures/`, `tables/` |
-| `datasets/` | savestate manifests (files in S3) and transition datasets with cards |
-| `docs/` | [LATENT_WORLD_MODEL](docs/LATENT_WORLD_MODEL.md) · [FINDINGS](docs/FINDINGS.md) · [RAM_MAP](docs/RAM_MAP.md) · [OBSERVATION_SCHEMA](docs/OBSERVATION_SCHEMA.md) · [ADDING_OBSERVATIONS](docs/ADDING_OBSERVATIONS.md) · [COMBAT_TASK](docs/COMBAT_TASK.md) · [RUNPOD](docs/RUNPOD.md) |
+| `zelda_rl/` | emulator control, live memory attach (macOS mach / Linux shm), the shared state layout, observations, the combat task and its reward, PPO |
+| `scripts/` | training, collection, evaluation, probes, `play.py` to watch a policy, `record_wins.py` to film one |
+| `fleet/` | `python -m fleet`: create, bootstrap, preflight, launch, audit, sync, kill across cloud machines |
+| `paper/` | [the paper](paper/paper.md), [the claim audit](paper/CLAIMS.md), and superseded drafts kept with their retractions |
+| `docs/` | 21 documents; start at [MAP.md](docs/MAP.md), which says which one to read for a given task |
+| `results/` | exported run histories and per-episode evaluation rows. Training histories are exported, never linked |
+| `media/` | clips, each with the full attempt manifest beside it |
 
-## Quick start (Mac)
+## Quick start (macOS)
 
 ```sh
-scripts/setup_macos_memaccess.sh          # one-time: Developer Mode, signed Dolphin copy + python-dbg (docs/FINDINGS.md §3.1)
-# per-task start states go in their own dir, NOT the live Dolphin slots (see "Savestate slots" below)
+scripts/setup_macos_memaccess.sh     # one-time: a code-signed Dolphin copy and interpreter
 aws s3 sync s3://zelda-rl/zelda/combat/deku-baba/states/ datasets/zelda/combat/deku-baba/states/ --profile race-wm
-aws s3 cp s3://zelda-rl/zelda/combat/deku-baba/checkpoints/G150_deku-combat-gru-v2b_u00120.pt checkpoints/kept/ --profile race-wm
+
 DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
-  .venv/bin/python-dbg scripts/play.py checkpoints/kept/G150_deku-combat-gru-v2b_u00120.pt \
-    --slots-dir datasets/zelda/combat/deku-baba/states --slot 1 --slot 7
+  .venv/bin/python-dbg scripts/play.py checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt \
+    --slots-dir datasets/zelda/combat/deku-baba/states --slot 1
 ```
 
-### Savestate slots
+Attaching to emulator memory on macOS needs the code-signed interpreter `.venv/bin/python-dbg`; plain
+`python` fails. Linux needs nothing special. Game data (savestates, NAND, ROM) is never committed.
 
-`~/Library/Application Support/Dolphin/StateSaves/NACE01.s0{1..10}` is the **live** slot set the user plays with, and it gets overwritten whenever a new task's states are made — it currently holds **Queen Gohma** states, not Deku Baba. Always pass `--slots-dir` pointing at the per-task directory.
+Two traps that have each cost a session and are now checks rather than advice: **pin torch to one thread
+before opening an emulator**, or it takes every performance core and the emulation thread stalls; and the
+per-task savestate directory is **not** the live Dolphin slots, which hold whatever task was built last.
+Pointing a policy at the wrong set does not crash, it silently reports every episode as a timeout.
 
-This matters more than it sounds. Pointing a Deku Baba policy at the Gohma slots does not crash: it loads, runs, and reports every episode as a zero-target timeout, which looks exactly like a weak policy. One dataset collection was silently ruined this way. `scripts/collect_transitions.py` now refuses to start unless each start state contains a live actor of the expected id.
+## Reading the numbers
 
-## Collect a transition dataset
+Every claim in the paper carries an evidence class in [CLAIMS.md](paper/CLAIMS.md) and traces to an artefact
+in [PROVENANCE.md](PROVENANCE.md). Artefacts are identified by md5 in
+[artifacts/MANIFEST.json](artifacts/MANIFEST.json), not by filename, because four world-model checkpoints
+exist in remote storage under the same filenames as the ones cited and are a different, earlier run.
 
-```sh
-DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
-  .venv/bin/python-dbg scripts/collect_transitions.py --transitions 100000 --workers 10
-.venv/bin/python results/make_figures.py      # regenerate every paper table and figure
-```
-
-Replays checkpoints from six points on the training curve so the data spans competence tiers rather than expert play only. ~104 steps/s across 10 headless Dolphin instances; 110 k transitions in ~18 min on an 8-core laptop.
-
-## Record a video (fullscreen + game audio)
-
-```sh
-scripts/record_play.sh                      # final policy through slots 1-10 -> recordings/deku-baba_<time>.mp4
-```
-
-- **How:** a ScreenCaptureKit recorder (`tools/screenrec.swift`) captures only Dolphin's window and Dolphin's audio, with no loopback driver.
-- **Stops by itself** when the last slot ends; Ctrl+C also stops and still saves the file.
-- **First run:** allow Screen Recording for your terminal app, restart it, and run again.
-
+`AGENTS.md` is the working agreement for this repository: every rule in it exists because breaking it cost
+real time, and the specific incident is named so the rule cannot be argued away as generic advice.

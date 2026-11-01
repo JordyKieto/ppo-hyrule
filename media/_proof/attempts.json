@@ -1,0 +1,42 @@
+{
+  "ckpt": "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
+  "slots_dir": "/Users/jordy/Library/Application Support/Dolphin/StateSaves",
+  "attempts": [
+    {
+      "slot": 7,
+      "attempt": 1,
+      "wall_s": 27.3,
+      "outcome": "SUCCESS",
+      "killed": "1/1",
+      "log": "media/_proof/_proof_s07_try01.log",
+      "instance_mb_freed": 221,
+      "boss_hp_start": 5,
+      "boss_hp_end": 0,
+      "boss_damage": 5,
+      "recorded_s": 13.2,
+      "recorder_exit": 0,
+      "segments": 1,
+      "episode_seconds": 2.8,
+      "video_seconds": 8.5,
+      "capture_complete": true,
+      "larvae_peak": 0,
+      "larvae_killed": 0,
+      "nut_stuns": 0,
+      "seed_stuns": 0,
+      "stun_events": 0,
+      "boss_hits": 5,
+      "kill_times_s": [
+        2.9
+      ],
+      "gohma_states_seen": [
+        "defeated",
+        "stunned",
+        "stunned_hit"
+      ],
+      "kept": true,
+      "video": "media/_proof/_proof_s07_try01.mp4",
+      "bytes": 6458574,
+      "md5": "dd63f26f8bcab54f496f8e8d6bba3627"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+▶ checkpoints/kept/gohma-kl-v15-r4_latest.pt (update 40, combat, GRU memory) | slots [7] | sampled | real time
+
+── slot 7 ep 1: Link 2.5 hearts | targets 1
+  t=  0.0s -+B          V= 38.43 hp 2.5 | gohma 5hp stunned d 47 | larvae 0 | locked True held 4 seeds 25 | R=  0.02
+  t=  0.2s S+Z+A        V= 43.20 hp 2.5 | gohma 4hp stunned_hit d 38 | larvae 0 | locked False held 4 seeds 25 | R= 10.86 | EVENTS {'boss_hit': 1}
+  t=  0.6s SE+Z+B       V= 31.68 hp 2.5 | gohma 4hp stunned_hit d 40 | larvae 0 | locked True held 4 seeds 25 | R= 10.93 | EVENTS {'lockon': True}
+  t=  1.2s -+A          V= 29.00 hp 2.5 | gohma 3hp stunned_hit d 53 | larvae 0 | locked False held 4 seeds 25 | R= 22.65 | EVENTS {'boss_hit': 1}
+  t=  1.3s E+Z+B        V= 20.18 hp 2.5 | gohma 3hp stunned_hit d 54 | larvae 0 | locked True held 4 seeds 25 | R= 22.67 | EVENTS {'lockon': True}
+  t=  1.8s SW+Z+B       V= 19.54 hp 2.5 | gohma 3hp stunned d 49 | larvae 0 | locked True held 4 seeds 25 | R= 22.76 | EVENTS {'lockon': True}
+  t=  1.9s E+Z+B        V= 23.55 hp 2.5 | gohma 2hp stunned_hit d 48 | larvae 0 | locked True held 4 seeds 25 | R= 35.18 | EVENTS {'boss_hit': 1}
+  t=  2.5s S+Z+Sling    V= 10.07 hp 2.5 | gohma 2hp stunned_hit d 86 | larvae 0 | locked True held 4 seeds 25 | R= 35.18 | EVENTS {'lockon': True}
+  t=  2.8s N            V= 22.79 hp 2.5 | gohma 0hp defeated d None | larvae 0 | locked True held 4 seeds 25 | R=290.99 | EVENTS {'boss_hit': 2, 'boss_defeat': True}
+■ slot 7: SUCCESS | killed 1/1 at [2.9] s | hearts lost 0.0 | return 291.0

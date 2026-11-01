@@ -1,0 +1,25 @@
+{
+  "ckpt": "checkpoints/kept/gohma-kl-v15-r4_latest.pt",
+  "slots_dir": "/Users/jordy/Library/Application Support/Dolphin/StateSaves",
+  "attempts": [
+    {
+      "slot": 7,
+      "attempt": 1,
+      "wall_s": 22.8,
+      "outcome": "SUCCESS",
+      "killed": "1/1",
+      "log": "media/_smoke/_smoke_s07_try01.log",
+      "instance_mb_freed": 221,
+      "boss_hp_start": 5,
+      "boss_hp_end": 0,
+      "boss_damage": 5,
+      "recorded_s": 8.2,
+      "kept": true,
+      "video": "media/_smoke/_smoke_s07_try01.mp4",
+      "bytes": 112019,
+      "md5": "d87933484378ba268763e4d1c21e8c95",
+      "video_seconds": 3.0,
+      "video_truncated": "3.0 s of video for a 8 s recording window: the capture stream was cut short, see media/_smoke/_smoke_s07_try01.rec.log"
+    }
+  ]
+}

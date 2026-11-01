@@ -2182,3 +2182,112 @@ ZRL_ALLOW_NO_WANDB=1 .venv/bin/python -u scripts/train_sjepa.py \
    shared mask vector. Staged patch, deliberately unapplied.
 5. **Phase 2 (action conditioning) is NOT started.** §13 rule 5: one authorisation, one experiment.
 6. **Gohma needs the collector to write `state`.** Everything above is Deku Baba.
+
+## 17. Session 2026-11-01: the per-start profile, two recorded wins, and three capture faults
+
+**RL track.** No training ran. This section records a measurement made from existing rows, two video assets
+produced locally, and the instrument faults found producing them.
+
+### 17.1 v15's defeat rate is start-state dependent, and the graded metric resolves what the binary cannot
+
+Computed from `results/mateval300/mateval_v15_r*.jsonl`, the 456-episode matched evaluation already recorded
+in section 10: 76 episodes on each of six starts, 300 s cap. Start conditions are the emulator-read audit in
+`runs/gohma_slot_audit.json`, not the table in any document. **M**.
+
+| start | her state, her HP | distance | wins / 76 | defeat rate | Wilson 95% | damage | share of her start HP |
+|---|---|---|---|---|---|---|---|
+| 7 | stunned, 5 of 10 | 38 u | 22 | **28.95%** | 19.96 to 39.96 | 3.763 +/- 0.128 of 5 | **0.753** |
+| 5 | ceiling, eye red, 10 | 347 u | 8 | 10.53% | 5.43 to 19.42 | 6.355 +/- 0.316 of 10 | 0.636 |
+| 3 | stunned, 10 | 189 u | 5 | 6.58% | 2.84 to 14.49 | 5.829 +/- 0.266 of 10 | 0.583 |
+| 4 | ceiling, spawning, 8 | 436 u | 1 | 1.32% | 0.23 to 7.08 | 2.934 +/- 0.217 of 8 | 0.367 |
+| 6 | floor, eye red, 6 | 357 u | 2 | 2.63% | 0.72 to 9.10 | 1.013 +/- 0.209 of 6 | 0.169 |
+| 8 | stunned, 10 | 448 u | 0 | **0.00%** | 0 to 4.81 | 1.263 +/- 0.269 of 10 | 0.126 |
+| **pooled** | | | 38 / 456 | 8.33% | 6.13 to 11.23 | 3.526 +/- 0.137 | |
+
+Pooled figures reproduce section 10 exactly, which is the check that the split is being read correctly.
+
+Three readings, all of which the paper carries:
+
+1. **The pooled rate is not a property of the policy**, it is an average over a curriculum we chose (section 29
+   of AGENTS). The per-start profile is what transfers.
+2. **The binary cannot resolve the middle of the table.** Wilson intervals for starts 5, 3, 6 and 4 all
+   overlap, so on defeat rate only the extremes separate. The damage share orders all six cleanly at a few
+   percent of SE. This is AGENTS 34 appearing inside the headline result rather than in a methods note.
+3. **No single start variable explains it.** Starts 5 and 6 differ by 10 units of distance and ~3.8x in damage
+   share; start 8 is worst of the six despite beginning stunned, at 448 units. Six starts cannot separate
+   distance, her health and her action state, and no model is fitted to six points. **I**.
+
+Also **M**, from the same rows: across all 22 wins on start 7 `seed_stuns` is **0**, and across all 8 wins on
+start 5 it is exactly **1**. Every other stun in every recorded win is a Deku Nut. The human corpus fires 2.99
+seeds and 1.71 nuts per win (R56), so the policy inverts the demonstrated tool use. And every one of the 8
+start-5 wins kills larvae and takes all 10 health, lengths 58.3 to 146.5 s.
+
+### 17.2 The recorded episodes
+
+`scripts/record_wins.py` plays one episode per attempt with `tools/screenrec.swift` capturing that Dolphin
+window and its audio, reads the outcome from `play.py`'s own result line, keeps the clip only on a win, and
+appends **every** attempt to `<out-dir>/attempts.json`. A kept clip of a 10%-per-episode event is not a typical
+episode, and a video with no attempt count attached invites exactly that reading (AGENTS 30).
+
+| path | md5 | bytes |
+|---|---|---|
+| `media/deku-slot1/deku-slot1_s01_try01.mp4` | `a5be6d7a6a075d6bf8ef4668687077d7` | 35,069,197 |
+| `media/deku-slot1/deku-slot1_s01_try01_crop.mp4` | `d20c62aae5953a5d85d16c572845298b` | 6,414,725 |
+| `media/gohma-slot5/gohma-slot5_s05_try04.mp4` | `3d772cab7cf75c84f408a9a4bdc1607f` | 267,392,953 |
+| `media/gohma-slot5/gohma-slot5_s05_try04_crop.mp4` | `a184dbd2923379e6d1970ed8656d385f` | 47,994,865 |
+
+**Deku Baba, start 1, first attempt.** `SUCCESS | killed 3/3 at [7.3, 22.4, 26.8] s | hearts lost 1.5`.
+The start is the documented baseline full fight: Link at the room entrance, all three Babas underground 530 to
+830 units away, so he must walk up and wake them.
+
+**Queen Gohma, start 5, four attempts** (deaths at 2, 5 and 2 of her 10 health, then the win).
+`SUCCESS | killed 1/1 at [191.1] s | hearts lost 2.0 | return 231.1`. Ten sword hits, eight knockdowns, five
+larvae killed. At a measured 10.53% per episode, four attempts is a slightly lucky draw on the attempt count
+and an entirely ordinary win.
+
+Per-tick records: `media/gohma-slot5/play_by_play.{csv,json}` (127 ticks) and an analysis in
+`PLAY_BY_PLAY.md`. **The structural finding from that episode, M:** she is unreachable for **67%** of it. All
+ten points of damage fall inside 46 s of the 191, in four windows of 9.5, 13.5, 14.1 and 9.1 s, separated by
+ceiling phases of 40.5, 40.9 and 52.4 s in which her health does not move. Of the eight knockdowns exactly one
+came from a slingshot seed, and that was the opening shot the start state hands it at 0.6 s; it fired 4 seeds
+from 26 carried, **dropped 3 shots while her eye was red**, passed up one red-eye window, threw 13 nuts for 4
+stuns, was locked on for 15% of ticks against the human's 63%, took 32 damage events and collected no hearts.
+So the binding constraint in this episode is time she spends unreachable, and the lever for it is the red-eye
+shot, which is the thing the policy has most clearly not learned.
+
+### 17.3 Three capture faults, in the order they were found
+
+Each was found by looking at the artefact rather than the exit status, and the first two were passing every
+check in place at the time.
+
+| # | fault | what it printed | caught by |
+|---|---|---|---|
+| 1 | macOS tears down a ScreenCaptureKit stream when Dolphin switches to fullscreen: `-3821 "Stream was stopped by the system"` | 18.6 s of film for a 61.3 s episode, and `screenrec: saved <file>` | comparing `ffprobe` duration against the episode's own wall clock |
+| 2 | a **display-scoped** capture of a fullscreen window films the **empty desktop**, because macOS puts a fullscreen window on its own Space | a clip with the right duration, real audio, a clean decode, `segments=1 complete` and exit 0, that was **solid black** | decoding a frame and looking at it. Brightness cannot separate a dark dungeon from a blank desktop; motion can, so the check is a frozen-frame fraction (85% on a blank clip, 46 to 58% on real play) |
+| 3 | a settle delay before attaching the recorder cut its own duration check's margin, so good clips were rejected as truncated | `10.3 s of video for a 14.6 s episode`, repeatedly, on episodes the policy had **won** | running it on the main thread and reading the flag list |
+
+Fixes: attach after the fullscreen transition, capture **window**-scoped
+(`SCContentFilter(desktopIndependentWindow:)`), restart the stream into a new segment if the system kills it
+and concatenate the segments, no settle delay, and a non-zero exit when the stream dies. Verified on a 178 s
+losing episode (181.8 s captured, frozen 0.0) before the win was attempted.
+
+Fault 2 is the one worth carrying forward: **it is AGENTS 16 with every available signal agreeing.** Duration,
+audio, decode and exit status were all correct and the content was wrong. The only check that could have
+caught it is looking at a frame, which is why `frozen_fraction` now runs on every attempt, win or lose.
+
+### 17.4 Artefact audit
+
+`artifacts/MANIFEST.json` was rebuilt as 122 entries, every md5 and byte count produced by hashing the file and
+every S3 key checked by listing, not copied from this document. **All 16 md5s stated in this file agree
+exactly.** Three findings that affect defensibility:
+
+- **`datasets/transitions/v3-*` (22.7 GB, 203,822 frames) exists only on this Mac.** It is the entire
+  substrate of the masked-prediction result in section 16, and packed v5 in S3 cannot substitute (it holds the
+  tokeniser's output, not the raw 363-d state). The checkpoint is durable and its input is not. **Open.**
+- **A filename trap in S3**: `zelda/runs/wm_tf/ck_{0080,0085,0045,0070}.pt` exist with the same filenames as
+  the four section 4.6 checkpoints at roughly a third of the size. They are an earlier run. Match by md5.
+- **`runs/eval_bc_baseline.jsonl` is gone**, from this machine and from the bucket. It is the row file behind
+  R42 (the clone's 0 defeats in 80 episodes). W&B group `gohma-v20-bc-eval` is the only remaining record, so
+  that claim rests on thinner evidence than this file implies and is labelled as such in the paper.
+- `checkpoints/kept/rvs_anchor.pt.last.pt` is **byte-identical** to `rvs_from_v15.pt`, so the local copy of
+  section 15's result is its untrained init. Section 15 must cite its eval rows, not its weights.

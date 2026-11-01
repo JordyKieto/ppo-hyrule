@@ -20,6 +20,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
+torch.set_num_threads(1)          # AGENTS 28: torch takes all 4 performance cores and starves
+                                  # Dolphin's emulation thread -> 'emulation stalled (VI stuck)'.
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from zelda_rl.env import BUTTONS, DIR_NAMES  # noqa: E402
 from zelda_rl.policy_io import (DEFAULT_SLOTS_DIR, INBOX, load_policy, make_env, newest_checkpoint,  # noqa: E402

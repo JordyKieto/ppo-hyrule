@@ -1,0 +1,112 @@
+▶ checkpoints/kept/gohma-kl-v15-r4_latest.pt (update 40, combat, GRU memory) | slots [5] | sampled | real time
+
+── slot 5 ep 1: Link 2.5 hearts | targets 1
+  t=  0.0s -+Sling      V= 37.34 hp 2.5 | gohma 10hp ceiling_eye_red d 472 | larvae 0 | locked True held 15 seeds 26 | R= -0.00
+  t=  0.4s SW+Sling     V= 44.70 hp 2.5 | gohma 10hp ceiling_eye_red d 472 | larvae 0 | locked True held 15 seeds 25 | R= -0.01 | EVENTS {'seed': 1}
+  t=  0.6s NE+B         V= 43.71 hp 2.5 | gohma 10hp fall d 470 | larvae 0 | locked True held 15 seeds 25 | R=  0.00 | EVENTS {'boss_stunned': True, 'seed_stun': True}
+  t=  2.6s NE+A         V= 41.96 hp 2.5 | gohma 10hp stunned d 220 | larvae 0 | locked False held 4 seeds 25 | R=  1.87
+  t=  3.2s SE+Z+B       V= 41.80 hp 2.5 | gohma 10hp stunned d 129 | larvae 0 | locked True held 4 seeds 25 | R=  2.77 | EVENTS {'lockon': True}
+  t=  4.5s NE+A         V= 47.97 hp 2.5 | gohma 9hp stunned_hit d 35 | larvae 0 | locked False held 4 seeds 25 | R= 25.26 | EVENTS {'boss_hit': 1}
+  t=  4.8s SE+Z+B       V= 27.48 hp 2.5 | gohma 9hp stunned_hit d 43 | larvae 0 | locked True held 4 seeds 25 | R= 25.31 | EVENTS {'lockon': True}
+  t=  5.8s W+Z+A        V= 29.16 hp 2.5 | gohma 7hp stunned_hit d 12 | larvae 0 | locked False held 4 seeds 25 | R= 42.44 | EVENTS {'boss_hit': 2}
+  t=  6.6s E+Z+B        V= 18.40 hp 2.5 | gohma 7hp stunned d 32 | larvae 0 | locked True held 15 seeds 25 | R= 42.57 | EVENTS {'lockon': True}
+  t=  7.1s SE+Z+B       V= 16.51 hp 2.5 | gohma 7hp stunned d 33 | larvae 0 | locked True held 15 seeds 25 | R= 42.57 | EVENTS {'lockon': True}
+  t=  7.6s -+Z+Nut      V= 14.44 hp 2.5 | gohma 7hp stunned d 23 | larvae 0 | locked True held 15 seeds 25 | R= 42.56 | EVENTS {'lockon': True}
+  t=  7.7s NW+Z         V= 13.71 hp 2.5 | gohma 7hp stunned d 31 | larvae 0 | locked True held 15 seeds 25 | R= 42.56 | EVENTS {'nut': 1}
+  t=  8.4s E+Z+A        V=  8.36 hp 2.5 | gohma 6hp stunned_hit d 45 | larvae 0 | locked False held 4 seeds 25 | R= 51.46 | EVENTS {'boss_hit': 1}
+  t=  8.8s N+Z+Sling    V=  6.03 hp 2.5 | gohma 6hp stunned_hit d 43 | larvae 0 | locked True held 4 seeds 25 | R= 51.53 | EVENTS {'lockon': True}
+  t= 10.0s SW+Z+Sling   V=  3.77 hp 2.5 | gohma 6hp floor_walk d 25 | larvae 0 | locked True held 4 seeds 25 | R= 51.52 | EVENTS {'lockon': True}
+  t= 12.0s -+Shield     V=  3.84 hp 2.5 | gohma 6hp floor_walk d 354 | larvae 0 | locked False held 4 seeds 25 | R= 51.50
+  t= 14.0s S+Z+Sling    V=  4.73 hp 2.5 | gohma 6hp climb d 560 | larvae 0 | locked False held 4 seeds 25 | R= 51.48
+  t= 16.0s SW+B         V=  4.98 hp 2.5 | gohma 6hp ceiling_move d 475 | larvae 0 | locked False held 15 seeds 25 | R= 51.46
+  t= 18.0s S+Z+A        V=  5.53 hp 2.5 | gohma 6hp ceiling_spawn d 380 | larvae 0 | locked False held 15 seeds 25 | R= 51.44
+  t= 19.5s NW           V=  6.17 hp 2.5 | gohma 6hp ceiling_eye_red d 436 | larvae 0 | locked False held 15 seeds 25 | R= 51.42 | EVENTS {'nut': 1}
+  t= 20.3s NE+Z         V=  6.56 hp 2.5 | gohma 6hp ceiling_eye_red d 436 | larvae 0 | locked False held 4 seeds 25 | R= 51.04 | EVENTS {'dropped_shot': True}
+  t= 22.3s NW+Z+Sling   V=  6.74 hp 2.5 | gohma 6hp ceiling_eye_red d 434 | larvae 0 | locked False held 15 seeds 25 | R= 51.02
+  t= 22.8s SW+Z+A       V=  6.74 hp 2.5 | gohma 6hp ceiling_idle d 425 | larvae 0 | locked False held 15 seeds 25 | R= 51.01 | EVENTS {'unfired_red_eye': True}
+  t= 24.8s NE+Z+Shield  V=  6.95 hp 2.5 | gohma 6hp ceiling_idle d 449 | larvae 0 | locked False held 4 seeds 25 | R= 50.99
+  t= 26.8s S+Z+A        V=  7.32 hp 2.5 | gohma 6hp ceiling_idle d 437 | larvae 1 | locked False held 4 seeds 25 | R= 50.97
+  t= 28.8s W+A          V=  8.26 hp 2.5 | gohma 6hp ceiling_idle d 428 | larvae 2 | locked False held 4 seeds 25 | R= 50.95
+  t= 30.8s NE+Shield    V=  8.26 hp 2.5 | gohma 6hp ceiling_spawn d 449 | larvae 3 | locked False held 4 seeds 25 | R= 50.93
+  t= 32.8s NE+Z+B       V=  8.56 hp 2.5 | gohma 6hp ceiling_move d 371 | larvae 3 | locked False held 4 seeds 25 | R= 50.91
+  t= 34.8s W+Z+B        V=  9.38 hp 2.5 | gohma 6hp ceiling_spawn d 543 | larvae 3 | locked False held 4 seeds 25 | R= 50.89
+  t= 35.8s S+Z+A        V= 11.57 hp 2.5 | gohma 6hp ceiling_move d 460 | larvae 2 | locked False held 4 seeds 25 | R= 53.88 | EVENTS {'larva_hit': 2, 'larva_kill': 'sword'}
+  t= 37.8s NE+A         V= 10.43 hp 2.5 | gohma 6hp ceiling_move d 461 | larvae 2 | locked False held 15 seeds 25 | R= 53.86
+  t= 38.7s S+Z+A        V= 10.90 hp 2.5 | gohma 6hp ceiling_move d 491 | larvae 2 | locked False held 4 seeds 25 | R= 54.35 | EVENTS {'larva_hit': 1}
+  t= 40.0s NE           V= 10.92 hp 2.5 | gohma 6hp ceiling_move d 436 | larvae 1 | locked False held 4 seeds 25 | R= 57.34 | EVENTS {'larva_hit': 2, 'larva_kill': 'sword'}
+  t= 42.0s N+A          V= 12.18 hp 2.5 | gohma 6hp ceiling_move d 453 | larvae 1 | locked False held 4 seeds 25 | R= 57.32
+  t= 44.0s N+B          V= 13.03 hp 2.5 | gohma 6hp ceiling_move d 549 | larvae 1 | locked False held 4 seeds 25 | R= 57.30
+  t= 46.0s NW+Z+Shield  V= 13.18 hp 2.5 | gohma 6hp ceiling_move d 546 | larvae 1 | locked False held 4 seeds 25 | R= 57.28
+  t= 48.0s SE+Z+Shield  V= 14.94 hp 2.5 | gohma 6hp ceiling_move d 439 | larvae 1 | locked False held 15 seeds 25 | R= 57.26
+  t= 50.0s NE+Z+B       V= 15.01 hp 2.5 | gohma 6hp ceiling_spawn d 500 | larvae 1 | locked False held 4 seeds 25 | R= 57.24
+  t= 52.0s S+Z+B        V= 16.10 hp 2.5 | gohma 6hp ceiling_move d 473 | larvae 1 | locked False held 4 seeds 25 | R= 57.22
+  t= 54.0s S+A          V= 17.28 hp 2.5 | gohma 6hp ceiling_move d 559 | larvae 0 | locked False held 4 seeds 25 | R= 57.20
+  t= 56.0s N+Z+Shield   V= 18.73 hp 2.5 | gohma 6hp ceiling_spawn d 474 | larvae 0 | locked False held 15 seeds 25 | R= 57.18
+  t= 57.7s NW+Z+B       V= 19.31 hp 2.5 | gohma 6hp fall d 486 | larvae 0 | locked False held 4 seeds 25 | R= 57.17 | EVENTS {'boss_stunned': True}
+  t= 59.7s NW+Z+Shield  V= 19.85 hp 2.5 | gohma 6hp floor_eye_close d 348 | larvae 0 | locked False held 4 seeds 25 | R= 57.92
+  t= 61.3s W+Z          V= 21.13 hp 2.5 | gohma 6hp floor_walk d 250 | larvae 0 | locked False held 4 seeds 25 | R= 57.95 | EVENTS {'nut': 1}
+  t= 61.5s -+A          V= 21.19 hp 2.5 | gohma 6hp stunned d 240 | larvae 0 | locked False held 4 seeds 25 | R= 57.94 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t= 63.1s NW+Z+B       V= 23.14 hp 2.5 | gohma 6hp stunned d 230 | larvae 0 | locked True held 4 seeds 25 | R= 57.98 | EVENTS {'lockon': True}
+  t= 64.4s S+Nut        V= 26.31 hp 2.5 | gohma 6hp floor_prepare d 112 | larvae 0 | locked True held 4 seeds 25 | R= 57.99 | EVENTS {'nut': 1}
+  t= 64.6s NW+Z         V= 30.75 hp 2.5 | gohma 6hp stunned d 112 | larvae 0 | locked False held 4 seeds 25 | R= 57.99 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t= 66.6s -+A          V= 22.09 hp 2.5 | gohma 6hp floor_walk d 134 | larvae 0 | locked False held 4 seeds 25 | R= 57.87
+  t= 66.8s NW+Z+B       V= 22.37 hp 2.5 | gohma 6hp floor_prepare d 130 | larvae 0 | locked False held 4 seeds 25 | R= 57.86 | EVENTS {'nut': 1}
+  t= 67.0s N            V= 23.19 hp 2.5 | gohma 6hp stunned d 129 | larvae 0 | locked False held 4 seeds 25 | R= 57.86 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t= 69.0s -+A          V= 30.57 hp 2.5 | gohma 6hp floor_walk d 30 | larvae 0 | locked True held 4 seeds 25 | R= 58.03
+  t= 69.2s SE+Nut       V= 23.61 hp 2.0 | gohma 6hp floor_prepare d 64 | larvae 0 | locked True held 4 seeds 25 | R= 56.03 | EVENTS {'link_damage': 8}
+  t= 69.3s S+Nut        V= 23.96 hp 2.0 | gohma 6hp floor_prepare d 74 | larvae 0 | locked True held 4 seeds 25 | R= 56.03 | EVENTS {'nut': 1}
+  t= 69.5s S+Nut        V= 26.38 hp 2.0 | gohma 6hp stunned d 73 | larvae 0 | locked True held 4 seeds 25 | R= 56.05 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t= 70.9s -+A          V= 26.45 hp 2.0 | gohma 6hp stunned d 66 | larvae 0 | locked True held 4 seeds 25 | R= 56.29 | EVENTS {'nut': 1}
+  t= 71.4s -+A          V= 24.78 hp 2.0 | gohma 6hp stunned d 66 | larvae 0 | locked True held 4 seeds 25 | R= 56.29 | EVENTS {'nut': 1}
+  t= 71.6s S+Nut        V= 23.37 hp 2.0 | gohma 6hp stunned d 64 | larvae 0 | locked True held 4 seeds 25 | R= 56.29 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t= 72.9s S+Nut        V= 23.95 hp 2.0 | gohma 5hp stunned_hit d 44 | larvae 0 | locked False held 4 seeds 25 | R= 67.72 | EVENTS {'boss_hit': 1}
+  t= 74.9s SE+Z+B       V=  2.12 hp 2.0 | gohma 5hp floor_walk d 189 | larvae 0 | locked False held 4 seeds 25 | R= 67.70
+  t= 76.9s NE+Z+Sling   V=  2.54 hp 2.0 | gohma 5hp floor_walk d 366 | larvae 0 | locked False held 4 seeds 25 | R= 67.68
+  t= 78.9s N+Shield     V=  2.42 hp 2.0 | gohma 5hp floor_walk d 678 | larvae 0 | locked False held 15 seeds 25 | R= 67.66
+  t= 80.9s NW+Z+Shield  V=  3.26 hp 2.0 | gohma 5hp climb d 737 | larvae 0 | locked False held 4 seeds 25 | R= 67.64
+  t= 82.9s S+Sling      V=  3.56 hp 2.0 | gohma 5hp ceiling_move d 524 | larvae 0 | locked False held 4 seeds 25 | R= 67.62
+  t= 84.9s W+Z+B        V=  4.18 hp 2.0 | gohma 5hp ceiling_move d 441 | larvae 0 | locked False held 4 seeds 25 | R= 67.60
+  t= 86.9s W+Z+B        V=  4.67 hp 2.0 | gohma 5hp ceiling_spawn d 464 | larvae 0 | locked False held 4 seeds 25 | R= 67.58
+  t= 88.9s SE+B         V=  4.79 hp 2.0 | gohma 5hp ceiling_eye_red d 485 | larvae 0 | locked False held 15 seeds 25 | R= 67.56
+  t= 89.0s W+Z+A        V=  4.63 hp 2.0 | gohma 5hp ceiling_eye_red d 485 | larvae 0 | locked False held 4 seeds 25 | R= 67.56 | EVENTS {'dropped_shot': True}
+  t= 89.7s -+Z+Shield   V=  4.62 hp 2.0 | gohma 5hp ceiling_eye_red d 490 | larvae 0 | locked False held 4 seeds 25 | R= 67.55 | EVENTS {'dropped_shot': True}
+  t= 90.5s SE+Z+B       V=  4.57 hp 2.0 | gohma 5hp ceiling_eye_red d 491 | larvae 0 | locked False held 4 seeds 25 | R= 67.54 | EVENTS {'nut': 1}
+  t= 90.6s NE+Z+B       V=  4.43 hp 2.0 | gohma 5hp ceiling_idle d 491 | larvae 0 | locked False held 4 seeds 25 | R= 67.54 | EVENTS {'unfired_red_eye': True}
+  t= 92.6s NW+Z         V=  6.25 hp 2.0 | gohma 5hp ceiling_idle d 478 | larvae 0 | locked False held 15 seeds 25 | R= 66.92
+  t= 94.6s W+Shield     V=  7.20 hp 2.0 | gohma 5hp ceiling_idle d 456 | larvae 1 | locked False held 4 seeds 25 | R= 66.90
+  t= 96.6s E+Z          V=  7.67 hp 2.0 | gohma 5hp ceiling_idle d 505 | larvae 2 | locked False held 4 seeds 25 | R= 66.88
+  t= 96.8s NE+Sling     V=  7.59 hp 2.0 | gohma 5hp ceiling_idle d 505 | larvae 3 | locked False held 4 seeds 25 | R= 66.88 | EVENTS {'nut': 1}
+  t= 98.8s SW+Z+B       V=  7.97 hp 2.0 | gohma 5hp ceiling_move d 526 | larvae 3 | locked False held 4 seeds 25 | R= 66.21
+  t=100.8s NE+Z         V=  9.26 hp 2.0 | gohma 5hp ceiling_move d 759 | larvae 3 | locked False held 4 seeds 25 | R= 66.19
+  t=102.8s -+A          V= 10.68 hp 2.0 | gohma 5hp ceiling_spawn d 555 | larvae 3 | locked False held 15 seeds 25 | R= 66.17
+  t=103.8s S+Z+A        V=  7.19 hp 2.0 | gohma 5hp ceiling_move d 535 | larvae 3 | locked False held 4 seeds 25 | R= 66.16 | EVENTS {'nut': 1}
+  t=105.6s S+Z+B        V=  8.08 hp 2.0 | gohma 5hp ceiling_move d 654 | larvae 3 | locked False held 4 seeds 25 | R= 65.42 | EVENTS {'nut': 1}
+  t=107.6s N+B          V= 11.15 hp 2.0 | gohma 5hp ceiling_spawn d 506 | larvae 3 | locked False held 15 seeds 25 | R= 64.60
+  t=109.6s E+Z+Shield   V=  7.82 hp 2.0 | gohma 5hp ceiling_move d 488 | larvae 3 | locked False held 15 seeds 25 | R= 64.58
+  t=109.9s SW+Z+Shield  V=  7.01 hp 2.0 | gohma 5hp ceiling_move d 516 | larvae 3 | locked False held 15 seeds 25 | R= 64.58 | EVENTS {'nut': 1}
+  t=111.1s -            V=  8.90 hp 2.0 | gohma 5hp ceiling_move d 436 | larvae 3 | locked False held 4 seeds 25 | R= 64.16 | EVENTS {'larva_hit': 1}
+  t=111.5s SE+B         V=  8.52 hp 2.0 | gohma 5hp ceiling_move d 412 | larvae 3 | locked False held 4 seeds 25 | R= 64.16 | EVENTS {'nut': 1}
+  t=113.5s -+Z+A        V=  9.78 hp 2.0 | gohma 5hp ceiling_spawn d 446 | larvae 3 | locked False held 4 seeds 25 | R= 63.11
+  t=114.9s E+B          V=  9.58 hp 2.0 | gohma 5hp ceiling_move d 572 | larvae 2 | locked False held 4 seeds 25 | R= 66.10 | EVENTS {'larva_hit': 2, 'larva_kill': 'sword'}
+  t=116.3s S+Z+A        V=  9.70 hp 2.0 | gohma 5hp ceiling_move d 526 | larvae 2 | locked False held 4 seeds 25 | R= 66.08 | EVENTS {'nut': 1}
+  t=117.2s NE+B         V= 12.33 hp 2.0 | gohma 5hp ceiling_spawn d 436 | larvae 1 | locked False held 4 seeds 25 | R= 67.87 | EVENTS {'larva_hit': 2, 'larva_kill': 'sword'}
+  t=119.2s SE+Shield    V= 12.75 hp 2.0 | gohma 5hp ceiling_move d 473 | larvae 1 | locked False held 4 seeds 25 | R= 67.85
+  t=121.2s -+Z+Sling    V= 14.04 hp 2.0 | gohma 5hp ceiling_move d 429 | larvae 1 | locked False held 4 seeds 25 | R= 67.83
+  t=123.2s NE+Shield    V= 14.31 hp 2.0 | gohma 5hp ceiling_move d 406 | larvae 1 | locked False held 4 seeds 25 | R= 67.81
+  t=124.3s NW+Z+Sling   V= 15.16 hp 2.0 | gohma 5hp ceiling_move d 507 | larvae 0 | locked False held 4 seeds 25 | R= 70.30 | EVENTS {'larva_hit': 1, 'larva_kill': 'sword'}
+  t=126.3s SE+Z         V= 16.66 hp 2.0 | gohma 5hp ceiling_move d 426 | larvae 0 | locked False held 4 seeds 25 | R= 70.28
+  t=128.3s NW+Z+Sling   V= 18.45 hp 2.0 | gohma 5hp ceiling_spawn d 489 | larvae 0 | locked False held 4 seeds 25 | R= 70.26
+  t=128.8s NE           V= 18.87 hp 2.0 | gohma 5hp ceiling_spawn d 483 | larvae 0 | locked False held 15 seeds 25 | R= 70.26 | EVENTS {'nut': 1}
+  t=129.0s SW+B         V= 18.77 hp 2.0 | gohma 5hp fall d 481 | larvae 0 | locked False held 15 seeds 25 | R= 70.27 | EVENTS {'boss_stunned': True, 'nut_stun': True}
+  t=130.2s SW+Z+B       V= 19.53 hp 2.0 | gohma 5hp stunned_recover d 358 | larvae 0 | locked False held 15 seeds 25 | R= 70.87 | EVENTS {'nut': 1}
+  t=132.2s -+Z+A        V= 20.91 hp 2.0 | gohma 5hp floor_eye_close d 354 | larvae 0 | locked False held 4 seeds 25 | R= 69.45
+  t=134.2s NE           V= 20.73 hp 2.0 | gohma 5hp floor_walk d 193 | larvae 0 | locked False held 4 seeds 25 | R= 69.47
+  t=136.2s S+Nut        V= 17.72 hp 2.0 | gohma 5hp floor_eye_red d 160 | larvae 0 | locked False held 4 seeds 25 | R= 69.47
+  t=136.7s NW           V= 18.08 hp 1.5 | gohma 5hp floor_eye_red d 133 | larvae 0 | locked False held 4 seeds 25 | R= 67.54 | EVENTS {'link_damage': 8}
+  t=138.7s E+Nut        V= 18.08 hp 1.5 | gohma 5hp floor_walk d 194 | larvae 0 | locked False held 4 seeds 25 | R= 67.64
+  t=140.7s S+Z+Sling    V= 14.91 hp 1.5 | gohma 5hp floor_prepare d 146 | larvae 0 | locked False held 15 seeds 25 | R= 67.62
+  t=142.4s SE+Z         V= 12.44 hp 1.0 | gohma 5hp floor_eye_red d 114 | larvae 0 | locked False held 15 seeds 25 | R= 65.81 | EVENTS {'link_damage': 8}
+  t=143.4s SE+Shield    V= 10.27 hp 0.5 | gohma 5hp floor_eye_red d 85 | larvae 0 | locked False held 15 seeds 25 | R= 63.80 | EVENTS {'link_damage': 8}
+  t=144.2s SW+Nut       V=  5.96 hp 0.5 | gohma 5hp floor_eye_close d 33 | larvae 0 | locked False held 15 seeds 25 | R= 63.79 | EVENTS {'unfired_red_eye': True}
+  t=144.5s S+Nut        V=  7.24 hp 0.0 | gohma 5hp floor_eye_close d 16 | larvae 0 | locked False held 15 seeds 25 | R= 61.79 | EVENTS {'link_damage': 8}
+■ slot 5: DEATH | killed 0/1 at [] s | hearts lost 2.5 | return 61.8

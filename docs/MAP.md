@@ -8,7 +8,7 @@ fleet fan-out became a one-hour outage (see `AGENTS.md` §14). This file is the 
 
 | Task | Read | Why |
 |---|---|---|
-| **write a paper / cite a number / find a run** | **`PROVENANCE.md`**, then `paper/CLAIMS.md` | every number traced to an artefact with an evidence class; 23 W&B groups exported to `results/<run_id>/` so nothing depends on W&B; the U list is what must be closed first |
+| **write a paper / cite a number / find a run** | **`paper/paper.md`** is the current draft; **`PROVENANCE.md`**, then `paper/CLAIMS.md` | every number traced to an artefact with an evidence class; 23 W&B groups exported to `results/<run_id>/` so nothing depends on W&B; the U list is what must be closed first |
 | add a RAM field / observation | `ADDING_OBSERVATIONS.md`, `RAM_MAP.md` | offsets come from the OoT decomp, never recall; retail Player = decomp − 0x10 |
 | the **current** world model (tokens + attention) | `TOKEN_WORLD_MODEL.md` | `train_wm_tokens.py`: state in, state out. What is measured, what is confounded, what to run next |
 | train a WM at horizon / pick the next experiment | `WM_EXPERIMENT_REGIME.md` | the concluded teacher-forced → autoregressive regime: what it bought (positive through H5, nothing past it), the token WM regression, the saved checkpoints, and the next four experiments in order |

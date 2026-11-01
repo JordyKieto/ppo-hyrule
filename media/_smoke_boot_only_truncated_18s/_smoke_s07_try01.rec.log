@@ -1,0 +1,5 @@
+screenrec: stream stopped: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3821 "Stream was stopped by the system" UserInfo={NSLocalizedDescription=Stream was stopped by the system}
+screenrec: recording started
+screenrec: capturing Dolphin (pid 80790) on display 1 at 1280x800, 30 fps + audio -> media/_smoke/_smoke_s07_try01.mp4
+screenrec: stopping (process 80790 exited)
+screenrec: saved media/_smoke/_smoke_s07_try01.mp4

@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-11-01 by `paper/paper.md`** ("The Legend of PPO: Learning to Fight in
+> Hyrule"). Kept for the record; its section numbering and several of its figures were
+> overtaken, including the v11 trend it cites, which is withdrawn.
+
+---
+
 # Outline
 
 Working title: **Two negative results and one positive one, from learning Ocarina of Time from RAM.**

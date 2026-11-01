@@ -1,0 +1,6 @@
+screenrec: recording started
+screenrec: capturing Dolphin (pid 68841) on display 1 at 1280x800, 30 fps + audio -> /Users/jordy/Documents/dev/zelda-RL/media/deku-slot1/deku-slot1_s01_try01.part00.mp4
+screenrec: stream stopped: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3815 "Failed to find any displays or windows to capture" UserInfo={NSLocalizedDescription=Failed to find any displays or windows to capture}
+screenrec: segment /Users/jordy/Documents/dev/zelda-RL/media/deku-slot1/deku-slot1_s01_try01.part00.mp4
+screenrec: the system stopped the stream; restarting into the next segment
+screenrec: segments=1 complete

@@ -52,3 +52,7 @@ viz/out/
 assets/prefight/
 datasets/human/
 assets/mixed/
+
+# recorded gameplay: large binaries, mirrored to s3://zelda-rl/media/.
+# The logs, attempt manifests and play-by-play beside them ARE committed, because those are the evidence.
+media/**/*.mp4

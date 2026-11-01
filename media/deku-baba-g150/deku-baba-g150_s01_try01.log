@@ -1,0 +1,15 @@
+▶ checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt (update 120, combat, GRU memory) | slots [1] | sampled | real time
+
+── slot 1 ep 1: Link 3.0 hearts | targets 3
+  t=  0.0s SW+A         V= 37.17 hp 3.0 | babas 3/3 nearest 531 | locked False shield False | R= -0.00
+  t=  2.1s S            V= 40.05 hp 3.0 | babas 3/3 nearest 293 | locked False shield False | R=  1.10
+  t=  4.0s -+Z+A        V= 46.38 hp 3.0 | babas 3/3 nearest 125 | locked True shield False | R=  2.20 | EVENTS {'lockon': True}
+  t=  4.6s -+Z+A        V= 47.89 hp 2.5 | babas 3/3 nearest 46 | locked True shield False | R=  0.64 | EVENTS {'link_damage': 8, 'lockon': True}
+  t=  5.3s NE+Z+B       V= 43.86 hp 2.5 | babas 3/3 nearest 157 | locked False shield False | R=  0.52 | EVENTS {'lunge_hit': True}
+  t=  5.8s -+Z+A        V= 44.63 hp 2.5 | babas 3/3 nearest 158 | locked True shield False | R=  0.81 | EVENTS {'lockon': True}
+  t=  6.8s -+Z+A        V= 44.72 hp 2.5 | babas 3/3 nearest 164 | locked True shield False | R=  1.14 | EVENTS {'lockon': True}
+  t=  7.3s -+Z+A        V= 45.73 hp 2.5 | babas 3/3 nearest 157 | locked True shield False | R=  1.46 | EVENTS {'lockon': True}
+  t=  8.2s -+Z+A        V= 46.63 hp 2.5 | babas 2/3 nearest 323 | locked False shield False | R= 16.14 | EVENTS {'hit': 2, 'defeat': 1, 'kill_mult': 2.45}
+  t= 10.3s SE           V= 42.17 hp 2.5 | babas 2/3 nearest 183 | locked False shield False | R= 16.82
+  t= 10.5s -+Z+A        V= 45.25 hp 2.5 | babas 2/3 nearest 154 | locked True shield False | R= 17.23 | EVENTS {'lockon': True}
+  t= 11.4s -+Z+A        V= 48.49 hp 2.5 | babas 1/3 nearest 392 | locked False shield False | R= 33.27 | EVENTS {'hit': 2, 'defeat': 1, 'kill_mult': 2.79}

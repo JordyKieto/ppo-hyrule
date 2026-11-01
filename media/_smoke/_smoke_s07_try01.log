@@ -1,0 +1,9 @@
+▶ checkpoints/kept/gohma-kl-v15-r4_latest.pt (update 40, combat, GRU memory) | slots [7] | sampled | real time
+
+── slot 7 ep 1: Link 2.5 hearts | targets 1
+  t=  0.0s -+B          V= 38.43 hp 2.5 | gohma 5hp stunned d 38 | larvae 0 | locked True held 4 seeds 25 | R=  0.02
+  t=  0.4s -+A          V= 26.82 hp 2.5 | gohma 4hp stunned_hit d 38 | larvae 0 | locked True held 4 seeds 25 | R= 10.90 | EVENTS {'boss_hit': 1}
+  t=  1.1s W+Shield     V= 45.95 hp 2.5 | gohma 2hp stunned d 8 | larvae 0 | locked True held 4 seeds 25 | R= 35.98 | EVENTS {'boss_hit': 2}
+  t=  1.9s S+Z+B        V= 13.79 hp 2.5 | gohma 1hp stunned_hit d 27 | larvae 0 | locked False held 4 seeds 25 | R= 49.33 | EVENTS {'boss_hit': 1}
+  t=  3.2s S+Z+A        V= 10.06 hp 2.5 | gohma 0hp defeated d None | larvae 0 | locked False held 4 seeds 25 | R=291.03 | EVENTS {'boss_hit': 1, 'boss_defeat': True}
+■ slot 7: SUCCESS | killed 1/1 at [3.3] s | hearts lost 0.0 | return 291.0
