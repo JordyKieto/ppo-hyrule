@@ -172,7 +172,7 @@ def parse_args():
                     help="multiply the death penalty by this. 0 removes it. E39's ablation: removing the death "
                          "penalty delayed an equivalent collapse by ~10 updates. Our own slot-8 data has the "
                          "same signature -- 20%% death, 0 wins in 225 episodes, surviving by not engaging.")
-    ap.add_argument("--reward", choices=["full", "simple", "damage"], default="full",
+    ap.add_argument("--reward", choices=["full", "simple", "damage", "behaviour"], default="full",
                     help="gohma only. `simple` applies combat.GOHMA_SIMPLE: drops the entrance-era slingshot "
                          "shaping cluster and the distraction terms, and pays seed/nut stun credit only when "
                          "the stun is converted into damage. Every OUTCOME term is unchanged. See "
@@ -259,6 +259,16 @@ def main():
                     "gone), boss_defeat, timeout, death x --death-scale. %d shaping terms zeroed.",
                     CombatConfig().g_boss_hp_progress,
                     sum(1 for v in GOHMA_DAMAGE.values() if v == 0.0))
+    elif args.profile == "gohma" and args.reward == "behaviour":
+        from zelda_rl.combat import GOHMA_BEHAVIOUR, GOHMA_SIMPLE
+        profile_defaults = {**profile_defaults, **GOHMA_BEHAVIOUR}
+        changed = {k: v for k, v in GOHMA_BEHAVIOUR.items() if GOHMA_SIMPLE.get(k, getattr(CombatConfig(), k)) != v}
+        LOGGER.info("reward preset `behaviour`: `simple` plus the five watched behaviours -- %d weights "
+                    "changed vs `simple`: %s", len(changed),
+                    ", ".join(f"{k}={v}" for k, v in sorted(changed.items())))
+        LOGGER.info("reward preset `behaviour`: the red-eye slingshot cluster stays at ZERO on purpose "
+                    "(g_red_eye_seed, g_sling_red_eye, g_sling_ready, g_lock_red_eye, g_elevated_seed, "
+                    "g_unfired_red_eye, g_drop_red_eye_shot) -- it was removed on measurement, not forgotten")
     elif args.profile == "gohma" and args.reward == "simple":
         from zelda_rl.combat import GOHMA_SIMPLE
         profile_defaults = {**profile_defaults, **GOHMA_SIMPLE}
@@ -493,7 +503,18 @@ def main():
     # resolution to show a trend (AGENTS 34). succ is kept but is the LAST thing to read.
     band_hdr = (f" {'dmgB':>5} {'dmgH':>5} {'bal':>5} {'hard':>5} {'near':>5} {'mid':>5} {'far':>5} {'nz':>5}"
                 if args.profile == "gohma" else "")
-    hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
+    # One behaviour counter per behaviour the `behaviour` preset pays for, BESIDE the headline damage columns
+    # and never instead of them. They are dense where a defeat is a 1-10% binary, so they move first; if one
+    # of them has not moved after several updates, that term is not working and waiting will not fix it.
+    #   item = items collected/episode   hrt = hearts   grs = grass tufts cut   iapp = units closed to loot
+    #   face = fraction of her live steps spent facing her   fcos = mean alignment over those steps
+    #   lock = fraction of steps Z-locked   nutW = nuts wasted/episode   wst% = wasted / thrown
+    #   reSd = red-eye seeds fired   conv = seed stuns / red-eye seeds   s2sw = s from knockdown to sword
+    #   rch% = fraction of knockdowns Link reached at all
+    beh_hdr = (f" {'item':>5} {'hrt':>4} {'grs':>4} {'iapp':>5} {'face':>5} {'fcos':>5} {'lock':>5}"
+               f" {'nutW':>5} {'wst%':>5} {'reSd':>5} {'conv':>5} {'s2sw':>5} {'rch%':>5}"
+               if args.profile == "gohma" else "")
+    hdr = (f"{'upd':>4} {'steps':>9} {'eps':>5} {'succ':>5}{band_hdr}{beh_hdr} {'kill%':>6} {'death':>6} {'left':>5} "
            f"{'hpLost':>6} {'dmg':>5} {'lock':>5} {'blk':>4} {'return':>7} {'(out/shape)':>13} {'kl':>6} "
            f"{'ent':>5} {'sps':>5}" + (" klA" if args.kl_anchor else "")
            + ("   bcL   bcA    bcC" if bc is not None else "")
@@ -688,6 +709,35 @@ def main():
                     "gohma/sling_aim_steps": m("sling_aim_steps"), "gohma/sling_ready_steps": m("sling_ready_steps"), "gohma/elevated_seeds": m("elevated_seeds"), "gohma/seed_misses": m("seed_misses"), "gohma/nut_misses": m("nut_misses"),
                     "gohma/larva_kills_sling": m("larva_kills_sling"), "gohma/grass_cut": m("grass_cut"), "gohma/dropped_red_eye_shots": m("dropped_red_eye_shots"), "gohma/unfired_red_eye_windows": m("unfired_red_eye_windows"), "gohma/seeds_picked": m("seeds_picked"),
                     "gohma/nuts_picked": m("nuts_picked"),
+                    # ---- BEHAVIOUR COUNTERS, one per behaviour the `behaviour` preset pays for.
+                    # These are DENSE where a defeat is a 1-10% binary: on this task a graded signal showed an
+                    # 8.7x improvement across six versions that the binary reported as six consecutive
+                    # failures (AGENTS 34). They say within a handful of updates whether a term bites at all,
+                    # long before boss damage can, and they are emitted on EVERY arm -- a term only "works" if
+                    # its counter moves ABOVE what the untreated control already does for free.
+                    "gohma/items_picked": m("items_picked"), "gohma/hearts_picked": m("hearts_picked"),
+                    "gohma/item_approach_units": m("item_approach_units"),
+                    "gohma/nuts_wasted": m("nuts_wasted"),
+                    "gohma/nut_waste_frac": float(np.sum([e["nuts_wasted"] for e in eps]))
+                                            / max(1.0, float(np.sum([e["nuts_thrown"] for e in eps]))),
+                    # mean alignment over the steps where facing her can lead to something, and the fraction
+                    # of those steps actually spent facing her. Denominator is boss_live_steps, never episode
+                    # length: a ratio whose denominator moves with her ceiling phases is not comparable.
+                    "gohma/facing_cos": float(np.sum([e["facing_cos_sum"] for e in eps]))
+                                        / max(1.0, float(np.sum([e["boss_live_steps"] for e in eps]))),
+                    "gohma/facing_frac": float(np.sum([e["facing_steps"] for e in eps]))
+                                         / max(1.0, float(np.sum([e["boss_live_steps"] for e in eps]))),
+                    "gohma/lock_frac": float(np.sum([e["lock_steps"] for e in eps]))
+                                       / max(1.0, float(np.sum([e["length"] for e in eps]))),
+                    "gohma/red_eye_seed_conv": float(np.sum([e["seed_stuns"] for e in eps]))
+                                               / max(1.0, float(np.sum([e["red_eye_seeds"] for e in eps]))),
+                    # behaviour 5, measured directly: seconds from her knockdown to Link inside sword range,
+                    # over the windows he reached at all, plus the fraction of windows he reached.
+                    "gohma/stun_to_sword_s": (float(np.sum([e["stun_to_sword_steps"] for e in eps]))
+                                              / max(1.0, float(np.sum([e["stun_reached"] for e in eps])))
+                                              / ccfg.steps_per_second),
+                    "gohma/stun_reach_frac": float(np.sum([e["stun_reached"] for e in eps]))
+                                             / max(1.0, float(np.sum([e["stun_windows"] for e in eps]))),
                     "gohma/time_to_defeat_s": float(np.mean([e["time_to_defeat_s"] * args.vi_per_step / 60 for e in eps
                                                             if e["time_to_defeat_s"]])) if any(e["time_to_defeat_s"] for e in eps) else float("nan"),
                 })
@@ -751,8 +801,18 @@ def main():
                          f"{_pc('by_band/near/success_rate')} {_pc('by_band/mid/success_rate')} "
                          f"{_pc('by_band/far/success_rate')} "
                          f"{str(int(metrics.get('combat/slots_nonzero', 0))) + '/' + str(int(metrics.get('combat/slots_seen', 0))):>5}")
+            def _f(key, w=5, dp=2):
+                v = metrics.get(key)
+                return f"{v:>{w}.{dp}f}" if isinstance(v, float) and v == v else f"{'-':>{w}}"
+            beh_line = ("" if args.profile != "gohma" else
+                        f" {_f('gohma/items_picked')} {_f('gohma/hearts_picked', 4)} {_f('gohma/grass_cut', 4)}"
+                        f" {_f('gohma/item_approach_units', 5, 0)} {_pc('gohma/facing_frac')}"
+                        f" {_f('gohma/facing_cos')} {_pc('gohma/lock_frac')} {_f('gohma/nuts_wasted')}"
+                        f" {_pc('gohma/nut_waste_frac')} {_f('gohma/red_eye_seeds')}"
+                        f" {_pc('gohma/red_eye_seed_conv')} {_f('gohma/stun_to_sword_s', 5, 1)}"
+                        f" {_pc('gohma/stun_reach_frac')}")
             LOGGER.info(f"{update:>4} {global_step:>9,} {episode_count:>5} {metrics['combat/success_rate']:>5.0%}"
-                        f"{band_line} "
+                        f"{band_line}{beh_line} "
                         f"{metrics['combat/kill_frac']:>6.0%} {metrics['combat/death_rate']:>6.0%} {metrics['combat/left_room_rate']:>5.0%} "
                         f"{metrics['combat/hp_lost_hearts']:>6.2f} {metrics['combat/damage_dealt']:>5.2f} {metrics['combat/lockons']:>5.2f} "
                         f"{metrics['combat/blocks']:>4.1f} {metrics['episode/return']:>7.2f} "

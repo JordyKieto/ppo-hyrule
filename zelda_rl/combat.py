@@ -71,9 +71,39 @@ DEKU_BABA_STATE = {0x801EDF30: "hidden", 0x801EDFDC: "emerge_retract", 0x801EE44
 # Action-function field per (actor id, category); default = Deku Baba's +0x1B0. Found by scanning 20 Hz fight traces
 # (runs/manual/boss_*.jsonl) for code-pointer fields with few distinct values (docs/ADDING_OBSERVATIONS.md step 2).
 GRASS_ID = 0x0125                     # En_Kusa grass tuft (8 in Gohma's room; cut -> removed, may drop seeds/nuts/hearts)
+# ---- dropped collectibles (En_Item00). EVERY constant below is read out of the OoT decompilation, not recall
+# (AGENTS 3), and `tests/test_gohma_behaviour_reward.py::test_item00_constants_match_the_decomp` pins them:
+#   src/code/z_en_item00.c   `En_Item00_Profile = { ACTOR_EN_ITEM00, ACTORCAT_MISC, ... }`  -> list 8
+#   include/actor_profile.h  `ACTORCAT_SWITCH..ACTORCAT_MAX`                                -> MISC == 8
+#   include/z_en_item00.h    `typedef enum Item00Type`                                      -> the types below
+# `EnItem00_Init` does `this->actor.params &= 0xFF` (z_en_item00.c), so the LIVE value at Actor +0x1C is the
+# Item00Type itself with no shift to undo -- which is why `params & 0xFF` is the right read mid-episode.
+ACTORCAT_MISC = 8
+EN_ITEM00 = 0x0015
+ITEM00_RUPEE_GREEN, ITEM00_RUPEE_BLUE, ITEM00_RUPEE_RED, ITEM00_RECOVERY_HEART = 0x00, 0x01, 0x02, 0x03
+ITEM00_HEART_PIECE, ITEM00_HEART_CONTAINER = 0x06, 0x07
+ITEM00_NUTS, ITEM00_STICK, ITEM00_SEEDS = 0x0C, 0x0D, 0x10
+# What the policy is being paid to walk toward. Deliberately NOT every Item00Type: the Gohma room's drops come
+# from grass tufts, larvae and Gohma herself, and these are the four that are worth something in a boss fight.
+ITEM00_WANTED = frozenset({ITEM00_RECOVERY_HEART, ITEM00_NUTS, ITEM00_SEEDS, ITEM00_STICK})
 GOHMA_ID = 0x0028                     # Boss_Goma (category 9) and its larvae/eggs/debris En_Goma share this id in RAM
 ACTION_FN_OFFSET = {(GOHMA_ID, 9): 0x180, (GOHMA_ID, 5): 0x2A0}
 BABA_STATES = ["hidden", "emerge_retract", "idle", "prepare_lunge", "lunge", "pull_back", "hit", "stunned", "dying", "other"]
+
+
+@dataclass
+class Collectible:
+    """A dropped En_Item00 on the floor: a recovery heart, Deku Nuts, slingshot seeds or a Deku Stick.
+
+    These are NOT in `CombatState.enemies`, which reads only ACTORCAT_ENEMY and ACTORCAT_BOSS. They reach the
+    POLICY through the 16-row actor table (`zelda_rl/obs.py::featurize_v2`), where a collectible is row
+    `id`=0x0015, `category_onehot[8]`, `params_low`=type/255, plus its relative position and distance -- and
+    in obs v7 the camera- and body-frame positions on top. The reward needs them in `CombatState` as well,
+    because `GohmaTracker` cannot see the observation.
+    """
+    ptr: int
+    kind: int                                           # Item00Type (Actor +0x1C & 0xFF)
+    pos: tuple[float, float, float]
 
 
 @dataclass
@@ -92,6 +122,7 @@ class CombatState:
     seeds: int = 0                      # slingshot seeds (save ctx ammo slot 6)
     nuts: int = 0                       # Deku nuts (ammo slot 1)
     grass: int = -1                     # grass tufts (En_Kusa 0x0125, prop list) still standing; -1 = not read
+    items: dict = field(default_factory=dict)   # ptr -> Collectible, dropped loot (En_Item00, ACTORCAT_MISC)
     # --- Link body / collision / action state. Offsets from the OoT decomp (see LINK_FIELD_OFFSETS).
     # Defaults are inert so a CombatState rebuilt from decoder output (zelda_rl/dream_state.py) still works.
     shape_yaw: int = 0                  # Actor +0xB6: rendered facing, differs from world yaw mid-turn
@@ -164,7 +195,7 @@ def read_combat_state(ram) -> CombatState:
         targeted=_u32(ram, TARGETED_ACTOR), arrow=_u32(ram, ARROW_ACTOR), enemies=enemies,
         held_item=struct.unpack_from(">b", ram, (player + 0x141) & 0x3FFFFF)[0] if ok else 0,
         seeds=int(ram[(SAVE_CTX + 0x8C + 6) & 0x3FFFFF]), nuts=int(ram[(SAVE_CTX + 0x8C + 1) & 0x3FFFFF]),
-        grass=_count_actors(ram, 6, GRASS_ID),
+        grass=_count_actors(ram, 6, GRASS_ID), items=_read_items(ram),
         **(_read_link_body(ram, player) if ok else {}), **_read_camera(ram),
     )
 
@@ -236,6 +267,22 @@ def _read_camera(ram) -> dict:
     return {"cam_yaw": math.atan2(dz, dx),
             "cam_pitch": math.atan2(dy, math.hypot(dx, dz)),
             "cam_eye": eye}
+
+
+def _read_items(ram) -> dict[int, Collectible]:
+    """Dropped collectibles, from the ACTORCAT_MISC actor list only.
+
+    One list, not all twelve: `En_Item00_Profile`'s category is `ACTORCAT_MISC` in the decomp, so a
+    collectible can only ever be in list 8. Walking all twelve (as obs.py does, because it wants every actor)
+    would cost ~12x for nothing.
+    """
+    out: dict[int, Collectible] = {}
+    a, guard = _u32(ram, PLAY_STATE + 0x1C24 + 0x10 + ACTORCAT_MISC * 8), 0
+    while 0x80000000 <= a < 0x80400000 and guard < 64:
+        if _u16(ram, a) == EN_ITEM00:
+            out[a] = Collectible(a, _u16(ram, a + 0x1C) & 0xFF, _vec3(ram, a + 0x24))
+        a, guard = _u32(ram, a + 0x124), guard + 1
+    return out
 
 
 def _count_actors(ram, cat: int, actor_id: int) -> int:
@@ -379,6 +426,28 @@ class CombatConfig:
     #   knob -- the term's strength -- not two variables.
     #
     #   Default 0.0 keeps every earlier run reproducible.
+    # ---- the five behaviours the author identified by WATCHING v15 play (2026-11-01). Every field here
+    # defaults to 0.0 / inert so `full`, `simple` and `damage` all reproduce bit-for-bit; the `behaviour`
+    # preset (GOHMA_BEHAVIOUR) is the only thing that turns them on. See that preset for the coefficients and
+    # the evidence behind each one.
+    g_item_approach: float = 0.0       # per 100 units of NET horizontal progress toward the nearest WANTED
+    g_item_approach_cap: float = 1.5   #   dropped collectible. Net progress PER ITEM POINTER, exactly the
+    #   monotone form g_approach uses: the total is bounded by the distance at which each item was first seen,
+    #   so walking away and back cannot be farmed. A signed per-step delta would be farmable and `_capped`
+    #   drops negatives, which would make the retreat half free -- the shape this project has already paid
+    #   for twice (g_sling_ready, g_spacing). Asserted in tests/test_gohma_behaviour_reward.py.
+    # NO new term for collecting a heart: `g_link_heal` already pays per HP unit regained and is LIVE under
+    # every preset, so "pay more for hearts" is that coefficient and nothing else. `hearts_picked` is still
+    # counted, because a counter and a reward term are different things and the author asked for the counter.
+    g_nut_wasted: float = 0.0          # penalty per Deku Nut thrown where it CANNOT convert: while she is in
+    g_nut_range: float = 220.0         #   a state measured at 0% conversion, or beyond nut range. UNCAPPED,
+    #   like g_nut_miss and g_seed_miss -- a capped penalty makes every later waste free.
+    g_facing: float = 0.0              # per step facing GOHMA (cos > g_facing_cos) within g_facing_range,
+    g_facing_cap: float = 1.5          #   while she is in a state where facing her can lead to anything.
+    g_facing_cos: float = 0.7          #   Gohma only, never a larva: larva hits correlate -0.598 with damage
+    g_facing_range: float = 600.0      #   dealt in the 100-win corpus, so paying to face "the nearest target"
+    #   would pay for the add-fighting that already fills the ceiling phases. A per-step condition under a
+    #   per-episode cap cannot be farmed by oscillating: leaving the condition strictly reduces paid steps.
     g_stun_on_convert: bool = False    # pay seed_stun / nut_stun only when that stun is CONVERTED into damage.
     #   Default False keeps the measured baseline reproducible; the `simple` preset turns it on. Paying at the
     #   stun TRANSITION rewards the stun itself, so a policy can farm stuns it never cashes in: measured
@@ -650,6 +719,95 @@ GOHMA_SIMPLE: dict[str, float | bool] = {
     # almost no power to show a trend -- while boss damage, which had been climbing 0.38 -> 3.32 across
     # v10..v15, said the opposite. See AGENTS 34.
     "g_approach": 0.0,
+}
+
+
+# ---------------------------------------------------------------------------------------------------------
+# GOHMA_BEHAVIOUR: `simple`, plus the five behaviours the author identified by WATCHING v15 play (2026-11-01).
+#
+# This is GOHMA_SIMPLE with ten weights changed. It is a COMBINED treatment: five behaviours move at once, so
+# when it lands no individual term can be credited, and that cost is accepted deliberately to get one answer
+# instead of five runs. Nothing in the result may later be attributed to a single term.
+#
+# THREE of the five needed no new code at all. The terms already existed and `simple` zeroed them -- the same
+# shape as `w_approach`, which never fired on Gohma for fourteen versions because GohmaTracker.step replaces
+# CombatTracker.step without calling super(). What is genuinely new is three terms: g_item_approach (nothing
+# paid for WALKING TOWARD loot; the pickups were paid, the approach was not), g_nut_wasted and g_facing.
+#
+#   behaviour                      how it is done here
+#   1 farm items / hearts          RE-ENABLE g_grass_cut, g_seed_pickup, g_nut_pickup; RAISE g_link_heal;
+#                                  NEW g_item_approach
+#   2 stop wasting Deku Nuts       NEW g_nut_wasted (state-gated); g_nut_miss 0.3 left ALONE
+#   3 lock on and shoot            RE-ENABLE w_lockon, w_lock_step. The slingshot half is NOT restored: see
+#                                  "WHY THE RED-EYE CLUSTER STAYS AT ZERO" below
+#   4 face what you are fighting   NEW g_facing
+#   5 rush in when she is stunned  ALREADY EXISTS and ALREADY FIRES: w_approach -> approach_stunned, measured
+#                                  non-zero in 53.8% of 5,610 logged episodes at +0.735/episode, and
+#                                  sword_ready_stunned in 50.1%. Weights RAISED; no term added
+#
+# WHY THE RED-EYE CLUSTER STAYS AT ZERO, which is a decision against the author's stated behaviour 3 and is
+# recorded here so it is not mistaken for an oversight. The six positive slingshot terms were not forgotten,
+# they were removed ON MEASUREMENT: over 10,929 engaged episodes of v10, shaping was 88% of total reward
+# magnitude, `g_red_eye_seed` alone paid +8.34/episode against `boss_defeat`'s +1.98, the policy optimised
+# red-eye aim to 3.36x chance and kept improving, and it still died 64.5% of the time with her at 8 of 10 HP.
+# Across 360 wins, seed stuns were 0.05 per defeat against nut stuns 2.53. Meanwhile `g_seed_stun` is 15.0
+# and is LIVE under `simple`, gated on conversion: the red-eye shot is already the largest shaping term in
+# the reward. So the red-eye shot is not under-REWARDED, it is under-EXECUTED, and paying more for it is a
+# measured failure at n=10,929. One watched episode (media/gohma-slot5/PLAY_BY_PLAY.md: 4 seeds from 26
+# carried, 3 shots dropped at a red eye, 1 window passed up) is a mechanism to aim at, not a measurement
+# that overturns it -- a single episode is a last-k mean with k=1 (AGENTS 38).
+#
+# Also NOT restored, and this is the author's call rather than mine: `g_unfired_red_eye` (-1.5) and
+# `g_drop_red_eye_shot` (-1.0), the two PENALTIES for passing up a red-eye window. They are the only members
+# of that cluster that cannot be farmed by waiting -- waiting is what triggers them -- and the watched episode
+# incurred four of them at zero cost. Left at 0 anyway, because restoring them is a sixth change inside a
+# five-change experiment and one authorisation is one experiment (AGENTS 13.5). Proposed as its own arm.
+#
+# NOT CHANGED, deliberately, though the corpus argues for it: `g_larva_damage` 0.5 / `g_larva_kill` 2.0 stay
+# at v15's values on BOTH arms, even though larva hits correlate -0.598 with damage dealt across the 100-win
+# corpus and the watched episode spent all three ceiling phases fighting adds. Lowering them is a sixth
+# change. Proposed, not shipped.
+#
+# SCALE. New shaping ceiling is ~1.5 (item approach) + 1.0 (grass) + 1.5 (pickups) + ~2.5 extra heal + 2.4
+# (lockons) + 1.0 (lock hold) + 1.5 (facing) + ~1.5 extra on the stun machinery = about +13 per episode,
+# against outcomes of boss_damage 40 + hp progress 44 + boss_defeat 60 = 144. ~9%, against the 88% that the
+# v10 cluster reached. Every positive term here is capped per episode; the one penalty is uncapped, because a
+# capped penalty makes every later waste free.
+GOHMA_BEHAVIOUR: dict[str, float | bool] = {
+    **GOHMA_SIMPLE,
+    # ---- 1. farm items, hearts especially. `simple` zeroed all three pickup channels as "distractions from a
+    # boss fight"; the measured fight says the opposite -- she is unreachable for 67% of the episode and the
+    # policy spent 134 of 191 seconds taking damage down to half a heart while collecting nothing.
+    "g_grass_cut": 0.2, "g_grass_cut_cap": 1.0,       # shipped value; cap 6.0 -> 1.0. Grass is the SOURCE of
+    #   the drops (En_Kusa drops seeds/nuts/hearts) and the policy has cut exactly 0 tufts in 5,610 logged
+    #   episodes, so this term has never once paid out. 5 tufts of the room's 8 reaches the cap.
+    "g_seed_pickup": 0.05, "g_nut_pickup": 0.15, "g_pickup_cap": 1.5,   # shipped values, cap 6.0 -> 1.5
+    "g_link_heal": 0.25,                               # 0.1 -> 0.25. At 16 HP units per heart that is +4.00
+    #   per heart, which is EXACTLY what `w_link_damage` 0.25 charges for losing one. Symmetry is the whole
+    #   argument for the number: a heart recovered is worth what a heart lost costs, and no more, so healing
+    #   can never pay better than not being hit. This replaces a separate heart term -- g_link_heal is live
+    #   under every preset, so "pay more for hearts" is this coefficient and nothing else.
+    "g_item_approach": 0.3, "g_item_approach_cap": 1.5,   # NEW. 0.3 per 100 units of net progress, so the cap
+    #   binds after 500 units of closing -- about the width of the room, i.e. the gradient survives all the
+    #   way to a pickup from anywhere Link can be. Sized below g_approach's 0.5 because loot is a side errand.
+    # ---- 2. stop wasting Deku Nuts. g_nut_miss 0.3 (realised waste: no stun followed) is LEFT ALONE; this is
+    # the PREDICTABLE half -- a nut thrown where it provably cannot convert.
+    "g_nut_wasted": 0.5,                               # NEW, uncapped. v10 threw 5.64 nuts/episode for 3.01
+    #   misses (-2.20/episode of g_nut_miss) and the watched episode threw 13 for 4 stuns. At 0.5 a wholly
+    #   wasted nut budget costs about what g_nut_miss already costs, i.e. this doubles the existing pressure
+    #   rather than inventing a new scale, and it does so BEFORE the outcome instead of after.
+    # ---- 3. lock on. 15% of ticks in the watched episode against the human corpus's 63%, 8 acquisitions in a
+    # three-minute fight. These two terms exist and `simple` zeroed them; the shipped values are restored.
+    "w_lockon": 0.3, "w_lock_step": 0.005,
+    # ---- 4. face what you are fighting.
+    "g_facing": 0.01, "g_facing_cap": 1.5,             # NEW. Episodes run ~1,570 steps, so the cap binds after
+    #   150 facing steps -- under 10% of an episode. Deliberately a nudge: the counter is the point, and a
+    #   per-step positional term that can pay for a whole episode is how g_spacing was farmed.
+    # ---- 5. rush in when she is stunned. The terms EXIST and FIRE; only the weights move.
+    "w_approach": 1.0,                                 # 0.5 -> 1.0 (approach_stunned). Measured firing at
+    #   +0.735/episode at 0.5, i.e. ~147 units of closing while she is down, under a +/-0.5 per-step clip.
+    "g_sword_ready": 0.04, "g_sword_ready_cap": 2.0,   # 0.02 / 1.0 -> 0.04 / 2.0. Measured at +0.271 of a 1.0
+    #   cap, i.e. 27% realised, so the term is active and the behaviour is not.
 }
 
 

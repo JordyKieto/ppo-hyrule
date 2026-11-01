@@ -20,7 +20,8 @@ import math
 
 import numpy as np
 
-from zelda_rl.combat import (DEKU_BABA, GOHMA_ID, SF1_SHIELD, CombatState, CombatTracker, Enemy, Track)
+from zelda_rl.combat import (DEKU_BABA, GOHMA_ID, ITEM00_RECOVERY_HEART, ITEM00_WANTED, SF1_SHIELD,
+                             CombatState, CombatTracker, Enemy, Track)
 from zelda_rl.obs import POS_SCALE
 
 SF1_ITEM_OUT, SF1_READY_TO_FIRE, SF1_FIRST_PERSON = 3, 9, 20
@@ -59,6 +60,25 @@ GOHMA_STUNNED = {"fall", "land", "stunned", "stunned_hit"}          # knocked do
 GOHMA_ATTACK = {"floor_prepare", "floor_eye_red", "floor_eye_close"}   # Link took hits from her in these (block credit)
 GOHMA_CEILING = {"ceiling_wait", "ceiling_idle", "ceiling_move", "ceiling_spawn", "ceiling_eye_red"}
 GOHMA_PRE_RED = {"floor_prepare", "floor_eye_opening", "ceiling_spawn"}   # the eye turns red next (seen in every recording)
+
+# States in which a projectile landing on her is MEASURED to convert to a knockdown 0% of the time. Derived
+# from the 100-win corpus by scripts/mine_slingshot.py ("WHAT AN IMPACT BUYS", 371 impacts):
+#
+#   ceiling_idle   38 impacts   stun followed   0.0%      floor_prepare   21   95.2%
+#   ceiling_move   33 impacts   stun followed   0.0%      fall           129  100.0%
+#   ceiling_wait    1 impact    stun followed   0.0%      stunned         56  100.0%
+#   climb           1 impact    stun followed   0.0%      ceiling_eye_red 32   40.6%
+#
+# The decision-grade part is ceiling_idle + ceiling_move: 71 impacts, zero conversions. ceiling_wait and
+# climb are included because they are the same mechanism (her eye is shut) and their n is 1 each, not because
+# they were measured. ceiling_eye_red is deliberately NOT here -- it converts 40.6%, which is the second best
+# number in the table and the whole point of the slingshot.
+#
+# For the DEKU NUT the same conclusion comes from a different measurement: docs/GOHMA_TASK.md records nuts
+# stunning her in every FLOOR state (walking, winding up, eye shut, eye red) and "nuts never stunned her on
+# the ceiling", plus a live probe where a nut at 190 units while she walked did nothing. So a nut thrown at a
+# ceiling Gohma is spent for certain, which is what g_nut_wasted penalises.
+GOHMA_NO_CONVERT = {"ceiling_idle", "ceiling_move", "ceiling_wait", "climb"}
 
 # Larva (En_Goma) action functions, offset from its update function.
 LARVA_STATE = {
@@ -153,6 +173,17 @@ class GohmaTracker(CombatTracker):
         # Closest Link has been to Gohma this episode, seeded from the START distance. Seeding it to infinity
         # made the first step bank the whole cap with Link standing still -- caught by tests/test_gohma_approach.py.
         self._d_best = hdist(g.pos, s.pos) if g else math.inf
+        # Per-item closest approach, seeded from the distance at which each item is FIRST seen -- the same
+        # anti-farming shape as _d_best, and seeded rather than set to infinity for the same reason (an
+        # infinite seed makes the first step bank the whole cap with Link standing still; that bug was caught
+        # on g_approach by tests/test_gohma_approach.py and would recur here verbatim).
+        self._item_best = {p: hdist(it.pos, s.pos) for p, it in getattr(s, "items", {}).items()}
+        self._stun_onset_t = None                 # step at which the current knockdown began
+        self._stun_reached = False                # has Link been inside sword range during THIS knockdown
+        self._healing = False                     # HP rose on the previous step: one credit per heart
+        self.ep.update(items_picked=0, hearts_picked=0, nuts_wasted=0, facing_steps=0, facing_cos_sum=0.0,
+                       boss_live_steps=0, item_approach_units=0.0, stun_windows=0, stun_reached=0,
+                       stun_to_sword_steps=0)
         self._r = {}                              # running totals of capped shaping terms
         self.pending_shots: list[dict] = []
         self.window = None
@@ -286,6 +317,11 @@ class GohmaTracker(CombatTracker):
                 if gs in GOHMA_STUNNED and self.g_prev_state not in GOHMA_STUNNED and gs != "stunned_hit":
                     ep["stuns"] += 1
                     ev["boss_stunned"] = True
+                    # The DIRECT measure of behaviour 5: how long from her going down to Link being in sword
+                    # range. A counter, not a reward -- approach_stunned / sword_ready_stunned already pay for
+                    # this and have fired in 53.8% / 50.1% of 5,610 logged episodes.
+                    ep["stun_windows"] += 1
+                    self._stun_onset_t, self._stun_reached = self.t, False
                     recent = self.last_seed_t is not None and self.t - self.last_seed_t <= c.g_seed_window_steps
                     recent_nut = self.last_nut_t is not None and self.t - self.last_nut_t <= c.g_nut_window_steps
                     if recent and self.seed_state in GOHMA_VULNERABLE:   # knocked down right after a red-eye seed = eye hit
@@ -300,6 +336,9 @@ class GohmaTracker(CombatTracker):
                         self._stun_credit(pay, ep, "nut")
                 if self.g_prev_state in GOHMA_STUNNED and gs not in GOHMA_STUNNED:
                     self._pending_stun = None        # she recovered un-hit: the stun was never cashed in
+                    self._stun_onset_t = None        # a window Link never reached contributes no TIME, only
+                    #   a miss in (stun_windows - stun_reached) -- averaging unreached windows in as "slow"
+                    #   would silently mix two different failures.
                 if gs in GOHMA_ATTACK and self.g_prev_state not in GOHMA_ATTACK:
                     ep["boss_attacks"] += 1
                     self.attack_cycle = {"shield": False, "dmg": 0}
@@ -344,6 +383,19 @@ class GohmaTracker(CombatTracker):
             self.last_nut_t = self.t
             ev["nut"] = n
             self.pending_shots += [{"kind": "nut", "t": self.t, "left": cur.nuts}] * n
+            # WASTED: thrown where a nut provably cannot convert. Two measured conditions, see GOHMA_NO_CONVERT
+            # -- she is in a 0%-conversion state (every one of them is a ceiling state, and nuts have never
+            # stunned a ceiling Gohma), or she is out of nut range. Counted even when the coefficient is 0 so
+            # the waste FRACTION is measurable on the control arm too.
+            if g is not None:
+                wasted = gs in GOHMA_NO_CONVERT or gs in GOHMA_CEILING or hdist(g.pos, cur.pos) > c.g_nut_range
+            else:
+                wasted = True                                    # no Gohma in the room at all
+            if wasted:
+                ep["nuts_wasted"] += n
+                ev["nut_wasted"] = n
+                if c.g_nut_wasted > 0:
+                    pay("nut_wasted", -c.g_nut_wasted * n, "shape")   # UNCAPPED: see g_nut_wasted
         # shots that hit nothing in their window are misses: penalty grows as that ammo runs out
         for shot in [sh for sh in self.pending_shots if self.t - sh["t"] > (c.g_seed_window_hit_steps if sh["kind"] == "seed" else c.g_nut_window_steps)]:
             self.pending_shots.remove(shot)
@@ -377,6 +429,32 @@ class GohmaTracker(CombatTracker):
             ep["nuts_picked"] += n
             self._capped(pay, "resource_pickup", c.g_nut_pickup * n * (c.g_nut_scarcity + 4) / (prev.nuts + 4), c.g_pickup_cap)
 
+        # ---- dropped loot: walk toward it. NET progress per item, bounded by where each item was first seen.
+        # NOT gated on Gohma's state, deliberately and unlike g_facing: the measured problem is that she is
+        # unreachable for 67% of the episode (media/gohma-slot5/PLAY_BY_PLAY.md, 134 s of 191 in which her HP
+        # does not move), and collecting the loot that the larvae and the grass have dropped is the one useful
+        # thing available in that time. The same episode took 32 hits, fell to half a heart and collected
+        # nothing. Larvae are never paid for here -- only En_Item00 collectibles.
+        items_now = getattr(cur, "items", {}) or {}
+        for p, it in items_now.items():
+            if it.kind not in ITEM00_WANTED:
+                continue
+            d = hdist(it.pos, cur.pos)
+            if not math.isfinite(d):
+                continue
+            best = self._item_best.get(p)
+            if best is None:
+                self._item_best[p] = d                       # first sight: seed, never pay on the same step
+                continue
+            if d < best:
+                ep["item_approach_units"] += best - d
+                self._item_best[p] = d
+                if c.g_item_approach > 0:
+                    self._capped(pay, "item_approach", c.g_item_approach * (best - d) / 100.0, c.g_item_approach_cap)
+        for p in [p for p in self._item_best if p not in items_now]:
+            self._item_best.pop(p)                           # gone (collected, or despawned on its own timer)
+        ep["items_picked"] = ep["seeds_picked"] + ep["nuts_picked"] + ep["hearts_picked"]
+
         # ---- Link health
         ep["hp_end"] = max(cur.hp, 0)
         dhp = cur.hp - prev.hp
@@ -388,6 +466,12 @@ class GohmaTracker(CombatTracker):
         elif dhp > 0 and not prev.dead:
             pay("link_heal", c.g_link_heal * dhp, "out")
             ep["hp_healed"] += dhp
+            # One credit per heart, not per step: a recovery heart adds 16 HP units over several frames, so
+            # counting every rising step would multiply one heart into four. There is no other healing source
+            # in the boss room (no bottle, no fairy), so an HP rise IS a collected heart.
+            if not self._healing:
+                ep["hearts_picked"] += 1
+        self._healing = dhp > 0        # unconditional: a hit between two healing steps must not split a heart
         if self.attack_cycle is not None:
             self.attack_cycle["dmg"] += max(0, -dhp)
             self.attack_cycle["shield"] |= cur.bit(SF1_SHIELD) and g is not None and self._facing(cur, g) > 0.5
@@ -432,6 +516,26 @@ class GohmaTracker(CombatTracker):
                     ep["close_attack_steps"] = ep.get("close_attack_steps", 0) + 1   # the failure counter
                 else:
                     ep["far_attack_steps"] = ep.get("far_attack_steps", 0) + 1       # hiding, unpaid
+            # ---- FACING her. Behaviour 4: "rewarded for facing what he is fighting."
+            # GOHMA only, never a larva (larva hits correlate -0.598 with damage dealt in the 100-win corpus,
+            # so a "nearest target" version would pay for the add-fighting that already fills her ceiling
+            # phases). Gated on her being in a state where facing her can lead to something: GOHMA_NO_CONVERT
+            # is her eye-shut ceiling crawl, and paying to stare at it would pay most during the 67% of the
+            # episode that is already unproductive. ceiling_eye_red is NOT excluded -- facing a red ceiling
+            # eye is exactly the moment that matters.
+            #
+            # NOT the same thing as `w_shield_face`, which is live at 0.01 but is (a) never paid by this
+            # tracker at all -- `shield_face` appears in zero of 5,610 logged episodes' r_parts -- and (b)
+            # requires the SHIELD bit, set in 0.00% of 17,182 frames of human play, within `shield_radius`
+            # 150, a Deku Baba number Link is inside for 5.62% of steps against a boss.
+            d_face = hdist(g.pos, cur.pos)
+            if gs not in GOHMA_NO_CONVERT and math.isfinite(d_face) and d_face <= c.g_facing_range:
+                ep["boss_live_steps"] += 1
+                aim_c = link_aim(cur, g.focus)[0]
+                ep["facing_cos_sum"] += aim_c
+                if locked or aim_c > c.g_facing_cos:
+                    ep["facing_steps"] += 1
+                    self._capped(pay, "facing", c.g_facing, c.g_facing_cap)
             shielded = cur.bit(SF1_SHIELD)
             if locked and shielded:
                 ep["guard_steps"] = ep.get("guard_steps", 0) + 1     # diagnostic: counted whether or not paid
@@ -477,6 +581,12 @@ class GohmaTracker(CombatTracker):
                     pay("approach_stunned", float(np.clip(c.w_approach * (d0 - d1) / 100.0, -0.5, 0.5)), "shape")
                 if cur.held_item == HELD_SWORD and d1 < c.g_sword_range:
                     self._capped(pay, "sword_ready_stunned", c.g_sword_ready, c.g_sword_ready_cap)
+                # behaviour 5's counter: steps from this knockdown's onset to Link first inside sword range.
+                if (not self._stun_reached and self._stun_onset_t is not None
+                        and hdist(g.pos, cur.pos) <= c.g_sword_range):
+                    self._stun_reached = True
+                    ep["stun_reached"] += 1
+                    ep["stun_to_sword_steps"] += self.t - self._stun_onset_t
         pay("time_penalty", -c.time_penalty, "shape")
         r = acc["out"] + acc["shape"]
         ep["return"] += r
