@@ -2429,3 +2429,22 @@ from matching itself, but the waiting shell's argv also contained the **payload*
 `-m fleet preflight` of the command it had not yet run. So the bracket trick is necessary and not sufficient:
 corroborate with `ps -eo command | grep "[f]leet preflight"` filtered of the waiting shells, or better with the
 artefact (does the output file exist yet). I had cited §23 to myself minutes earlier.
+
+### 18.7 A §20 violation still in `fleet launch`, found by watching the clock
+
+`fleet launch`'s `prepare` does this, unconditionally, per pod:
+
+```python
+init = re.search(r"--init-from\s+(\S+)", a.train_args or "")
+if init and "{rank}" not in init.group(1) and (REPO / init.group(1)).is_file():
+    rsync(pod, [str(REPO / rel)], f"{R_REPO}/{rel}")        # 8.2 MB, from the MAC
+```
+
+So the treatment launch pushed **29 x 8.2 MB = 238 MB up a ~0.7 MB/s link, about 6 minutes**, to put a file
+on every pod that `fleet ckpt` had already put there by presigned S3 GET **24 seconds earlier and verified by
+`stat`**. `fleet ckpt` exists precisely to avoid this (§20, written the night §15 was broken by
+`push_policies`), and `fleet launch` silently undoes it.
+
+**Not fixed in this session, deliberately**: the repo is being rsynced to 33 pods, and editing it mid-push is
+what cost rank 26 its bootstrap (§18.6). The fix is to skip the rsync when the remote file already matches by
+size — the same `stat` comparison `fleet ckpt` already does. Proposed, with the measurement above.
