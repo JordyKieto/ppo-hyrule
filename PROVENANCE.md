@@ -1787,8 +1787,11 @@ v15, 20/21/22/23 = RvS). **456 episodes per arm, 76 per slot, complete.** Rows:
 | boss damage (of 10) | **3.526 ± 0.137** | 1.311 ± 0.081 |
 
 Defeat rate: two-proportion **z = +2.76** for v15. Boss damage, the graded headline (§34): **+2.215 ± 0.159,
-t = +13.91**. Per slot, v15 wins on 3/4/5/6/7 and RvS only on 5/7; off the easy slot (7) v15 averages 4.26 HP
-to RvS's 0.88, ~4.8× broader.
+t = +13.91**. Per slot, v15 wins on 3/4/5/6/7 and RvS only on 5/7; off the easy slot (7) v15 averages **3.479** HP
+to RvS's 0.882, **3.95×** broader. **CORRECTED 2026-11-01:** this line read "4.26 HP ... ~4.8×" and was
+wrong. Recomputed over the 760 non-slot-7 rows of `results/mateval300/`; no subset of slots yields 4.26 for
+v15 (the nearest, 4.303, includes the easy slot). The error propagated into `paper/paper.md` §6.4 before an
+adversarial review recomputed it from the rows. **M**.
 
 **Conclusion: PPO (v15) beats offline Dyna-RvS decisively at matched instruments**, and the gap is far larger
 on the graded metric than the binary one — 14 SE versus 2.8. The earlier "RvS is not separable from v15"
@@ -2398,3 +2401,31 @@ Measured baselines from 5,610 logged v10-era episodes, which is what each counte
 | lock-on fraction | 350.8 of 1,570 steps = **22.3%** (corpus: 63%) |
 | red-eye seeds, conversion | 2.81/ep, seed stuns 0.135 → **4.8%** |
 | facing, stun-to-sword | **no counter existed** |
+
+### 18.6 Bring-up log, and two instrument errors I made and caught
+
+| step | result |
+|---|---|
+| balance before anything | **$103.09**, spend $0.024/hr, **0 pods** (so §18's "never diff against state you just overwrote" has an empty before-set, captured before any write) |
+| `fleet create --count 36 --vcpu 16` | 36 created at **$0.56/hr** each. **33 SSH-ready, 3 never opened a port** (ranks 7/16/17) — the documented RUNNING-with-no-SSH failure. `fleet adopt --confirm` kept the 33 and terminated the 3 |
+| fleet as launched | **33 pods, $18.08/hr** (control $1.68, treatment $16.40) |
+| `fleet bootstrap` | took the **S3 path automatically** and said so: *"S3 has all 462 MB of assets -> using presigned pulls; --via-seeds is unnecessary and is ignored."* **32 of 33 in ~8 min** |
+| `fleet ckpt` | init + anchor, 16.4 MB x 33 pods, **verified by `stat`-ing the path the trainer opens**, in seconds |
+| `fleet preflight` | **READY 32/33** |
+
+**Error 1, mine: I edited the repo while a fleet push was running.** Rank 26's bootstrap was **refused** —
+`REFUSING TO PUSH TO ZRL-GOHMA-BEH-R26: 1 file(s) break the experiment contract` — because the §44 syntax gate
+ran `ast.parse` at the instant a file of mine was mid-Edit and read `IndentationError`. **The gate was right
+and did exactly what §44 built it to do**; the fault is that a repo being rsynced to 33 pods is not a repo to
+edit. One pod re-bootstrapped. All 202 tracked files parse with zero contract violations.
+
+**Error 2, mine: I misread `preflight`'s own output.** `not ready: 26` is the **rank**, not a count. I read it
+as "26 of 33 failed" and nearly reported a broken fleet. The line above it said `READY: 32/33`. §37.3 — parse
+the format by looking at one real line instead of guessing — applied to reading as well as to writing.
+
+**Error 3, mine, and it is §23 in a form not yet written down.** I checked "is preflight running?" with
+`pgrep -f "[m] fleet preflight"` and got a false positive for ~8 minutes. The bracket protects the **pattern**
+from matching itself, but the waiting shell's argv also contained the **payload** — the un-bracketed
+`-m fleet preflight` of the command it had not yet run. So the bracket trick is necessary and not sufficient:
+corroborate with `ps -eo command | grep "[f]leet preflight"` filtered of the waiting shells, or better with the
+artefact (does the output file exist yet). I had cited §23 to myself minutes earlier.
