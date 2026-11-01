@@ -7,7 +7,9 @@ wandb/
 
 # Training outputs and emulator instances (large; checkpoints live in S3, see datasets/)
 runs/
-checkpoints/
+checkpoints/*
+!checkpoints/kept/
+checkpoints/kept/*
 *.pt
 assets/
 
@@ -59,3 +61,13 @@ media/**/*.mp4
 
 # ...but the README's gameplay gifs live in assets/ and are committed (the savestates above are not)
 !assets/*.gif
+
+# ...but the released policy checkpoints are committed: each is under 10 MB and the paper's claims
+# cannot be re-tested without them. The 127 MB world model is over GitHub's limit and lives on Hugging Face.
+!checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt
+!checkpoints/kept/gohma-kl-v15-r4_latest.pt
+!checkpoints/kept/bc_human.pt
+!checkpoints/kept/bc_human_100.pt
+!checkpoints/kept/bc_human_100_strat.pt
+!checkpoints/kept/rvs_M5_s5.pt
+!checkpoints/kept/dyna_M5_s0.pt

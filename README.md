@@ -1,4 +1,4 @@
-# legend-of-ppo
+# ppo-hyrule
 
 **The Legend of PPO: learning to fight in Hyrule.** Reinforcement learning agents that play *The Legend of
 Zelda: Ocarina of Time* in an unmodified Dolphin emulator, reading the game's **live memory** instead of
@@ -19,7 +19,15 @@ The clips above are smash cuts. The YouTube links are the **unedited episodes**,
 The Gohma fight took four attempts at a start the policy wins 10.53% of the time.
 
 [**Paper**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Provenance**](PROVENANCE.md) ·
-[**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md)
+[**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md) ·
+[**Models on Hugging Face**](https://huggingface.co/jordykieto/ppo-hyrule)
+
+**The policies are in this repository**, under `checkpoints/kept/`, because the paper's claims cannot be
+re-tested without them and each is under 10 MB. The 127 MB world model is on
+[Hugging Face](https://huggingface.co/jordykieto/ppo-hyrule) along with copies of everything else, since it
+exceeds what belongs in git history. Match by md5 from
+[`artifacts/MANIFEST.json`](artifacts/MANIFEST.json), never by filename: four world-model checkpoints exist
+in our own remote storage under the same names as different, earlier runs.
 
 ---
 
