@@ -108,6 +108,11 @@ pointer we decode into a named behaviour state. A Deku Baba telegraphs its lunge
 she is vulnerable. Those are the observations a human plays on and they are directly available here, which is
 the reason the environment is interesting rather than a reason it is easy.
 
+**Vocabulary, fixed once.** A *machine* is one cloud pod and is also called a rank by the tooling. An *arm*
+is one configuration under test. An *update* is one iteration of the policy-gradient optimiser. *u* is a world
+unit, the game's own distance measure; Link is about 60 units tall and the boss room is roughly 1,000 units
+across.
+
 ### 2.2 Actions and reward
 
 Actions are a discrete product of nine world-relative directions and a button set. The melee task uses 63
@@ -670,33 +675,38 @@ mix-invariant form of itself, and the mix-invariant form is what a version-to-ve
 obviously: the policy gradient optimises expected return **under** the sampling distribution, so the curriculum
 weights are part of the objective, not part of the evaluation.
 
-### 9.3 A selector is not a selector until its statistic is shown to have resolution
+### 9.3 Three versions of one mistake: an n too small to resolve what it is selecting on
 
-A held-out evaluator chose which checkpoint to keep, ranking on 16-episode subsets. The pooled held-out rate
-over every evaluation was 1.68%. At that rate a 16-episode subset reads 0.00% **76.2%** of the time and 6.25%
-**20.9%** of the time. The 6.25% that crowned a checkpoint was one lucky win in sixteen, an outcome any
-checkpoint produces one time in five. Tested directly, the selected checkpoint against every other gives
-p = 0.094. Separating a genuinely twice-as-good checkpoint would need about 256 episodes each, sixteen times
-what it had.
+The same error appears at three levels, and we made it at all three.
 
-The same error, made again at the level of an **arm**: a 12-cell grid ranked on roughly 40 episodes per cell
-produced a winner reading +32% over control. Confirmed properly as two matched arms from one initialisation,
-the gap is **+0.065 ± 0.117, t = +0.56**. The entire +32% was the upward bias of taking the maximum of twelve
-noisy estimates. The grid's qualitative finding, that long credit horizons need low learning rates, is monotone
-across all twelve cells and survives; the winning cell is fiction.
+**At the level of a checkpoint.** A held-out evaluator chose which checkpoint to keep, ranking on 16-episode
+subsets. The pooled rate over every evaluation was 1.68%. At that rate a 16-episode subset reads 0.00%
+**76.2%** of the time and 6.25% **20.9%** of the time, so the 6.25% that crowned a checkpoint was one win in
+sixteen, which any checkpoint produces one time in five. Tested directly, the selected checkpoint against
+every other gives p = 0.094. Separating a genuinely twice-as-good checkpoint needs about 256 episodes each,
+sixteen times what it had.
 
-### 9.4 Pooling is a measurement and has its own failure modes
+**At the level of an arm.** A 12-cell grid ranked on roughly 40 episodes per cell produced a winner reading
++32% over control. Confirmed as two matched arms from one initialisation, the gap is **+0.065 ± 0.117,
+t = +0.56**. The entire +32% was the upward bias of taking the maximum of twelve noisy estimates. The grid's
+qualitative finding, that long credit horizons need low learning rates, is monotone across all twelve cells
+and survives; the winning cell is fiction.
 
-Writing a script to pool evidence, replacing analysis that had been retyped per question, exposed three errors
-in the hand-pooling, all of which had moved p-values toward significance: 2,831 episodes from a withdrawn
-evaluator were still in the pool; the same evaluation existed in three copies, so one arm pooled to 1,551
-episodes where it ran 880; and the quoted baseline was a 559-episode subset of an 880-episode run. Correcting
-all three moved a comparison from p = 0.122 to p = 0.087 on the same data.
+**At the level of the pool.** Writing a script to pool evidence, replacing analysis that had been retyped per
+question, exposed three errors in the hand-pooling, all of which had moved p-values toward significance:
+2,831 episodes from a withdrawn evaluator were still in the pool; the same evaluation existed in three
+copies, so one arm pooled to 1,551 episodes where it ran 880; and the quoted baseline was a 559-episode
+subset of an 880-episode run. Correcting all three moved a comparison from p = 0.122 to p = 0.087 on the
+same data.
 
-A related trap, one level lower: the newest point of a fleet's evaluation curve is usually **incomplete**,
-because machines finish at different times and the ones that finish first are not a random subset. One point
-read 1.105 on two machines and 1.250 on six. Three consecutive slope claims were made and reversed from this
-in forty minutes.
+A fourth variant, one level lower again: the newest point of a fleet's evaluation curve is usually
+**incomplete**, because machines finish at different times and the ones that finish first are not a random
+subset. One point read 1.105 on two machines and 1.250 on six. Three consecutive slope claims were made and
+reversed from that in forty minutes.
+
+**The rule we now apply.** Before a statistic selects anything, compute what it reads under the null. If the
+winning value is a likely draw from the null, there is no selector, only a lottery with a percentage printed
+on it. State the sample size the selector needs and compare it to the one it has.
 
 ### 9.5 What a claim has to clear here
 
@@ -800,34 +810,23 @@ section 17.
 
 ## 12. Retractions
 
-Claims this project published internally and then overturned. They are listed because the correction is the
-reusable part.
+Claims this project made internally and then overturned. These are corrections to our own working claims, not
+to anything published elsewhere. They are listed because the correction is the reusable part, and because a
+paper arguing that claims outrun evidence should show its own.
 
-1. **"A competent policy's latent is an excellent prediction target", skill +0.742.** Controls destroyed it:
-   random untrained weights of the same architecture scored +0.617, removing the copy of the previous action
-   took it to +0.240, removing velocity to +0.053, and removing a countdown and episode constants to -0.012.
-   The whole number was artefacts.
-2. **"Version 11 is the fastest-improving version", +0.270 per update.** One start state at 50% curriculum
-   weight; nine starts at exactly zero for 37 updates (section 9.2).
-3. **"Six versions plateaued."** They rose 8.7 times on the graded metric (section 9.1).
-4. **"The 9-second, 3e-5 cell beats our settings", +32%.** Winner's curse; matched confirmation gives
-   +0.065 ± 0.117 (section 9.3).
-5. **"v15 defeats her on 5.00% of episodes."** Measured at a 120-second cap, below the 154 seconds a human win
-   takes. Every kill rate measured at that cap is withdrawn, including an offline-versus-online comparison that
-   rested on it.
-6. **"Offline return-conditioned cloning matches the best policy gradient at killing."** Both sides were
-   measured at the short cap. At matched 300-second caps the policy gradient wins by 14 standard errors on the
-   graded metric.
-7. **"Four machines trained one sharded world model."** They averaged nothing on any round: the aggregator was
-   dead from launch and the reduction crashed on device mismatch, so it was four independent quarter-corpus
-   models. Visible the whole time in the epoch times, 616 seconds on sync epochs against 15 seconds otherwise.
-8. **Three world-model conclusions were artefacts of the instrument**, not the model: scoring a gate on a
-   quantity the gate deliberately excludes; measuring a grid by re-fitting it instead of reading the one stored
-   in the checkpoint; and a threshold rule derived from a normalisation bug.
-9. **"The masked-representation run should be killed."** Recommended twice at five epochs from a slope of
-   +0.0026 ± 0.0030 (t = 0.85), read as flat. At twelve epochs the same quantity is +0.0150 ± 0.0015
-   (t = +10.29). The arithmetic was right; the number was not decision-grade, and the architectural diagnosis
-   behind the recommendation being correct is what made the wrong prediction feel safe.
+| what we claimed | what killed it | where |
+|---|---|---|
+| A competent policy's latent is an excellent prediction target, skill +0.742 | Random untrained weights of the same architecture scored +0.617. Removing the copy of the previous action took it to +0.240, velocity to +0.053, a countdown and episode constants to -0.012. The whole number was artefacts | 7 |
+| Version 11 is the fastest-improving version, +0.270 per update | One start state at 50% curriculum weight; nine starts at exactly zero for 37 updates | 9.2 |
+| Six versions plateaued | They rose 8.7 times on the graded metric | 9.1 |
+| The 9-second, 3e-5 grid cell beats our settings, +32% | Maximum of twelve noisy estimates. Matched confirmation gives +0.065 ± 0.117 | 9.3 |
+| v15 defeats her on 5.00% of episodes | Measured at a 120 second cap, below the 154 seconds a human win takes. Every kill rate at that cap is withdrawn | 5 |
+| Offline return-conditioned cloning matches the best policy gradient at killing | Both sides were at the short cap. At matched 300 second caps the policy gradient wins by 14 standard errors on the graded metric | 6.4 |
+| Four machines trained one sharded world model | They averaged nothing on any round: the aggregator was dead from launch and the reduction crashed on a device mismatch. Four independent quarter-corpus models. Visible all along in 616 second sync epochs against 15 otherwise | 7 |
+| Three world-model conclusions | Artefacts of the instrument: scoring a gate on a quantity the gate excludes; measuring a grid by re-fitting rather than reading the stored one; a threshold rule derived from a normalisation bug | 7 |
+| The masked-representation run should be killed | Recommended twice at five epochs from +0.0026 ± 0.0030, read as flat. At twelve epochs it is +0.0150 ± 0.0015, t = +10.29. The arithmetic was right and the number was not decision-grade | 8 |
+| The approach term caused the plateau | Confounded by each version's starting level, and a later arm removing the term did not recover the earlier slope. Appeared in this paper's own abstract until an adversarial review caught it | 9.1 |
+| Off the easiest start v15 averages 4.26 health | Recomputed from the 760 rows: 3.479. No subset of starts yields 4.26. The error was in our provenance file and the paper inherited it | 6.4 |
 
 ---
 
@@ -874,18 +873,69 @@ filenames as the ones cited here but at roughly a third of the size. They are an
 
 ## 14. Related work and positioning
 
-The closest relatives are game-playing agents trained from emulator state rather than pixels, model-based
-agents that optimise policies inside a learned simulator, and the self-supervised masked-prediction family.
-Our contribution is not a new algorithm in any of those lines. It is a measured head-to-head on one hard,
-mechanically rich task with the controls run: the same task, the same harness, the same episode cap, and the
-same graded metric applied to a policy-gradient agent, a behaviour clone of human experts, fifteen ways of
-mixing the two, an offline return-conditioned learner, and a dream-trained agent.
+Citations are verified and annotated in [LITERATURE.md](LITERATURE.md), which also lists the clusters not yet
+covered. We state what is not ours first, because the honest version of this section is mostly that.
 
-The result of that comparison is unfashionable and we think worth reporting precisely for that reason. On a
-task with a long causal chain, a sparse outcome and a strong demonstrator available, the plain model-free
-method trained with dense shaping beat every attempt to improve it with demonstrations or with a model, and
-the largest single source of wrong conclusions along the way was not the choice of method but the choice of
-number used to compare them.
+**Reading engine state instead of pixels is not new, and the nearest precedent is close.** Firoiu, Whitney and
+Tenenbaum (arXiv:1702.06230) trained agents for *Super Smash Bros. Melee* under emulation, reading each
+player's position, velocity **and action state** from game memory every frame, and beat human professionals.
+That is the same emulator family, the same commercial console game, and the same decision we made about the
+observation, including the decoded action state that makes an enemy's intent legible. Our setting differs, a
+single-agent 3D boss encounter with a chain of manufactured openings over 45 to 154 seconds rather than a
+reactive two-player fight, and our interest is in what fails to improve a policy there. We claim the setting
+and the measured task specification, not the observation approach.
+
+**Our imitation results are an instance of two known effects.** Ross, Gordon and Bagnell (DAgger, AISTATS
+2011) established that cloning's errors compound because the learner's own mistakes carry it into states the
+expert never visited, with regret quadratic in the horizon. That is section 6.1, and 81% of our clone's
+episodes ending in death is what it looks like at a 154 second horizon. Weihs, Jain and colleagues (ADVISOR,
+NeurIPS 2021) named the **imitation gap**: when the teacher acts on information or capability the student
+lacks, imitation is actively harmful and can be beaten by pure RL. Our fifteen arms are an instance of it,
+with one feature their canonical case does not have. Their teacher is *privileged*, seeing what the student
+cannot; our human sees exactly the observation the policy sees, so the gap is capability and strategy rather
+than information. And the usual framing has demonstrations rescuing a weak learner, where ours are a far
+stronger demonstrator, 100 wins from 100, degrading a policy that is worse at the task but better at its own
+state distribution. ADVISOR's per-state weighting is the obvious thing we did not try.
+
+**Our shaping failure is the textbook one.** Ng, Harada and Russell (ICML 1999) proved that only a potential
+difference leaves the optimal policy unchanged. Our shaping is not potential-based, and the consequence was
+measured rather than predicted: a shaping cluster reached 88% of total reward magnitude, the policy optimised
+it correctly by driving red-eye aim to 3.36 times chance, and still died 64.5% of the time with the boss at 8
+of 10 health.
+
+**Masked prediction over decision data is not ours either.** MTM (Wu et al., ICML 2023) already trains one
+network to reconstruct trajectories from random subsets of themselves, serving as forward model, inverse model
+or offline agent depending on the mask. We claim two narrower things: the masking *structure*, over an
+entity-by-field grid of raw engine fields with whole-actor tubes, field-group tubes and time blocks rather
+than random subsets; and the **free-signal floor**, a ridge fit on the cells still visible, which matters on a
+state vector where speed is the norm of velocity and position is the previous position plus velocity, so that
+a masked cell is frequently exact arithmetic on a visible one.
+
+**Losing to persistence is a known and under-reported failure, and it is being systematised as we write.** A
+NeurIPS 2026 paper, "Your world model may be worse than copying the last frame", reports that of 20 recent
+world-model papers, 12 give a prediction-quality number and **9 of those give nothing to read it against**.
+The copy-last-frame floor has been standard in video prediction for years and is known to beat learned models
+on mostly static data. So section 7 confirms rather than discovers. What we add is sharper: our model is
+zero-initialised so that it **begins exactly at persistence**, and 120 epochs then move it away at
+-0.0874 ± 0.0218 per epoch, while the action-shuffle control reads unchanged, and the failure is carried
+through a closed loop to 0 defeats in 607 real episodes. Starting at the floor and walking away from it is a
+stronger statement than failing to reach it.
+
+**Most of our measurement section is confirmation, and we would rather say so.** Henderson et al. (AAAI 2018)
+and Agarwal et al. (NeurIPS 2021, Outstanding Paper) established that few-seed point estimates mislead, that
+aggregates need interval estimates, and that conclusions flip when this is done properly. Our four measured
+noise floors, our winner's curse, and our selector-resolution arithmetic are all instances. Two things in
+section 9 we have **not** found stated elsewhere and offer cautiously, inviting correction. First, that a
+metric averaged over a start distribution the experimenter both **chooses and optimises under** is not a
+property of the policy, which is adjacent to Agarwal's critique of aggregation across tasks but concerns
+initial conditions that are themselves part of the objective. Second, the end-to-end case where a sparse
+binary outcome concealed an 8.7-fold improvement and then motivated two measurably harmful reward changes.
+
+**What the paper offers that we have not found elsewhere** is therefore not an algorithm. It is a task whose
+causal chain is measured rather than asserted, from 100 human victories, including the trap that the engine's
+own "vulnerable" flag labels 1.3% of real damage events; and a matched head-to-head of five method families
+on one task, one harness, one episode cap and one graded metric. Breadth at matched instruments is the
+contribution, not any single arm.
 
 ---
 
