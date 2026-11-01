@@ -64,8 +64,8 @@ PREAMBLE = r"""\documentclass[11pt]{article}
 \author{%
   \textbf{Jordy Kieto}\\[4pt]
   \small Code, claim audit and provenance: \url{GHURL}\\
-  \small Models: \url{HFURL}
-  \quad$\cdot$\quad Video: \url{https://youtu.be/FBD1wEsdY3E}
+  \small Models: \url{HFURL}\\
+  \small Video: \url{https://youtu.be/FBD1wEsdY3E}
 }
 \date{}
 

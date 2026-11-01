@@ -1,0 +1,41 @@
+arXiv submission metadata for "The Legend of PPO: Learning to Fight in Hyrule"
+================================================================================
+
+TITLE
+  The Legend of PPO: Learning to Fight in Hyrule
+
+AUTHORS
+  Jordy Kieto
+
+PRIMARY CATEGORY
+  cs.LG   (Machine Learning)
+
+CROSS-LISTS
+  cs.AI   (Artificial Intelligence)
+
+COMMENTS FIELD
+  24 pages, 19 tables. Code, claim audit, full provenance and model checkpoints:
+  https://github.com/JordyKieto/ppo-hyrule and https://huggingface.co/jordykieto/ppo-hyrule
+  Video of the agent defeating the boss: https://youtu.be/FBD1wEsdY3E
+
+ABSTRACT
+  See abstract.txt (1,916 characters, inside arXiv's 1,920 limit). The abstract printed
+  in the PDF is longer; this is the condensed form for the submission form.
+
+LICENCE
+  Suggested: arXiv.org perpetual, non-exclusive licence. Choose at submission time.
+
+WHAT TO UPLOAD
+  paper.tar.gz in this directory, rebuilt by ./build.sh. It contains paper.tex and nothing
+  else: the document has no figures, no bibliography file and no custom classes, so
+  arXiv's TeX Live can build it unaided. build.sh also compiles it in an empty temporary
+  directory and fails if that does not produce a 24-page PDF.
+
+PACKAGES THE SOURCE USES, all present in arXiv's TeX Live
+  geometry, fontenc, newtxtext/newtxmath, microtype, amsmath, graphicx, booktabs,
+  tabularx, array, enumitem, caption, xcolor, fancyhdr, fancyvrb, seqsplit, hyperref
+
+NOTES
+  There is no bibliography. Citations are given inline in prose and are verified and
+  annotated in paper/LITERATURE.md in the repository, which also records which of this
+  report's findings are confirmations of existing results rather than new ones.
