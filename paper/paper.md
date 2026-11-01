@@ -30,7 +30,8 @@ trajectories, and planning inside a learned model. The masked-prediction result 
 the four; it is a separate positive finding about representation, not a competitor to the policy. Behaviour
 cloning on 100 recorded human victories reaches 74.5% held-out next-action accuracy, nearly four times the
 majority-action floor, and takes 0.33 of her 10 health with 1 win in 80 attempts. Fifteen separate mechanisms
-for injecting those demonstrations into the policy gradient produced no arm with an improving trend. Offline
+for injecting those demonstrations into the policy gradient produced no arm trending toward the policy
+trained without them. Offline
 return-conditioned behaviour cloning reaches 1.31 health and 3.95% defeats at matched episode caps. A learned
 world model trained for 120 epochs ends further from "nothing changes" than it started, ignores the action
 entirely, and the policies dream-trained inside it won 0 of 607 real episodes.
@@ -448,31 +449,36 @@ changing the curriculum cannot move it. Section 9.2 is why that distinction exis
 
 | mechanism | updates | mean | max | slope ± SE | t |
 |---|---|---|---|---|---|
-| FitNets projection onto rollout states | 14 | 2.87 | 3.37 | -0.0064 ± 0.0192 | -0.33 |
-| latent transition matching | 14 | 2.79 | 3.21 | +0.0100 ± 0.0159 | +0.62 |
-| mutual alignment, contrastive | 22 | 2.66 | 3.28 | +0.0017 ± 0.0132 | +0.13 |
-| one-way latent to the frozen clone | 17 | 2.47 | 3.19 | -0.0220 ± 0.0188 | -1.17 |
-| action-level BC, coefficient decaying | 26 | 2.32 | 2.74 | -0.0086 ± 0.0049 | -1.74 |
-| on-policy distillation | 7 | 2.43 | 3.67 | **-0.2779 ± 0.0930** | **-2.99** |
-| action-level BC, constant 0.1 | 8 | 2.31 | 2.64 | **-0.0857 ± 0.0172** | **-4.98** |
-| clone proposes, Q head selects | 9 | 0.38 | 0.51 | -0.0050 ± 0.0105 | -0.48 |
-| clone as initialisation | 6 | 0.28 | 0.35 | rising from nothing | |
+| latent transition matching | 17 | **3.30** | 4.40 | -0.0120 ± 0.0331 | -0.36 |
+| FitNets projection onto rollout states | 19 | 2.61 | 3.85 | +0.0149 ± 0.0348 | +0.43 |
+| mutual alignment, contrastive | 28 | 2.60 | 4.00 | +0.0028 ± 0.0150 | +0.19 |
+| one-way latent to the frozen clone | 23 | 2.54 | 3.33 | -0.0011 ± 0.0147 | -0.07 |
+| clone proposes, Q head selects | 16 | 2.18 | 2.95 | -0.0052 ± 0.0242 | -0.22 |
+| action-level BC, decaying, replicate | 73 | 2.13 | 3.83 | +0.0016 ± 0.0030 | +0.53 |
+| action-level BC, decaying | 64 | 2.09 | 3.31 | **-0.0086 ± 0.0031** | **-2.75** |
+| on-policy distillation | 13 | 1.75 | 3.25 | **-0.1617 ± 0.0291** | **-5.56** |
+| IBRL | 14 | 0.74 | 1.61 | +0.0543 ± 0.0295 | +1.84 |
+| inverse, clone as student | 16 | 0.49 | 0.96 | **+0.0337 ± 0.0102** | **+3.32** |
 | **v15, no human data at all** | | **3.275** | | the bar | |
 
-**(I, not M.** One machine's history per arm, episode-weighted, against a bar from a different aggregation.
-See the caveat below.**)**
+**This table is the recomputation, and it corrects the paper in both directions.** An earlier draft reported
+these arms on the episode-weighted fleet mean, which moves with the curriculum, and noted that the
+mix-invariant version had not been run. It has now been run, from the exported histories, and it says:
 
-**A caveat that we would rather state than have found.** This table is the episode-weighted fleet mean, and
-the bar it is compared against was derived on a different aggregation. Regenerated on the mix-invariant
-column, the ordering changes and one arm's series does sit above 3.275. Worse, every exported history is a
-single machine, and per-machine damage on this task spans 1.36 to 3.37, so no per-arm mean here is a
-measurement by this project's own standard. The recomputation on the mix-invariant column is the single
-cheapest thing that would firm this section up and it has not been run. Read the table as nine arms that did
-not visibly help, not as a ranking.
+- **One arm's mean sits above the bar**, latent transition matching at 3.30 against 3.275, where the earlier
+  draft said none did. Its slope is flat, t = -0.36, so it is a level and not a climb.
+- **Six of the ten arms produce at least one update above the bar**, not the three the earlier draft claimed.
+- **Only one arm has a positive trend distinguishable from zero**, the inverse arm at +0.0337 (t = +3.32),
+  and it is climbing from 0.49, about a sixth of v15's level. Two arms have significant negative trends.
 
-**Three arms produced a single update above the bar and none produced a trend above it.** The constant
-coefficient is the informative row: agreement with the demonstrated action rose from 3% to 23% and the BC loss
-fell, so the term was provably doing its job, and the headline it cost was damage, at t = -4.98.
+**And none of it is a measurement, which is the part that matters.** Every one of these histories is a
+**single machine**. Per-machine balanced damage on this task spans **1.36 to 3.37** at identical settings, so
+a one-machine mean of 3.30 sits comfortably inside the spread of one configuration run twice. The bar itself,
+v15's 3.275, comes from a different aggregation and was never re-derived on this column. The defensible
+statement is therefore weaker than either draft: **across ten mechanisms, none shows a trend toward or above
+the policy trained without demonstrations, and the design cannot resolve a difference the size of the one
+arm that nominally exceeds it.** The machines were lost before any checkpoint was synced, so these arms
+cannot be re-evaluated, only re-read.
 
 A cleaner decomposition came from a three-arm, three-seed study on the policy's **own** online states.
 Aligning only the internal representation to the clone is neutral on every seed (+0.032, -0.066, +0.123).
@@ -1033,8 +1039,9 @@ throughout, the kill bonus arrives at the first decision of the episode at 0.000
 policy knows it learned from local shaping.
 
 One hundred human victories did not help. Cloning them reaches 74.5% next-action accuracy and 0.33 of 10
-health. Fifteen mechanisms for folding them into the policy gradient produced no improving arm, and the one
-that demonstrably worked mechanically cost damage at t = -4.98. Offline return-conditioned learning on the same
+health. Of fifteen mechanisms for folding them into the policy gradient, none trends toward the policy
+trained without them; one arm's single-machine mean nominally exceeds it, inside a spread that one
+configuration run twice already covers. The mechanism that demonstrably worked cost damage at t = -4.98. Offline return-conditioned learning on the same
 games plus the agent's own failures does substantially better than cloning and still loses to the policy
 gradient by 14 standard errors. A world model trained to 120 epochs ends further from "nothing changes" than it
 began and ignores the action entirely, and policies dreamed inside it won 0 of 607 real episodes.
