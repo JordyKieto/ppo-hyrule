@@ -2291,3 +2291,110 @@ exactly.** Three findings that affect defensibility:
   that claim rests on thinner evidence than this file implies and is labelled as such in the paper.
 - `checkpoints/kept/rvs_anchor.pt.last.pt` is **byte-identical** to `rvs_from_v15.pt`, so the local copy of
   section 15's result is its untrained init. Section 15 must cite its eval rows, not its weights.
+
+---
+
+## 18. Session 2026-11-01: the five WATCHED behaviours — `gohma-beh`, two arms — **M** (the pre-checks), **U** (the run)
+
+The author watched v15 play and named five things it never does. The pre-checks below are **M**, done before
+any pod existed; the run itself is **U** until it has five complete evaluation points per arm.
+
+### 18.1 The pre-checks, which changed the design
+
+| # | behaviour as stated | what the code and data say | class |
+|---|---|---|---|
+| 5 | "it does not rush in when Gohma is stunned" | **The term exists and FIRES.** `approach_stunned` (`w_approach` 0.5) is non-zero in **53.8% of 5,610** logged v10-era episodes at **+0.735/episode**, and `sword_ready_stunned` in 50.1% at +0.271 of a 1.0 cap. A second term would have been a duplicate; the question is the WEIGHT | **M** |
+| 3 | "lock on, look up, and shoot" | **The "look up" half is contradicted by the corpus and was dropped with the author's agreement.** Reproduced from `datasets/human/gohma` via `scripts/mine_slingshot.py`, 299 fires / 371 impacts: aim alignment to the eye **0.607 on hits vs 0.270 on misses**, but **first-person 0.115 on hits vs 0.359 on misses** — entering first person is associated with MISSING. Lock-on is supported (`w_lockon`/`w_lock_step` exist, zeroed by `simple`) | **M** |
+| 1 | "it never farms items" | **Hearts ARE observable.** `En_Item00` (0x0015) appears in the policy's 16-row actor table in **40 of the 100 human wins**, 7,459 visible collectible-steps, median distance 339u (p10 89, max 843), and `params_low` takes **exactly** the decomp's four values — `0x00` green rupee (22 eps), `0x10` seeds (18), `0x0C` nuts (16), **`0x03` recovery heart (11)**. No observation change was needed | **M** |
+| 2 | "it spams the Deku Nut" | **"Wasted" is defined from her measured state, not invented.** 371 corpus impacts: 100% convert in `fall`/`land`/`stunned`, 95.2% `floor_prepare`, **40.6% `ceiling_eye_red`**, and **0% across 71 impacts** in `ceiling_idle` (38) + `ceiling_move` (33). For nuts specifically, `GOHMA_TASK.md` records stuns in every FLOOR state and none on the ceiling | **M** |
+
+**Retraction of my own working plan, before it cost anything.** On the strength of the watched episode
+(`media/gohma-slot5/PLAY_BY_PLAY.md`: 4 seeds from 26 carried, 3 shots dropped at a red eye, one window
+passed up) I was about to restore `g_red_eye_seed` at 4.0 with a cap of 16. That is re-running a measured
+failure: over **10,929** engaged v10 episodes the cluster made shaping **88% of reward magnitude**,
+`g_red_eye_seed` alone paid **+8.34/episode against `boss_defeat`'s +1.98**, aim reached **3.36x chance and
+kept rising**, and the policy still died 64.5% of the time with her at 8 of 10 HP. One episode is a last-k
+mean with k=1 (AGENTS 38). **The cluster ships at zero and the preset says why.** `g_seed_stun` 15.0 is
+already live under `simple` and is already the largest shaping term in the reward: the red-eye shot is not
+under-rewarded, it is under-executed.
+
+### 18.2 What shipped — `--reward behaviour` (`combat.GOHMA_BEHAVIOUR`), ten weights off `simple`
+
+Four of five behaviours needed no new positive term. Three terms are new: `g_item_approach` (nothing paid for
+walking TOWARD loot), `g_nut_wasted`, `g_facing`.
+
+| behaviour | change | why this number |
+|---|---|---|
+| 1 | `g_grass_cut` 0→0.2 cap 1.0 | the policy has cut **0 tufts in 5,610 episodes**; the term has never paid out |
+| 1 | `g_seed_pickup` 0→0.05, `g_nut_pickup` 0→0.15, cap 1.5 | shipped values restored, cap 6.0→1.5 |
+| 1 | `g_link_heal` 0.1→**0.25** | 16 HP units per heart = **+4.00**, exactly what `w_link_damage` 0.25 charges for losing one. Symmetric by construction, so healing never pays better than not being hit |
+| 1 | `g_item_approach` **0.3**, cap 1.5 (NEW) | cap binds after 500u of net closing ≈ room width, so the gradient survives to a pickup from anywhere. Below `g_approach`'s 0.5: loot is a side errand |
+| 2 | `g_nut_wasted` **0.5**, UNCAPPED (NEW) | v10 threw 5.64 nuts/ep for 3.01 misses (−2.20/ep of `g_nut_miss`); 0.5 makes a wholly wasted budget cost about the same, i.e. doubles existing pressure rather than inventing a scale — and does it BEFORE the outcome. Uncapped: a capped penalty makes later waste free. `g_nut_miss` 0.3 **left alone** |
+| 3 | `w_lockon` 0→0.3, `w_lock_step` 0→0.005 | lock-on is **15% of ticks** in the watched episode against the corpus's **63%** |
+| 4 | `g_facing` **0.01** cap 1.5 (NEW) | cap binds after 150 facing steps of a ~1,570-step episode, under 10%. Deliberately a nudge: a per-step positional term with a big cap is how `g_spacing` was farmed. **Gohma only** — larva hits correlate **−0.598** with damage dealt, so a "nearest target" version would pay for the add-fighting that already fills her ceiling phases. Gated OFF in her 0%-conversion states, ON in `ceiling_eye_red` |
+| 5 | `w_approach` 0.5→**1.0**; `g_sword_ready` 0.02→0.04 cap 1.0→2.0 | the terms already fire at 53.8% / 50.1% of episodes; only the weight moves |
+
+New shaping ceiling ≈ **+13/episode against outcomes of 144 (≈9%)**, versus the 88% the v10 cluster reached.
+
+**Not shipped, proposed instead** (AGENTS 13.5, one authorisation one experiment): restoring the two red-eye
+PENALTIES (`g_unfired_red_eye` −1.5, `g_drop_red_eye_shot` −1.0), which are the only cluster members that
+cannot be farmed by waiting — waiting is what triggers them — and which the watched episode incurred four
+times at zero cost. And lowering `g_larva_damage`/`g_larva_kill`, on the −0.598 correlation.
+
+### 18.3 Verification before any pod existed (AGENTS 46)
+
+- **19 new tests** (`tests/test_gohma_behaviour_reward.py`), `tests/run_all.py` **22/22 files**.
+- **Seven mutations of the live code, each caught by exactly the intended test** — infinite item seed, per-step
+  delta instead of net progress, paying on first sight, facing any target, facing ungated on her state, a
+  capped nut penalty, hearts counted per step. AGENTS 36 rule 1: the checks were seen failing.
+- `scripts/validate_launch.py` on **both arms' exact argv**: 199 tracked files parse, contract clean, 42
+  modules import, trainer accepts all 46 args including the 13 fleet injects.
+- **Live-RAM positive control**, which no synthetic test could give: an empty `ACTORCAT_MISC` list and a wrong
+  offset look identical, and all three Gohma savestates have an empty list at t=0. A local run paid
+  `item_approach` **+0.0614/ep**, `facing` +0.900, `nut_wasted` −0.400, `lockon` +0.900, `lock_hold` +0.300,
+  `approach_stunned` +1.100, `sword_ready_stunned` +1.024, with `red_eye_seed` / `sling_ready` /
+  `slingshot_on_red_eye` **absent** as designed.
+
+### 18.4 The arms, and the resolution this design actually has
+
+Both arms from `checkpoints/kept/gohma-kl-v15-r4_latest.pt`, md5 **`397e27b2beb688b9b14d6a260ec07a22`**,
+update 40, optimiser intact. Everything matched to v15's own config (obs v7, 300 s cap, slots 3,4,5,6,7,8,
+weights `4=1.125,6=1.125,7=2.25`, `--kl-anchor checkpoints/inbox/v13_r12_latest.pt --kl-coef 0.3`,
+`--death-scale 0`, 8 envs). **The arms differ by `--reward` and nothing else.**
+
+**`--fleet-sync none`: every pod is an independent seed.** This is a design decision worth stating because it
+is not the fleet's default. Under FedAvg an arm of N pods is ONE policy averaged over N ranks — **n=1**, which
+cannot address a seed floor at all. The authorisation's own reasoning is a replicates argument (five identical
+controls spanned 2.00–2.97, **sd 0.380**), and replicates require independence. It also makes the instrument
+match the historical one-pod-per-arm controls, so slopes per update are comparable.
+
+**What that buys, stated before the data arrives (AGENTS 30.2).** At sd 0.380, 33 treatment replicates give
+SE 0.066 and **3 control replicates give SE 0.219**; the difference has SE ≈ 0.229, so this design resolves a
+true effect of about **±0.46 HP** and no smaller. **The control's n is the binding constraint, not the
+treatment's**, and adding treatment pods cannot fix it. Three replicates give the SIGN of the baseline drift
+over the same window and nothing more precise.
+
+The historical controls (slopes −0.0053 to −0.0360, three at |t|>3.7, ending 1.33–2.27 against v15's 3.275)
+**cannot substitute for this control**: they ran at a 120 s episode cap and this run uses 300 s, and §9 of this
+file retracts every kill rate measured at 120 s because v15 more than doubles at 300.
+
+### 18.5 The behaviour counters, and why they are the primary instrument
+
+The author's primary interest, and they do not depend on the control. Emitted per update on **both** arms,
+leading the trainer's log line beside the damage columns: `item hrt grs iapp face fcos lock nutW wst% reSd
+conv s2sw rch%`. They are **dense** where a defeat is a 1–10% binary — on this task a graded signal showed an
+8.7x improvement across six versions that the binary reported as six consecutive failures (§34) — so they say
+within a handful of updates whether each term bites, long before boss damage can. **If a term's counter has
+not moved after several updates, that term is not working and waiting will not fix it.**
+
+Measured baselines from 5,610 logged v10-era episodes, which is what each counter must beat:
+
+| counter | baseline |
+|---|---|
+| grass cut / episode | **0.0000, non-zero in 0.0% of episodes** |
+| hearts: `hp_healed` | 2.27 HP units (**0.14 hearts**), non-zero in 9.5% |
+| seeds / nuts picked | 0.774 / 0.104 |
+| nuts thrown / missed | 5.64 / 3.01 (**53% waste** by the outcome definition) |
+| lock-on fraction | 350.8 of 1,570 steps = **22.3%** (corpus: 63%) |
+| red-eye seeds, conversion | 2.81/ep, seed stuns 0.135 → **4.8%** |
+| facing, stun-to-sword | **no counter existed** |

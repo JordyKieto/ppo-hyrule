@@ -10,7 +10,48 @@ and nothing there needs to be rerun to proceed here.
 
 ---
 
-# WHERE WE LEFT OFF -- 2026-10-13, fleet killed, $0.00/hr
+# WHERE WE LEFT OFF -- 2026-11-01: `gohma-beh`, the five WATCHED behaviours, 36 pods
+
+**Read `PROVENANCE.md` section 18 for the full record.** One page of it:
+
+The author watched v15 play and named five behaviours it never does. **Four of the five already had reward
+terms in this repo and `--reward simple` zeroes most of them** -- the same shape as `w_approach`, which never
+fired on Gohma for fourteen versions. So the job was mostly deciding which existing terms to switch on, not
+writing five new ones. `--reward behaviour` is `simple` with ten weights changed; three terms are genuinely
+new (`g_item_approach`, `g_nut_wasted`, `g_facing`).
+
+**Two pre-checks changed the design, and both are worth remembering:**
+
+1. **Behaviour 5 already fires.** `approach_stunned` is non-zero in **53.8% of 5,610** logged episodes at
+   +0.735/ep. Adding an "attack the stun" term would have been a duplicate. Weight raised, nothing added.
+2. **"Look up and shoot" is contradicted by the corpus.** First-person aim is **0.115 on hits against 0.359
+   on misses** -- going into first person is associated with MISSING. Dropped with the author's agreement;
+   the lock-on half is kept.
+
+**The red-eye slingshot cluster stays at ZERO, and that is a decision against the author's stated behaviour
+3.** It was removed on measurement, not forgotten: over 10,929 engaged episodes shaping was 88% of reward
+magnitude, `g_red_eye_seed` alone paid +8.34/ep against `boss_defeat`'s +1.98, aim reached 3.36x chance and
+kept rising, and the policy still died 64.5% of the time with her at 8 of 10 HP. `g_seed_stun` 15.0 is
+already live. **The shot is not under-rewarded, it is under-executed** -- treat it as a capability question.
+I nearly restored it at 4.0 on the strength of ONE watched episode and retracted that before it cost
+anything (AGENTS 38: a single episode is a last-k mean with k=1).
+
+**The counters are the primary instrument, not boss damage.** `item hrt grs iapp face fcos lock nutW wst%
+reSd conv s2sw rch%` lead the trainer's log line on BOTH arms. They are dense where a defeat is a 1-10%
+binary. Baselines each must beat, from 5,610 logged episodes: **grass 0.0000 (0% of episodes)**, hearts 0.14,
+nut waste 53%, lock-on 22.3% (corpus 63%), red-eye conversion 4.8%. **If a counter has not moved after
+several updates, that term is not working and waiting will not fix it.**
+
+**`--fleet-sync none`: every pod is an independent seed, which is NOT the fleet default.** Under FedAvg an
+arm of N pods is one policy averaged over N ranks, i.e. **n=1**, which cannot address a seed floor. At
+sd 0.380, 33 treatment replicates give SE 0.066 and **3 control replicates give SE 0.219**, so this design
+resolves about **+/-0.46 HP and no smaller -- the CONTROL's n is the binding constraint** and more treatment
+pods cannot fix it. The historical 120 s-cap controls cannot substitute: section 9 retracts every kill rate
+measured at 120 s.
+
+---
+
+# Previously: 2026-10-13, fleet killed, $0.00/hr
 
 **Read this first. It is the state of the task, not a log.**
 
