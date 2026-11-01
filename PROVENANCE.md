@@ -1761,7 +1761,11 @@ value**; at `gamma 0.99967 / lambda 1.0` it reaches **59.9%** (154 s) and **86.1
 
 **Note a conflation corrected here:** the often-quoted "47% at 15 s, so these settings were fine for Deku
 Baba" is the *value* discount `γ^t`. The *policy gradient* is weighted by `(γλ)^t`, which at 15 s is
-**0.023%** — so the kill bonus has never reached the first decision through GAE on ANY task in this project.
+**0.021%** — so the kill bonus has never reached the first decision through GAE on ANY task in this project.
+(**Corrected 2026-11-01.** This line read **0.023%** until the figure was recomputed while writing the
+paper's section 4.1 as a display equation: `0.94525^150 = 2.148e-4 = 0.0215%`, not 2.3e-4. The error is
+immaterial to the conclusion — both are three orders of magnitude below the 47% it is contrasted with — and
+is recorded rather than silently fixed.)
 Deku Baba was solved by dense shaping inside the 1.8 s window.
 
 | arm | lr | measured `approx_kl` (median) | 18-rank pooled damage | slope ± SE | reading |

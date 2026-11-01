@@ -54,13 +54,13 @@
 \begin{figure}[!ht]
   \centering
   \includegraphics[width=\linewidth]{figures/teaser.png}
-  \caption{One episode of the policy defeating Queen Gohma, from the full-health start, at the frames the mechanism turns on. She takes damage only while stunned, and a stun has to be manufactured: the agent shoots her out of the ceiling with a slingshot seed, then hits her on the floor, and later uses Deku Nuts to the same end. The last panel is the end of the recording: the episode terminates on her defeat, so the capture stops while she is going over and before she disintegrates. All six panels are identically gamma-corrected to lift the shadows of the first two, with no other adjustment. The full unedited episode is linked in section 11, and every attempt made while recording, won or lost, is listed beside it.}
+  \caption{One episode of the policy defeating Queen Gohma, from the full-health start, at the frames the mechanism turns on. She takes damage only while stunned, and a stun has to be manufactured: the agent shoots her out of the ceiling with a slingshot seed, then hits her on the floor, and later uses Deku Nuts to the same end. The last panel is the end of the recording: the episode terminates on her defeat, so the capture stops while she is going over and before she disintegrates. All six panels are identically gamma-corrected to lift the shadows of the first two, with no other adjustment. The full unedited episode is linked in \S\ref{sec:11}, and every attempt made while recording, won or lost, is listed beside it.}
   \label{fig:teaser}
 \end{figure}
 
 \textbf{Model-free reinforcement learning from live game memory in \emph{The Legend of Zelda: Ocarina of Time}, and four things that did not beat it.}
 
-Technical report, 1 November 2026. Every quantitative statement here carries an evidence class in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md}{claim audit} and traces to an artefact in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record}. Nothing below should be read as a result unless it is marked \textbf{M}, measured, there. Claims this project made internally and later overturned are listed in section 12 rather than deleted, which is a deliberate part of the report rather than an oversight.
+Technical report, 1 November 2026. Every quantitative statement here carries an evidence class in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md}{claim audit} and traces to an artefact in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record}. Nothing below should be read as a result unless it is marked \textbf{M}, measured, there. Claims this project made internally and later overturned are listed in \S\ref{sec:12} rather than deleted, which is a deliberate part of the report rather than an oversight.
 
 
 \begin{abstract}\noindent
@@ -69,21 +69,22 @@ We train agents to fight in an unmodified commercial 3D game, \emph{Ocarina of T
 
 Two tasks. The first, a three-enemy melee encounter, is solved by recurrent PPO in under five hours on twenty CPU machines. The second, the dungeon boss Queen Gohma, is not solved, and the useful content of this report is why. Gohma takes damage only while stunned, and a stun must be manufactured. From a full-health start a kill is ten sword hits spread across roughly five such openings, inside a fight that takes a human 154 seconds. Our best policy defeats her on 8.33\% of 456 evaluation episodes and removes 3.53 health on average, pooled over starts that begin at 5 to 10 of her 10 health.
 
-Four alternatives were measured against that policy under matched conditions and \textbf{all four lost}: cloning human play, folding those demonstrations into the policy gradient, learning offline from return-conditioned trajectories, and planning inside a learned model. The masked-prediction result in section 8 is not one of the four; it is a separate positive finding about representation, not a competitor to the policy. Behaviour cloning on 100 recorded human victories reaches 74.5\% held-out next-action accuracy, nearly four times the majority-action floor, and takes 0.33 of her 10 health with 1 win in 80 attempts. Fifteen separate mechanisms for injecting those demonstrations into the policy gradient produced no arm trending toward the policy trained without them. Offline return-conditioned behaviour cloning reaches 1.31 health and 3.95\% defeats at matched episode caps. A learned world model trained for 120 epochs ends further from "nothing changes" than it started and ignores the action entirely. Separately, a closed planning loop in which each of six machines trained its own smaller world model on its own freshly collected games produced dream-trained policies that won 0 of 607 real episodes.
+Four alternatives were measured against that policy under matched conditions and \textbf{all four lost}: cloning human play, folding those demonstrations into the policy gradient, learning offline from return-conditioned trajectories, and planning inside a learned model. The masked-prediction result in \S\ref{sec:8} is not one of the four; it is a separate positive finding about representation, not a competitor to the policy. Behaviour cloning on 100 recorded human victories reaches 74.5\% held-out next-action accuracy, nearly four times the majority-action floor, and takes 0.33 of her 10 health with 1 win in 80 attempts. Fifteen separate mechanisms for injecting those demonstrations into the policy gradient produced no arm trending toward the policy trained without them. Offline return-conditioned behaviour cloning reaches 1.31 health and 3.95\% defeats at matched episode caps. A learned world model trained for 120 epochs ends further from "nothing changes" than it started and ignores the action entirely. Separately, a closed planning loop in which each of six machines trained its own smaller world model on its own freshly collected games produced dream-trained policies that won 0 of 607 real episodes.
 
 The second half of the report is about measurement, because in this project the instrument was a larger source of error than any method. A defeat is a 1 to 10\% binary event. Read through it, six consecutive versions of the boss policy appeared flat and two experiments were launched to break the apparent plateau. Read through the graded quantity the reward actually pays for, the same six versions rose \textbf{8.7 times}, every step statistically solid, and the two changes launched to break the apparent plateau were both measurable regressions. We give the per-start profile rather than a pooled rate, because the pooled rate moves with a curriculum we choose, and we record eleven claims this project published and then withdrew.
 
 
 \end{abstract}
 \section{Contributions}
+\label{sec:1}
 
 \begin{itemize}
-\item \textbf{A boss fight as an RL benchmark with the mechanism fully instrumented.} Not "sparse reward" in the abstract: a measured causal chain, mined from 100 human victories, in which 678 of 678 damage events required a stun, a stun converts from a projectile hit on only 40.6\% of attempts in the state where the agent is most likely to attempt it, and 0\% of 71 attempts in two other states (section 4).
-\item \textbf{A measured profile of start-state dependence} rather than a pooled success rate. Defeat rate across six starts of the same task ranges from 28.95\% to 0 of 76 episodes, ordered by how much of the fight the start hands the policy (section 5).
-\item \textbf{Imitation measured against the policy that never saw a human.} Frame-level accuracy and closed-loop competence are not merely weakly related here, they are \textbf{anticorrelated across corpora} at r = -0.875 (section 6). Two policies that both beat the boss, one human and one learned, agree on \textbf{3\% of frames}.
-\item \textbf{A negative result on learned world models, carried to the point where the mechanism is named.} The model fails the action-shuffle control outright, so it is not a controllable dynamics model in any sense, which explains the dream-trained policies without appealing to the policy (section 7).
-\item \textbf{One positive representation result, stated at the resolution it earns.} Masked prediction over the structured state improves \textbf{9 of 10 frozen downstream probes} against both an untrained network of identical architecture and a free-signal control, while the \textbf{pretraining objective itself remains worse than a trivial baseline}, on \textbf{one seed} (section 8). Those are two different conclusions and we keep them apart.
-\item \textbf{A metric methodology, derived from its own failures.} Mix-invariance, selector resolution, the maximum-of-N bias, pooling as a measurement with its own failure modes, and the difference between a discount and a policy-gradient weight (section 4.1), each with the specific wrong decision it caused.
+\item \textbf{A boss fight as an RL benchmark with the mechanism fully instrumented.} Not "sparse reward" in the abstract: a measured causal chain, mined from 100 human victories, in which 678 of 678 damage events required a stun, a stun converts from a projectile hit on only 40.6\% of attempts in the state where the agent is most likely to attempt it, and 0\% of 71 attempts in two other states (\S\ref{sec:4}).
+\item \textbf{A measured profile of start-state dependence} rather than a pooled success rate. Defeat rate across six starts of the same task ranges from 28.95\% to 0 of 76 episodes, ordered by how much of the fight the start hands the policy (\S\ref{sec:5}).
+\item \textbf{Imitation measured against the policy that never saw a human.} Frame-level accuracy and closed-loop competence are not merely weakly related here, they are \textbf{anticorrelated across corpora} at r = -0.875 (\S\ref{sec:6}). Two policies that both beat the boss, one human and one learned, agree on \textbf{3\% of frames}.
+\item \textbf{A negative result on learned world models, carried to the point where the mechanism is named.} The model fails the action-shuffle control outright, so it is not a controllable dynamics model in any sense, which explains the dream-trained policies without appealing to the policy (\S\ref{sec:7}).
+\item \textbf{One positive representation result, stated at the resolution it earns.} Masked prediction over the structured state improves \textbf{9 of 10 frozen downstream probes} against both an untrained network of identical architecture and a free-signal control, while the \textbf{pretraining objective itself remains worse than a trivial baseline}, on \textbf{one seed} (\S\ref{sec:8}). Those are two different conclusions and we keep them apart.
+\item \textbf{A metric methodology, derived from its own failures.} Mix-invariance, selector resolution, the maximum-of-N bias, pooling as a measurement with its own failure modes, and the difference between a discount and a policy-gradient weight (\S\ref{sec:4.1}), each with the specific wrong decision it caused.
 \end{itemize}
 
 \subsection{What we do not claim}
@@ -102,14 +103,18 @@ Stated here rather than buried, because the paper's own argument is that claims 
 
 
 \section{Setup}
+\label{sec:2}
 
 \subsection{Observation: live game memory}
+\label{sec:2.1}
+
+Reading an emulator's memory instead of its framebuffer is an established way to study console games \cite{bellemare2013ale,nichol2018gymretro}, and the closest precedent to what we do reads position, velocity and action state out of a fighting game's memory every frame \cite{firoiu2017melee}.
 
 The game is \emph{The Legend of Zelda: Ocarina of Time} (GameCube build \texttt{NACE01}) under Dolphin 2603a with the video backend disabled. Observations are read zero-copy from Dolphin's shared memory arena at about 25 microseconds per step. Control runs at 10 Hz, one action every 6 vertical interrupts.
 
 Every memory offset is taken from the \href{https://github.com/zeldaret/oot}{OoT decompilation} rather than from inspection, with the retail Player structure at the decompilation's offset minus \texttt{0x10}. One shared definition (\texttt{zelda\_\allowbreak{}rl/\allowbreak{}state\_\allowbreak{}layout.py}) is imported by both the data collector and every model, so the two cannot drift.
 
-Reading structured state out of an emulator instead of rendering pixels is not our idea. Firoiu, Whitney and Tenenbaum (arXiv:1702.06230) did it for \emph{Super Smash Bros. Melee} under the same emulator family, reading each player's position, velocity and action state from memory every frame; section 14 states what we take from them and what we do not claim.
+Reading structured state out of an emulator instead of rendering pixels is not our idea. Firoiu, Whitney and Tenenbaum (arXiv:1702.06230) did it for \emph{Super Smash Bros. Melee} under the same emulator family, reading each player's position, velocity and action state from memory every frame; \S\ref{sec:14} states what we take from them and what we do not claim.
 
 Reading memory is not a shortcut past the hard part, and it is worth being precise about which part it removes. It removes \textbf{rendering and pixel processing}. It does not remove perception. The observation is a variable set of actors over twenty fields each, 1,033 numbers for the boss task, and more than half of them describe slots that are empty at any given moment. Nothing in that vector is labelled: the policy has to learn which row is the boss, which rows are larvae worth ignoring, what the decoded action routine implies about what happens next, and what the distances and velocities mean in a frame that rotates with the camera. That is a perception problem, posed over structured state instead of over pixels.
 
@@ -118,6 +123,7 @@ What the structure buys is that the quantity mattering most for combat, an enemy
 \textbf{Vocabulary, fixed once.} A \emph{machine} is one cloud pod and is also called a rank by the tooling. An \emph{arm} is one configuration under test. An \emph{update} is one iteration of the policy-gradient optimiser. \emph{u} is a world unit, the game's own distance measure; Link is about 60 units tall and the boss room is roughly 1,000 units across.
 
 \subsection{Actions and reward}
+\label{sec:2.2}
 
 Actions are a discrete product of nine world-relative directions and a button set. The melee task uses 63 actions; the boss task needs 108, adding slingshot, Deku Nut, first-person aiming, and the Z-plus-shield and Z-plus-nut combinations. \textbf{Z-targeting} is the game's own lock-on, which fixes the camera and Link's facing on a chosen enemy; it is referred to by that name throughout because that is what the button does.
 
@@ -127,6 +133,11 @@ Reward is computed by one tracker (\texttt{zelda\_rl/combat.py}) shared by the r
 
 \textbf{Outcomes.} These are what the task is about, and they are uncapped.
 
+\begin{center}
+\captionof{table}{The reward actually used to train every Gohma policy reported here, as a list of terms. Coefficients and caps are read from the training configuration of each run, not retyped; the per-version differences are in the version table of \S\ref{sec:5.3} and the full resolution is in the reward provenance document.}
+\label{tab:therewardactuallyusedtotrain}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXX@{}}
 \toprule
@@ -144,6 +155,11 @@ Reward is computed by one tracker (\texttt{zelda\_rl/combat.py}) shared by the r
 
 \textbf{The stun chain.} The one causal path to damage, and the largest shaping term in the reward.
 
+\begin{center}
+\captionof{table}{The experimental preset added after the reported results, for the five behaviours watched in play. It trained no policy in this report and is listed so it cannot be confused with the configuration above.}
+\label{tab:theexperimentalpresetaddedaf}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XrrX@{}}
 \toprule
@@ -159,6 +175,11 @@ Reward is computed by one tracker (\texttt{zelda\_rl/combat.py}) shared by the r
 
 \textbf{Positioning, defence and larvae.} Everything else that pays at all.
 
+\begin{center}
+\captionof{table}{The melee task's reward, which is the configuration the solved task used.}
+\label{tab:themeleetasksrewardwhichisth}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}Xrr@{}}
 \toprule
@@ -176,15 +197,16 @@ Reward is computed by one tracker (\texttt{zelda\_rl/combat.py}) shared by the r
 \end{tabularx}
 \end{center}
 
-\textbf{Twenty terms are zeroed}, and which ones is the interesting part. The whole slingshot-shaping cluster is off: \texttt{g\_red\_eye\_seed}, \texttt{g\_sling\_red\_eye}, \texttt{g\_sling\_ready}, \texttt{g\_lock\_red\_eye}, \texttt{g\_unfired\_red\_eye}, \texttt{g\_drop\_red\_eye\_shot}, \texttt{g\_elevated\_seed}. So are the pickups and grass (\texttt{g\_seed\_pickup}, \texttt{g\_nut\_pickup}, \texttt{g\_grass\_cut}), lock-on (\texttt{w\_lockon}, \texttt{w\_lock\_step}) and the guard term. That cluster was removed on measurement, not on taste: section 14 gives the version where it reached 88\% of total reward magnitude while the policy died 64.5\% of the time.
+\textbf{Twenty terms are zeroed}, and which ones is the interesting part. The whole slingshot-shaping cluster is off: \texttt{g\_red\_eye\_seed}, \texttt{g\_sling\_red\_eye}, \texttt{g\_sling\_ready}, \texttt{g\_lock\_red\_eye}, \texttt{g\_unfired\_red\_eye}, \texttt{g\_drop\_red\_eye\_shot}, \texttt{g\_elevated\_seed}. So are the pickups and grass (\texttt{g\_seed\_pickup}, \texttt{g\_nut\_pickup}, \texttt{g\_grass\_cut}), lock-on (\texttt{w\_lockon}, \texttt{w\_lock\_step}) and the guard term. That cluster was removed on measurement, not on taste: \S\ref{sec:14} gives the version where it reached 88\% of total reward magnitude while the policy died 64.5\% of the time.
 
-Three properties of this table are worth stating because they drive results later in the paper. \textbf{The stun credit is conditional}: \texttt{g\_stun\_on\_convert} is on, so stunning her without landing a hit pays nothing, which is why the policy's stun counts and its damage move together. \textbf{\texttt{g\_seed\_stun} at 15.0 is by a wide margin the largest shaping term}, and section 5.2 shows the policy earns it about once in twenty wins, which is the clearest evidence in this report that the red-eye shot is under-executed rather than under-rewarded. And \textbf{none of these terms is potential-based} in the sense of Ng, Harada and Russell, so none of them is guaranteed to leave the optimal policy unchanged; section 9.1 returns to that.
+Three properties of this table are worth stating because they drive results later in the paper. \textbf{The stun credit is conditional}: \texttt{g\_stun\_on\_convert} is on, so stunning her without landing a hit pays nothing, which is why the policy's stun counts and its damage move together. \textbf{\texttt{g\_seed\_stun} at 15.0 is by a wide margin the largest shaping term}, and \S\ref{sec:5.2} shows the policy earns it about once in twenty wins, which is the clearest evidence in this report that the red-eye shot is under-executed rather than under-rewarded. And \textbf{none of these terms is potential-based} in the sense of Ng, Harada and Russell, so none of them is guaranteed to leave the optimal policy unchanged; \S\ref{sec:9.1} returns to that.
 
 A later experiment, not reported as a result in this paper, raises damage to 20 and rescales the shaping onto one scale. It is a separate preset precisely so the numbers above keep meaning what they meant.
 
 \subsection{Policy and optimisation}
+\label{sec:2.3}
 
-The policy is an entity-factored recurrent actor-critic: the actor table is pooled by a shared per-actor network, then a recurrent core feeds actor and critic heads. Training is recurrent PPO, and across machines we average weights every update rather than averaging gradients. \textbf{We claim no architectural novelty and ran no head-to-head ablation}: this architecture was never compared against a flat network at scale, so it is a choice we made and not a finding, and nothing in the rest of the paper rests on it.
+The policy is an entity-factored recurrent actor-critic: the actor table is pooled by a shared per-actor network, then a gated recurrent unit \cite{cho2014gru,chung2014gru} of width 256 feeds actor and critic heads. Training is PPO \cite{schulman2017ppo} with generalised advantage estimation \cite{schulman2016gae}, Adam \cite{kingma2015adam} throughout, and truncated backpropagation through time over the recurrent core, following the practice established for recurrent PPO \cite{pleines2022recurrentppo}. Across machines we average weights every update rather than averaging gradients. \textbf{We claim no architectural novelty and ran no head-to-head ablation}: this architecture was never compared against a flat network at scale, so it is a choice we made and not a finding, and nothing in the rest of the paper rests on it. That caveat is worth taking literally, because implementation choices in on-policy algorithms have been shown to account for differences as large as the ones usually attributed to the algorithm \cite{andrychowicz2021onpolicy}.
 
 \begin{figure}[tbp]
   \centering
@@ -194,30 +216,38 @@ The policy is an entity-factored recurrent actor-critic: the actor table is pool
 \end{figure}
 
 \subsection{Compute, and what it cost}
+\label{sec:2.4}
 
 Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109 at the largest, at \$0.48 to \$0.56 per machine-hour. World models ran on single H100 80GB cards at \$3.49 to \$3.99 an hour. \textbf{Nothing in this work used an A100}, although one pod was requested as one and the provider substituted an H100. Our own logs recorded this as "A100 or H100" for months, and that was wrong.
 
-The whole project consumed about \textbf{2,300 machine-hours and \$1,381}, split \textbf{\$1,115 for the reinforcement learning track and \$266 for the world model track}. It generated \textbf{509.6 million environment steps}, which is \textbf{14,154 hours of game time}, roughly 1.6 years of play, at about \textbf{\$2.71 per million steps}. The melee task of section 3 is the one phase costed from a verified artefact: \textbf{\$51 and 4 hours 52 minutes} for the policy that solved it over 41.8 million steps, \textbf{\$1.22 per million}, against \$61.50 for the whole six-hour session including a discarded run. The rest of the project is twice as expensive per step, which is what a long tail of short diagnostic fleets costs rather than a change in efficiency. One reconciliation to state rather than hide: the step count rebuilt from the exported histories is 44.35 million, not the 41.8 million our logs record, and we have not resolved which is right.
+The whole project consumed about \textbf{2,300 machine-hours and \$1,381}, split \textbf{\$1,115 for the reinforcement learning track and \$266 for the world model track}. It generated \textbf{509.6 million environment steps}, which is \textbf{14,154 hours of game time}, roughly 1.6 years of play, at about \textbf{\$2.71 per million steps}. The melee task of \S\ref{sec:3} is the one phase costed from a verified artefact: \textbf{\$51 and 4 hours 52 minutes} for the policy that solved it over 41.8 million steps, \textbf{\$1.22 per million}, against \$61.50 for the whole six-hour session including a discarded run. The rest of the project is twice as expensive per step, which is what a long tail of short diagnostic fleets costs rather than a change in efficiency. One reconciliation to state rather than hide: the step count rebuilt from the exported histories is 44.35 million, not the 41.8 million our logs record, and we have not resolved which is right.
 
 \textbf{The caveat matters more than the totals, and it is a finding about provenance rather than about cost.} Only \textbf{18\% of that spend is measured}. Our provider keeps a per-pod billing ledger that survives termination, and we read \textbf{43.7 H100-hours and \$172.69} of world model training out of it, pod by pod, months later. That ledger covers GPU machines only: a CPU pod billing at the moment we queried it returns no records, and terminated pods are not listed by any endpoint. The remaining \textbf{82\%} is reconstructed as machines times hourly rate times the span between the first and last timestamp our experiment tracker holds for that session. Rates and machine counts come from our own launch logs and are reliable; the durations are not, and they err low, since bootstrap and idle time falls outside that span. Two fleets are not reconstructible at all: a 109-machine data collection whose only surviving trace is the shard directories it wrote, and a 34-machine fleet the provider terminated without a reason while we were not watching. We report those as missing rather than as estimates. \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record} section 19 carries the per-phase table.
 
 \section{Task one: the melee encounter is solved}
+\label{sec:3}
 
 Three Deku Babas in the first room of the Deku Tree, with the room exit behind the agent so that walking out is an available failure. Success is all three defeated.
 
 At global update 150 the policy clears \textbf{10 of 10 start states locally with 0 deaths}, six of them without taking damage \textbf{(Q: one watched episode per state, not a rate)}. Over the same updates the aggregator machine, the only one whose history was exported, reads \textbf{72.9\% success and 80.7\% of Babas killed (M)}. A 78\% / 83\% fleet mean over all twenty machines appears in our logs and \textbf{is not recoverable from the exported artefacts}, so we quote the recoverable number. Training ran 41.8 million environment steps, about 1,160 hours of game time.
 
-The learned behaviour is recognisable as play rather than as exploitation: it walks in from the entrance, wakes Babas that are underground, locks on, and times attacks against the lunge animation. The clip accompanying this report (section 11) is one such episode: the episode runs 26.7 seconds and the clip 29.7, the difference being the hold after the last kill. Three kills, at 7.3, 22.4 and 26.8 seconds.
+The learned behaviour is recognisable as play rather than as exploitation: it walks in from the entrance, wakes Babas that are underground, locks on, and times attacks against the lunge animation. The clip accompanying this report (\S\ref{sec:11}) is one such episode: the episode runs 26.7 seconds and the clip 29.7, the difference being the hold after the last kill. Three kills, at 7.3, 22.4 and 26.8 seconds.
 
 This task matters mainly as calibration. It establishes that the observation, the action space and the optimiser are jointly sufficient to learn real combat in this engine, which is what makes the boss result a statement about the boss rather than about the setup.
 
 
 \section{Task two: what Queen Gohma actually requires}
+\label{sec:4}
 
 Gohma has 10 health, one point per sword hit, and \textbf{she is only damageable while stunned}. A stun must be manufactured: a slingshot seed into her eye while it is red, or a Deku Nut while she is on the floor. She spends much of the fight on the ceiling where she cannot be reached, and she spawns larvae.
 
 We mined the structure from 100 recorded human victories (54,626 steps, every one a win). This is the specification of the task, measured rather than asserted \textbf{(M throughout this section, re-derivable from the corpus alone)}:
 
+\begin{center}
+\captionof{table}{The task, measured from 100 recorded human victories rather than asserted. Every row is re-derivable from the corpus alone.}
+\label{tab:thetaskmeasuredfrom100record}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XX@{}}
 \toprule
@@ -238,6 +268,11 @@ mean range to her eye & 400 units, but \textbf{50 units at the moment damage lan
 
 And the gate, from 678 real damage events:
 
+\begin{center}
+\captionof{table}{What is true in the two seconds before her health falls, over all 678 damage events in the corpus. The engine's own vulnerability flag is set for 9 of them, which is why rewarding that flag does not work.}
+\label{tab:whatistrueinthetwosecondsbef}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XX@{}}
 \toprule
@@ -254,6 +289,11 @@ The last row is worth its own sentence: the obvious flag to key a reward on iden
 
 Conversion is conditional on her state at the moment of impact, across 371 impacts:
 
+\begin{center}
+\captionof{table}{Whether a projectile hit converts into a stun, by the state she is in when it lands. The conversion is available in one state and unavailable in the others, which is what makes the opening something the agent has to manufacture rather than wait for.}
+\label{tab:whetheraprojectilehitconvert}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XX@{}}
 \toprule
@@ -269,7 +309,7 @@ ceiling, idle or moving & \textbf{0\% across 71 impacts} \\
 
 So the projectile hit that looks productive, the red-eye shot on the ceiling, converts about two times in five, and 71 of 371 impacts were wasted entirely. Hitting the red eye is necessary and not sufficient.
 
-\textbf{A disclosure about the reward we actually ran, rather than the one we designed.} The boss tracker fully replaces the generic combat tracker's step function and never calls it, so the generic approach reward never fired in versions 1 through 14. Nothing in those runs paid the agent for crossing the room. We found this by reading both implementations, after fourteen versions, and the distance gradient in section 5.1 should be read knowing it. The term added in v15 to fix it is the one discussed in section 9.1.
+\textbf{A disclosure about the reward we actually ran, rather than the one we designed.} The boss tracker fully replaces the generic combat tracker's step function and never calls it, so the generic approach reward never fired in versions 1 through 14. Nothing in those runs paid the agent for crossing the room. We found this by reading both implementations, after fourteen versions, and the distance gradient in \S\ref{sec:5.1} should be read knowing it. The term added in v15 to fix it is the one discussed in \S\ref{sec:9.1}.
 
 Two behaviours correlate \textbf{negatively} with damage dealt across the 100 wins: larvae hit at \textbf{-0.598} and time she spends on the ceiling at \textbf{-0.559}. Fighting the larvae is what a human does when the fight is going badly. Any method that imitates the corpus uniformly learns that behaviour in proportion to how often it appears.
 
@@ -281,26 +321,52 @@ Two behaviours correlate \textbf{negatively} with damage dealt across the 100 wi
 \end{figure}
 
 \subsection{Why this is hard for a policy gradient, stated precisely}
+\label{sec:4.1}
 
-The advantage horizon of our optimiser is \texttt{1 / (1 - gamma * lambda)}. At the settings used by every run in this project, gamma 0.995 and lambda 0.95, that is 18.3 steps, or \textbf{1.8 seconds} at 10 Hz, against a fight that takes 45 to 154 seconds.
+Generalised advantage estimation \cite{schulman2016gae} forms the advantage at time $t$ as an exponentially weighted sum of temporal-difference residuals $\delta_{t+l} = r_{t+l} + \gamma V(s_{t+l+1}) - V(s_{t+l})$:
 
-The consequence, asserted in a test against the real advantage computation: the terminal +60 for the kill contributes to the first decision of the episode at \textbf{0.000\% of its face value}. Raising the horizon to gamma 0.99967 and lambda 1.0 brings that to 59.9\% at 154 seconds.
+\begin{equation}
+\hat{A}_t \;=\; \sum_{l=0}^{\infty} (\gamma\lambda)^{\,l}\, \delta_{t+l},
+\qquad\text{effective horizon}\quad
+H \;=\; \frac{1}{1-\gamma\lambda}.
+\end{equation}
 
-A conflation that cost this project time is worth stating, because it is easy to make. The often-quoted "47\% at 15 seconds" is the \textbf{value} discount, \texttt{gamma\textasciicircum{}t}. The advantage is a \texttt{(gamma * lambda)}-weighted sum of temporal-difference residuals, so the weight on a residual 15 seconds ahead is \textbf{0.023\%}. Those are different numbers and only the second describes what enters the advantage.
+At the settings used by every run in this project, $\gamma = 0.995$ and $\lambda = 0.95$, so $\gamma\lambda = 0.94525$ and $H = 18.3$ steps, or \textbf{1.8 seconds} at 10 Hz, against a fight that takes 45 to 154 seconds.
 
-\textbf{What that does and does not establish.} It establishes that the \emph{direct} contribution of the terminal residual to an early advantage is negligible over the length of this fight. It does \textbf{not} establish that the terminal reward never influenced earlier decisions, and the two are easy to conflate. The critic bootstraps, so information about eventual outcomes can enter \texttt{V(s)} and propagate backwards across training updates, over many updates rather than within one trajectory. The defensible statement is narrower and still strong: \textbf{at these settings the configuration supplies almost no direct long-horizon credit, so whatever the policy learned about assembling a chain of openings had to arrive either through dense shaping inside the 1.8 second window or slowly through the value function.} The melee task is the clean case: it was solved by shaping inside that window.
+The consequence, asserted in a test against the real advantage computation: the terminal +60 for the kill contributes to the first decision of the episode at \textbf{0.000\% of its face value}. Raising the horizon to $\gamma = 0.99967$ and $\lambda = 1.0$ brings that to 59.9\% at 154 seconds.
+
+A conflation that cost this project time is worth stating, because it is easy to make. The often-quoted "47\% at 15 seconds" is the \textbf{value} discount $\gamma^{t}$, which at $t = 150$ steps is \$0.995\textasciicircum{}\{150\} = 0.47\$. What enters the advantage is the GAE weight on that same residual:
+
+\begin{equation}
+(\gamma\lambda)^{150} \;=\; 0.94525^{150} \;=\; 2.1\times10^{-4},
+\qquad\text{against}\qquad
+\gamma^{150} \;=\; 0.995^{150} \;=\; 0.47 .
+\end{equation}
+
+Those are different numbers by more than three orders of magnitude, and only the first describes what reaches the policy gradient.
+
+The alternative to shaping, for a terminal reward this far out of reach, is to attack the exploration problem directly with an intrinsic bonus \cite{burda2019rnd} or by archiving and returning to promising states \cite{ecoffet2021goexplore}. We did neither, and offer that as the obvious untried direction rather than as a result.
+
+\textbf{What that does and does not establish.} It establishes that the \emph{direct} contribution of the terminal residual to an early advantage is negligible over the length of this fight. It does \textbf{not} establish that the terminal reward never influenced earlier decisions, and the two are easy to conflate. The critic bootstraps, so information about eventual outcomes can enter $V(s)$ and propagate backwards across training updates, over many updates rather than within one trajectory. The defensible statement is narrower and still strong: \textbf{at these settings the configuration supplies almost no direct long-horizon credit, so whatever the policy learned about assembling a chain of openings had to arrive either through dense shaping inside the 1.8 second window or slowly through the value function.} The melee task is the clean case: it was solved by shaping inside that window.
 
 
 \section{The result: start-state dependence, not a single number}
+\label{sec:5}
 
 Our best boss policy is \texttt{gohma-kl-v15}, referred to below as v15. The measurement is 456 episodes per arm, 76 on each of six start states, a 300 second episode cap, and the same harness for every arm.
 
-\textbf{What is and is not held out, because the paper turns on start states and the two senses are easy to conflate.} These are \emph{fresh evaluation episodes}, played after training with no gradient updates, but from the \textbf{same six start states the policy trained on}. They are not held-out initial conditions. The four start states genuinely excluded from training are reported separately and are unusable as a generalisation test, because all four are at half health and all four beyond 368 units, so "held out" is collinear with "far" and no matched comparison exists (section 10). Within-episode variation comes from sampled rather than greedy actions and from the emulator's own nondeterminism; the start state itself is a fixed savestate, so the confidence intervals describe the spread over episodes at a given start, not over start states.
+\textbf{What is and is not held out, because the paper turns on start states and the two senses are easy to conflate.} These are \emph{fresh evaluation episodes}, played after training with no gradient updates, but from the \textbf{same six start states the policy trained on}. They are not held-out initial conditions. The four start states genuinely excluded from training are reported separately and are unusable as a generalisation test, because all four are at half health and all four beyond 368 units, so "held out" is collinear with "far" and no matched comparison exists (\S\ref{sec:10}). Within-episode variation comes from sampled rather than greedy actions and from the emulator's own nondeterminism; the start state itself is a fixed savestate, so the confidence intervals describe the spread over episodes at a given start, not over start states.
 
-\textbf{The episode cap is part of the claim.} An earlier evaluation used a 120 second cap, below the 154 seconds a human win takes, and so could not observe many of the wins it was counting. It reported 5.00\%; the same policy at 300 seconds reads about 12\% in training and 8.33\% held out. Every kill rate this project measured at 120 seconds is withdrawn (section 12).
+\textbf{The episode cap is part of the claim.} An earlier evaluation used a 120 second cap, below the 154 seconds a human win takes, and so could not observe many of the wins it was counting. It reported 5.00\%; the same policy at 300 seconds reads about 12\% in training and 8.33\% held out. Every kill rate this project measured at 120 seconds is withdrawn (\S\ref{sec:12}).
 
 \subsection{The profile}
+\label{sec:5.1}
 
+\begin{center}
+\captionof{table}{The per-start profile of the best boss policy, 456 episodes, 76 on each of six starts. The pooled row is an average over a curriculum we chose and is included only because results elsewhere are usually quoted that way.}
+\label{tab:theperstartprofileofthebestb}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\footnotesize
 \begin{tabularx}{\linewidth}{@{}rXrrrrrr@{}}
 \toprule
@@ -330,22 +396,29 @@ Three readings, in order of importance.
 
 \textbf{The pooled rate is not a property of the policy.} It is an average over a curriculum we chose. Change the mix and it moves without the policy changing. The per-start profile is the thing that transfers, and the pooled row is included only because comparisons elsewhere in the literature are usually quoted that way.
 
-\textbf{The binary cannot resolve the middle of the table and the graded quantity can.} The confidence intervals for starts 5, 3, 6 and 4 all overlap. On defeat rate alone, only the extremes separate. The damage share orders all six cleanly at a few percent of standard error: 0.753, 0.636, 0.583, 0.367, 0.169, 0.126. This is the same phenomenon as section 9.1, appearing inside the headline result.
+\textbf{The binary cannot resolve the middle of the table and the graded quantity can.} The confidence intervals for starts 5, 3, 6 and 4 all overlap. On defeat rate alone, only the extremes separate. The damage share orders all six cleanly at a few percent of standard error: 0.753, 0.636, 0.583, 0.367, 0.169, 0.126. This is the same phenomenon as \S\ref{sec:9.1}, appearing inside the headline result.
 
 \textbf{It is not one variable.} Starts 5 and 6 differ by ten units of distance, 347 against 357, and by almost fourfold in damage share. What differs is her action state: on the ceiling with her eye red she presents a shootable target immediately, on the floor with her eye red she does not. Start 8 is the worst of the six despite beginning stunned, because she is 448 units away. With six starts we cannot separate distance, her remaining health and her action state, and we do not fit a model to six points.
 
 \subsection{What the policy actually learned, and what it did not}
+\label{sec:5.2}
 
 Pooling every win in the matched evaluation, 38 of them, the policy was knocked down 192 times. Of those, \textbf{136 came from a Deku Nut, 10 from a slingshot seed, and 46 from her own descent} with no projectile involved. On start 7 the slingshot converted \textbf{zero times in 22 wins}; on start 5, exactly once per win, which is the red-eye shot that start hands it.
 
-Two things follow. First, the policy solves this boss with a different tool from the demonstrator: the human corpus fires 2.99 seeds and 1.71 nuts per win and the policy inverts that ratio. We avoid calling it the wrong tool, because the Deku Nut is a legitimate mechanic and the policy found an affordance of its action space that works. Second, and less comfortably, \textbf{24\% of the openings it exploits are not openings it created.} She descends on her own schedule and the policy converts what arrives. In the recorded episode of section 11 it dropped a cocked shot while her eye was red three times, at 17, 78 and 137 seconds, and passed up a fourth window at 139. It fired four seeds from the 26 it carried and only the opening one converted. Deku Nuts were already its default by 25 seconds, so this is not a policy falling back on nuts after the slingshot failed; the nut was the first tool it reached for.
+Two things follow. First, the policy solves this boss with a different tool from the demonstrator: the human corpus fires 2.99 seeds and 1.71 nuts per win and the policy inverts that ratio. We avoid calling it the wrong tool, because the Deku Nut is a legitimate mechanic and the policy found an affordance of its action space that works. Second, and less comfortably, \textbf{24\% of the openings it exploits are not openings it created.} She descends on her own schedule and the policy converts what arrives. In the recorded episode of \S\ref{sec:11} it dropped a cocked shot while her eye was red three times, at 17, 78 and 137 seconds, and passed up a fourth window at 139. It fired four seeds from the 26 it carried and only the opening one converted. Deku Nuts were already its default by 25 seconds, so this is not a policy falling back on nuts after the slingshot failed; the nut was the first tool it reached for.
 
-This is a real behavioural difference from the demonstrations. We note it beside the imitation results of section 6 as a hypothesis for why pressing the demonstrated action distribution onto this policy hurts it, and not as a demonstrated cause: state visitation, timing and recovery behaviour all differ too, and nothing here isolates item preference as the mechanism.
+This is a real behavioural difference from the demonstrations. We note it beside the imitation results of \S\ref{sec:6} as a hypothesis for why pressing the demonstrated action distribution onto this policy hurts it, and not as a demonstrated cause: state visitation, timing and recovery behaviour all differ too, and nothing here isolates item preference as the mechanism.
 
 \subsection{What each version changed, and the trajectory}
+\label{sec:5.3}
 
 Versions are referred to throughout by number. Each resumes from the previous one, which matters for reading the trend: the lineage's level change is a real measurement and the per-version slopes are not independent measurements of their own reward changes.
 
+\begin{center}
+\captionof{table}{What each version changed and what it did, in order. Each version resumes from the previous one, so the level is inherited and only the within-version trend is a property of the change.}
+\label{tab:whateachversionchangedandwha}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}rXr@{}}
 \toprule
@@ -364,16 +437,24 @@ v17 & coefficient back to v15's, plus deficit-weighted start sampling & 3.19 to 
 \end{center}
 
 \subsection{The trajectory, and the ceiling}
+\label{sec:5.3.1}
 
 Across eight versions and five reward configurations, boss damage rose \textbf{0.38 to 3.32 of 10} and return rose \textbf{-12.6 to +56.8}, with every version's slope distinguishable from zero. It then \textbf{saturates at 3.2 to 3.4}: every run beginning near 2.6 climbs and every run beginning near 3.3 does not. The last six health points are the open problem, and more training time is not the missing ingredient, since one version ran 399 updates and ended at 1.21\% while another ran 129 from scratch and never left 0.1\%.
 
 
 \section{Imitation was not enough}
+\label{sec:6}
 
 The author beat Queen Gohma 100 times under a recorder that logs, at 10 Hz, the exact observation the policy sees, the action index the human's input decodes to, the raw controller state, and the camera yaw used for that decode. The decoder is proved to be the exact inverse of what the environment sends, round-tripping every emittable action at five camera angles; an earlier version ignored the camera and was silently wrong for every non-neutral direction.
 
 \subsection{Cloning the corpus}
+\label{sec:6.1}
 
+\begin{center}
+\captionof{table}{The behaviour clone against the size of its corpus. Held-out next-action accuracy rises and the thing it is a proxy for does not.}
+\label{tab:thebehaviourcloneagainstthes}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXX@{}}
 \toprule
@@ -397,6 +478,7 @@ Event-stratified cloning, weighting each step by the decision it belongs to, is 
 The mechanism is not mysterious, and it is not new. This is the compounding-error problem of Ross, Gordon and Bagnell (AISTATS 2011): the clone is trained teacher-forced, so every step conditions on the human's real observation history and it never learns to recover from the states its own mistakes produce, with regret that grows quadratically in the horizon. 81\% of its episodes end in death. What our numbers add is the magnitude at a 154 second horizon with a demonstrator that won 100 of 100.
 
 \subsection{Frame accuracy is an anti-selector}
+\label{sec:6.2}
 
 Across five stratified cloning arms, the correlation between best validation accuracy and online damage is \textbf{r = -0.11}. Across 14 offline arms with different corpora it sharpens to \textbf{r = -0.875} (t = -6.25) on win-class accuracy, with training loss positively correlated with online damage at +0.624. The best-fitting arms are the ones with the easiest corpus.
 
@@ -405,9 +487,15 @@ Within a single arm, accuracy does track its own damage, weakly and positively, 
 And the single most compact statement of the problem. On the human's own frames, v15's greedy action matches the human's on \textbf{3\%} of them. The comparison that makes that number bite is not the 0.9\% chance floor over 108 actions but the \textbf{20.1\% majority-action floor}: a policy that did nothing at all would agree with the human more often than v15 does. Read it as one-directional and thin. It is measured on the demonstrator's state distribution and not the policy's, with greedy actions where v15 acts by sampling, at one update of one machine, with no standard error, and we never measured the converse. Weak as it is, it is the measurement that says frame matching is a poor proxy here: the term built to raise it did raise it, from 3\% to 23\%, and cost damage at t = -4.98.
 
 \subsection{Fifteen mechanisms, none of which beat the policy trained without the data}
+\label{sec:6.3}
 
-Fifteen arms were run. The nine below are those that accumulated enough updates to fit a slope before the machines they ran on were lost; the remainder are listed in \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record} with their W\&B identities and produced no usable trend. Every arm starts from v15's weights, so the question is whether demonstrations improve an already competent policy. The bar is v15's own 3.275 on the \textbf{mix-invariant} damage metric, by which we mean the unweighted mean of the per-start values rather than the episode-weighted average, so that changing the curriculum cannot move it. Section 9.2 is why that distinction exists.
+Fifteen arms were run. The nine below are those that accumulated enough updates to fit a slope before the machines they ran on were lost; the remainder are listed in \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record} with their W\&B identities and produced no usable trend. Every arm starts from v15's weights, so the question is whether demonstrations improve an already competent policy. The bar is v15's own 3.275 on the \textbf{mix-invariant} damage metric, by which we mean the unweighted mean of the per-start values rather than the episode-weighted average, so that changing the curriculum cannot move it. \S\ref{sec:9.2} is why that distinction exists.
 
+\begin{center}
+\captionof{table}{Fifteen mechanisms for folding 100 human victories into the policy gradient, each against the policy trained without them. No arm trends toward the baseline.}
+\label{tab:fifteenmechanismsforfolding1}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XrrrXr@{}}
 \toprule
@@ -440,16 +528,22 @@ inverse, clone as student & 16 & 0.49 & 0.96 & \textbf{+0.0337 $\pm$ 0.0102} & \
 
 A cleaner decomposition came from a three-arm, three-seed study on the policy's \textbf{own} online states. Aligning only the internal representation to the clone is neutral on every seed (+0.032, -0.066, +0.123). Adding a penalty on the clone's \textbf{actions} at those same states is harmful and not marginally so, at -0.107 (t = -5.50) and -0.110 (t = -4.83). Pressing a 0.53-damage policy's action distribution onto a 3.275-damage policy pulls the latter toward the former, which is the obvious thing to say afterwards and was not obvious before it was measured.
 
-This is the \textbf{imitation gap} named by Weihs, Jain and colleagues (ADVISOR, NeurIPS 2021): when the teacher acts on information or capability the student does not have, imitating it is actively harmful and can be beaten by pure reinforcement learning. Our instance has two unusual features, set out in section 14: the demonstrator is not privileged, since the human sees exactly the observation the policy sees, and the demonstrator is far stronger at the task rather than a crutch for a weak learner.
+This is the \textbf{imitation gap} named by Weihs, Jain and colleagues (ADVISOR, NeurIPS 2021): when the teacher acts on information or capability the student does not have, imitating it is actively harmful and can be beaten by pure reinforcement learning. Our instance has two unusual features, set out in \S\ref{sec:14}: the demonstrator is not privileged, since the human sees exactly the observation the policy sees, and the demonstrator is far stronger at the task rather than a crutch for a weak learner.
 
 \subsection{What did work offline, and what it says}
+\label{sec:6.4}
 
-Return-conditioned behaviour cloning, trained on the same 100 human wins \textbf{plus} a few hundred of the policy's own failures and 200 of its wins, with no policy gradient anywhere, reaches \textbf{1.76 $\pm$ 0.11 damage and 8 defeats in 240 episodes (3.3\%)}. Both plain clones of the same 100 games scored \textbf{0 in 400}.
+Return-conditioned behaviour cloning conditions a cloned policy on the return it should achieve and reads the action out at test time by asking for a high one. It is the "RvS" formulation \cite{emmons2022rvs}, the non-sequence-model member of the family that Decision Transformer \cite{chen2021dt} made standard. Trained on the same 100 human wins \textbf{plus} a few hundred of the policy's own failures and 200 of its wins, with no policy gradient anywhere, it reaches \textbf{1.76 $\pm$ 0.11 damage and 8 defeats in 240 episodes (3.3\%)}. Both plain clones of the same 100 games scored \textbf{0 in 400}.
 
-\textbf{These were measured at a 120 second episode cap}, which section 5 says is below the time a human win takes and which invalidated an earlier headline. The damage figures are usable because damage accumulates throughout an episode; the defeat rates in this subsection are not comparable with the 300 second numbers anywhere else in the paper, and v15's own damage moved from 2.88 to 3.53 between the two caps. The one comparison below that is matched at 300 seconds is labelled as such.
+\textbf{These were measured at a 120 second episode cap}, which \S\ref{sec:5} says is below the time a human win takes and which invalidated an earlier headline. The damage figures are usable because damage accumulates throughout an episode; the defeat rates in this subsection are not comparable with the 300 second numbers anywhere else in the paper, and v15's own damage moved from 2.88 to 3.53 between the two caps. The one comparison below that is matched at 300 seconds is labelled as such.
 
 The informative contrast is the corpus, not the architecture:
 
+\begin{center}
+\captionof{table}{Offline return-conditioned cloning by corpus composition, pooled over every evaluation rather than read off the last one.}
+\label{tab:offlinereturnconditionedclon}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXr@{}}
 \toprule
@@ -466,6 +560,11 @@ human wins + failures & 0.93 $\pm$ 0.17 & about 1\% \\
 
 It still loses to the policy gradient. At matched 300 second caps, 456 episodes per arm, same harness:
 
+\begin{center}
+\captionof{table}{The best offline arm against the policy gradient, at matched episode caps and the same harness.}
+\label{tab:thebestofflinearmagainstthep}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXX@{}}
 \toprule
@@ -484,11 +583,19 @@ Two further offline results are worth recording because they close plausible esc
 
 
 \section{The world model did not get far enough}
+\label{sec:7}
 
-Four phases over two months, each with its own architecture family, dataset scale and reason for being abandoned. The baseline throughout is \textbf{persistence}, the prediction that nothing changes, and \textbf{skill} is \texttt{1 - model error /\allowbreak{} persistence error}: zero means exactly as good as doing nothing, positive is better than doing nothing, and negative is worse. Every number in this section is a skill score in that sense.
+The motivation is the standard one: a model accurate enough to act in lets a policy be improved on model-generated experience rather than on environment steps \cite{sutton1991dyna,ha2018worldmodels,hafner2020dreamer}, an approach that now carries the state of the art on many control benchmarks \cite{hafner2025dreamerv3} and that can be used for search when the model's value is reliable \cite{schrittwieser2020muzero}. Our closed loop in this section is the Dyna pattern at small scale, and the rollout depth it should have used was recorded in our own earlier work on it \cite{kieto2026dyna}.
 
-The baseline is not ours. Copying the last frame is long established as the floor in video prediction, where it is known to beat learned models on mostly static data (Babaeizadeh et al., arXiv:1911.01655; Villegas et al., arXiv:1706.08033), and the NeurIPS 2026 paper "Your world model may be worse than copying the last frame" reports that of 20 recent world-model papers, 12 give a prediction-quality number and 9 of those give nothing to read it against. This section therefore confirms a known and under-reported failure mode rather than discovering one; section 14 states the narrower thing we think is ours.
+Four phases over two months, each with its own architecture family, dataset scale and reason for being abandoned. The baseline throughout is \textbf{persistence}, the prediction that nothing changes, and \textbf{skill} is \texttt{1 -\allowbreak{} model error /\allowbreak{} persistence error}: zero means exactly as good as doing nothing, positive is better than doing nothing, and negative is worse. Every number in this section is a skill score in that sense.
 
+The baseline is not ours. Copying the last frame is long established as the floor in video prediction, where it is known to beat learned models on mostly static data \cite{villegas2019highfidelity,villegas2017mcnet}, and a NeurIPS 2026 workshop paper, "Your world model may be worse than copying the last frame" \cite{surazhsky2026copyframe}, reports that of 20 recent world-model papers, 12 give a prediction-quality number and 9 of those give nothing to read it against. This section therefore confirms a known and under-reported failure mode rather than discovering one; \S\ref{sec:14} states the narrower thing we think is ours.
+
+\begin{center}
+\captionof{table}{The world model by phase, and what each phase was measured against. The trivial control is copying the last frame.}
+\label{tab:theworldmodelbyphaseandwhate}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXX@{}}
 \toprule
@@ -497,7 +604,7 @@ The baseline is not ours. Copying the last frame is long established as the floo
 latent transition models, 6 configurations & 203k transitions & every one \textbf{loses to persistence}, best -1.14, worst -7.24 \\
 object-centric causal model & same & the adopted paper's actual method was never run; what trained was its baseline \\
 entity tokens, fleet scale & \textbf{20.5 M} transitions & \textbf{validation loss fell 1.8 times while rollout skill collapsed from +0.003 to -0.41} \\
-tokens plus history, single H100 & \textbf{91.5 M} transitions, resident in VRAM & positive through 5 steps; the 1800-step figure is not a finding, see section 10 \\
+tokens plus history, single H100 & \textbf{91.5 M} transitions, resident in VRAM & positive through 5 steps; the 1800-step figure is not a finding, see \S\ref{sec:10} \\
 boss observation model, 1024 wide & 4.7 M transitions, 120 epochs & \textbf{getting worse at -0.0874 $\pm$ 0.0218 per epoch, t = -4.00} \\
 \bottomrule
 \end{tabularx}
@@ -513,7 +620,7 @@ The last row is the clearest statement available. After 120 epochs, with the out
 
 Said precisely: under the action-shuffle control, at the horizon evaluated, the model's predictions are effectively invariant to which action it is given. That is an aggregate over states, and our own counterfactual measurement below says 43\% of states are action-insensitive in the real game, so the aggregate will understate conditioning that exists only in the other 57\%. We did not run the shuffle control restricted to the action-sensitive subset, and that is the measurement that would sharpen this. What the aggregate does support is that nothing can be planned in this model as it stands, since a planner's leverage is exactly the difference between actions.
 
-A closed real-games to model to dream-policy to real-evaluation loop ran nine iterations on six machines, each machine training its \emph{own} small 256-wide observation-space world model on its own freshly collected games rather than the 120-epoch model above; every dream-trained candidate won \textbf{0 of 607 real episodes}, with damage flat to declining at -0.056 $\pm$ 0.033 per iteration. The two failures are separate measurements of the same trainer and the same event weighting, and the loop's own per-iteration world-model readouts were lost with the pods, so the action-shuffle result is the mechanism we propose for the loop's failure, not a measurement of it. The loop's models were 256 units wide against the fleet model's 1024 and saw 60 freshly collected episodes per iteration for 2 to about 18 epochs, against 2,605 recorded episodes for 120 epochs. Two caveats attach to the 607: only \textbf{50 of the loop's 54 evaluations were recovered}, so the per-iteration n is 55 to 76 rather than the 120 quoted elsewhere in this report, and the loop's evaluations ran at the \textbf{120 second episode cap that sections 5 and 12 withdraw}, so the candidate-versus-anchor comparison within the loop holds but the anchor rate it was compared against does not. The loop's machinery is validated; its model is not.
+A closed real-games to model to dream-policy to real-evaluation loop ran nine iterations on six machines, each machine training its \emph{own} small 256-wide observation-space world model on its own freshly collected games rather than the 120-epoch model above; every dream-trained candidate won \textbf{0 of 607 real episodes}, with damage flat to declining at -0.056 $\pm$ 0.033 per iteration. The two failures are separate measurements of the same trainer and the same event weighting, and the loop's own per-iteration world-model readouts were lost with the pods, so the action-shuffle result is the mechanism we propose for the loop's failure, not a measurement of it. The loop's models were 256 units wide against the fleet model's 1024 and saw 60 freshly collected episodes per iteration for 2 to about 18 epochs, against 2,605 recorded episodes for 120 epochs. Two caveats attach to the 607: only \textbf{50 of the loop's 54 evaluations were recovered}, so the per-iteration n is 55 to 76 rather than the 120 quoted elsewhere in this report, and the loop's evaluations ran at the \textbf{120 second episode cap that \S\ref{sec:5} and \S\ref{sec:12} withdraw}, so the candidate-versus-anchor comparison within the loop holds but the anchor rate it was compared against does not. The loop's machinery is validated; its model is not.
 
 Three diagnostic findings generalise beyond this game:
 
@@ -525,15 +632,21 @@ Three diagnostic findings generalise beyond this game:
 
 
 \section{One representation result that clears its controls}
+\label{sec:8}
 
 The four earlier attempts at self-supervised representation learning here all optimised the same objective: predict the next latent from the current latent and action. All four lost to the identity, for a mechanical reason that was eventually measured: the latent moves 0.023 to 0.05 of a random pair's distance per step, so copying is near-optimal.
 
-The masked-prediction objective of I-JEPA (arXiv:2301.08243) and V-JEPA (arXiv:2404.08471) does not pose that task. It masks part of the \textbf{input} and predicts a target network's representation of the masked part from the visible remainder. There is no persistence shortcut because there is no previous latent. \textbf{That objective had never been run here.} Masking over decision data is not ours either: MTM (Wu et al., ICML 2023) already trains one network to reconstruct trajectories of states and actions from random subsets of themselves. What we claim is the masking structure and the free-signal floor, and section 14 says why.
+The masked-prediction objective of I-JEPA \cite{assran2023ijepa} and V-JEPA \cite{bardes2024vjepa} does not pose that task. It masks part of the \textbf{input} and predicts a target network's representation of the masked part from the visible remainder. There is no persistence shortcut because there is no previous latent. \textbf{That objective had never been run here.} Masking over decision data is not ours either: MTM (Wu et al., ICML 2023) already trains one network to reconstruct trajectories of states and actions from random subsets of themselves. What we claim is the masking structure and the free-signal floor, and \S\ref{sec:14} says why.
 
 We ran it on the raw 363-field structured state, not the featurised policy observation, because the latter is dense with derived redundancy: masking a field whose inputs remain visible scores arithmetic rather than understanding. Masking is structured in the same spirit as V-JEPA's multi-block scheme, translated to time by entity by field: a whole actor removed for a whole clip, a whole kind of field removed for every actor, a time block, or scattered cells. Achieved mask ratio 0.791.
 
 Then the encoder is frozen and probed. The probe reads a \textbf{masked} encoding and predicts the \textbf{hidden} content, because probing an unmasked state for a field that is an input to it scores the identity map. There are three floors to clear, and they are the three columns before the model's own in the table below: the \textbf{trivial floor}, which is always predicting the majority class or the mean; the \textbf{free-signal control}, a ridge regression fitted on the cells that are still visible, which matters because a masked cell is often exact arithmetic on a visible one; and an \textbf{untrained network of identical architecture}.
 
+\begin{center}
+\captionof{table}{Frozen probes on the masked-prediction encoder, against three floors. An entry beats its floors or it does not count; the untrained column is the same architecture with random weights.}
+\label{tab:frozenprobesonthemaskedpredi}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XrrrX@{}}
 \toprule
@@ -557,15 +670,22 @@ What it does not establish, stated in the same breath. \textbf{One seed}, where 
 
 
 \section{The instrument was the hardest part}
+\label{sec:9}
 
 This section is the one we would keep if we could keep only one. In this project, measurement error exceeded method error.
 
-Most of what follows confirms rather than discovers. Henderson et al. (AAAI 2018) and Agarwal et al. (NeurIPS 2021) established that few-seed point estimates mislead, that aggregates need interval estimates, and that conclusions flip when this is done properly; our measured noise floors, our winner's curse and our selector arithmetic are instances of their argument with the specific wrong decision each one caused attached. Section 14 marks the two parts we have not found stated elsewhere.
+Most of what follows confirms rather than discovers. Henderson et al. (AAAI 2018) and Agarwal et al. (NeurIPS 2021) established that few-seed point estimates mislead, that aggregates need interval estimates, and that conclusions flip when this is done properly; our measured noise floors, our winner's curse and our selector arithmetic are instances of their argument with the specific wrong decision each one caused attached. \S\ref{sec:14} marks the two parts we have not found stated elsewhere.
 
 \subsection{A sparse binary cannot steer a task like this}
+\label{sec:9.1}
 
 Every "is it improving" answer came from the defeat rate, a binary at 1 to 10\%. On that signal, six consecutive versions read flat and two experiments were launched to break the apparent plateau. On boss damage, the graded quantity the reward principally pays for, the same runs read:
 
+\begin{center}
+\captionof{table}{Boss damage and return across eight versions, read as first-third and last-third means. This is the same data every status report was read through as a defeat rate, which is Figure~\ref{fig:versions}.}
+\label{tab:bossdamageandreturnacrosseig}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}rrXr@{}}
 \toprule
@@ -591,7 +711,7 @@ The wrong metric then caused harm rather than merely hiding progress. An approac
 
 \textbf{The rules this produces.} Rank candidate metrics by how well they separate the comparison you actually want to make, not by their name. The binary responds only when the whole ten-hit chain completes, so every partial improvement is invisible to it, while the graded quantity moves with each hit. The claim is about the metric's response to the underlying change and not about its spread, since larger variance is not by itself more information. The empirical form is the one to quote: on the same 456 episodes per arm, boss damage separates our two best methods at t = 13.91 where the defeat rate manages z = 2.76. Make the headline the quantity the reward's largest terms pay for. Report a trend with its standard error, because "flat" and "rising" are claims about a slope. And never let a sparse metric justify adding a reward term.
 
-That last rule has a theoretical companion. Ng, Harada and Russell (ICML 1999) proved that only a shaping term of the form \texttt{gamma * Phi(s') - Phi(s)}, a difference of a potential over states, leaves the optimal policy unchanged; any other additive term can change what is optimal. None of our shaping terms, \texttt{g\_approach} included, is of that form, so the reward we ran is not policy-invariant by construction and a regression from adding one is the expected failure rather than a surprise. Section 14 gives the measured price of the same mechanism in an earlier version.
+That last rule has a theoretical companion. Ng, Harada and Russell (ICML 1999) proved that only a shaping term of the form \texttt{gamma * Phi(s') - Phi(s)}, a difference of a potential over states, leaves the optimal policy unchanged; any other additive term can change what is optimal. None of our shaping terms, \texttt{g\_approach} included, is of that form, so the reward we ran is not policy-invariant by construction and a regression from adding one is the expected failure rather than a surprise. \S\ref{sec:14} gives the measured price of the same mechanism in an earlier version.
 
 \begin{figure}[tbp]
   \centering
@@ -601,9 +721,15 @@ That last rule has a theoretical companion. Ng, Harada and Russell (ICML 1999) p
 \end{figure}
 
 \subsection{A metric that moves with the sampling distribution cannot compare policies}
+\label{sec:9.2}
 
 The defeat rate is episode-weighted over start states we choose. Version 11 showed the best trend of any version, +0.270 per update over its final third, and was stopped early to try something else on that basis. Its per-start history:
 
+\begin{center}
+\captionof{table}{Version 11's per-start history, which the pooled rate concealed. The aggregate climbed because the curriculum weighted the one start it could win at 50 percent.}
+\label{tab:version11sperstarthistorywhi}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXrX@{}}
 \toprule
@@ -622,6 +748,7 @@ The same instrument then lied in the other direction. Version 15 reads as the fl
 Two consequences. Any headline that averages over a distribution you control must be reported next to a mix-invariant form of itself, and the mix-invariant form is what a version-to-version claim cites. And, less obviously: the policy gradient optimises expected return \textbf{under} the sampling distribution, so the curriculum weights are part of the objective, not part of the evaluation.
 
 \subsection{Three versions of one mistake: an n too small to resolve what it is selecting on}
+\label{sec:9.3}
 
 The same error appears at three levels, and we made it at all three.
 
@@ -636,9 +763,15 @@ A fourth variant, one level lower again: the newest point of a fleet's evaluatio
 \textbf{The rule we now apply.} Before a statistic selects anything, compute what it reads under the null. If the winning value is a likely draw from the null, there is no selector, only a lottery with a percentage printed on it. State the sample size the selector needs and compare it to the one it has.
 
 \subsection{What a claim has to clear here}
+\label{sec:9.4}
 
 Four independent measurements of the noise floor, all on identical configurations:
 
+\begin{center}
+\captionof{table}{The noise floor, measured four independent ways. Any claimed effect smaller than these is not distinguishable from rerunning the same configuration.}
+\label{tab:thenoisefloormeasuredfourind}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XX@{}}
 \toprule
@@ -655,13 +788,15 @@ six seeds of one world-model configuration & trajectory error 1.38 to 3.43 times
 The third row is the useful one: that reading crossed the usual significance bar while being pure seed noise. A three-seed group mean carries $\pm$0.1 here, so nothing below about 0.3 damage is visible with that design. Two offline seeds at identical settings produced \textbf{opposite} significant slopes, +0.032 (t = 2.2) and -0.030 (t = -2.4), which is the plainest available statement that one seed's slope is not a measurement.
 
 \subsection{A number read out of a post-mortem instead of a recommendation}
+\label{sec:9.5}
 
-The world-model result of section 7 was run at a rollout depth of 600. The author's own earlier Dyna work, the code and manifests of which were available throughout, trains at a depth of \textbf{10}, and that setting is recorded in its checkpoint manifest where one command would have found it. The price of the discrepancy is measured: at depth 600 the model degrades at \textbf{-0.1675 $\pm$ 0.0562 per epoch (t = -2.98)}, and at the reference's depth of 10 it sits at persistence instead.
+The world-model result of \S\ref{sec:7} was run at a rollout depth of 600. The author's own earlier Dyna work, the code and manifests of which were available throughout, trains at a depth of \textbf{10}, and that setting is recorded in its checkpoint manifest where one command would have found it. The price of the discrepancy is measured: at depth 600 the model degrades at \textbf{-0.1675 $\pm$ 0.0562 per epoch (t = -2.98)}, and at the reference's depth of 10 it sits at persistence instead.
 
 Where 600 came from is the part worth generalising. It appears in an earlier write-up of our own, in a passage describing a horizon mixture that had been \textbf{measured as a regression}. A number quoted inside a post-mortem is a record of what failed, not a setting to adopt, and we read it as the latter. Two rules follow, both about the instrument rather than the method: ask for the reference implementation of a method before building it, because a manifest answers depth, discount and batch size for free; and when taking a hyperparameter from a document, take it from what that document concluded, not from its narrative.
 
 
 \section{Limitations and threats to validity}
+\label{sec:10}
 
 \begin{itemize}
 \item \textbf{One seed} for the masked-representation result, and for several world-model comparisons. By this project's own measured floors that is below the resolution needed.
@@ -669,19 +804,20 @@ Where 600 came from is the part worth generalising. It appears in an earlier wri
 \item \textbf{Damage pooled across starts with different starting health.} The pooled 3.53 "of 10" mixes starts at 5, 6, 8 and 10 health. The share-of-starting-health column is the comparable one.
 \item \textbf{The melee per-state result is one watched episode per state}, so it is qualitative and is not a rate.
 \item \textbf{The wall map used by the world model covers 209 of 1,024 cells}, only where the agent happened to collide with something.
-\item \textbf{The long-horizon world-model numbers are thin}, which is why section 7 does not present them as a finding: the 1800-step skill of -2.44 rests on about 31,000 of 52 million possible starts qualifying at that horizon, and all of them are timeout episodes by construction.
+\item \textbf{The long-horizon world-model numbers are thin}, which is why \S\ref{sec:7} does not present them as a finding: the 1800-step skill of -2.44 rests on about 31,000 of 52 million possible starts qualifying at that horizon, and all of them are timeout episodes by construction.
 \item \textbf{Reproducing on macOS requires a code-signed interpreter} to attach to emulator memory. Linux does not.
-\item \textbf{The masked-representation substrate exists on one machine.} The 203,822-frame raw-state datasets behind section 8 are not mirrored off-site. The checkpoint is durable and its input is not, so that result is currently reproducible only from local disk.
-\item \textbf{No weights exist for any of section 6.3's fifteen arms.} The machines they ran on were lost before any checkpoint was synced, so what survives is one machine's training history per arm. That table cannot be re-evaluated, only re-read.
+\item \textbf{The masked-representation substrate exists on one machine.} The 203,822-frame raw-state datasets behind \S\ref{sec:8} are not mirrored off-site. The checkpoint is durable and its input is not, so that result is currently reproducible only from local disk.
+\item \textbf{No weights exist for any of \S\ref{sec:6.3}'s fifteen arms.} The machines they ran on were lost before any checkpoint was synced, so what survives is one machine's training history per arm. That table cannot be re-evaluated, only re-read.
 \item \textbf{The row file behind the 13-game clone's 0 of 80 no longer exists}, on this machine or in remote storage. Only the aggregate training-run history remains, so that cell rests on thinner evidence than the table implies.
-\item \textbf{Section 6.4's offline figures were measured at a 120 second episode cap} and the rest of the paper at 300. The damage numbers survive the difference; the defeat rates in that subsection do not transfer.
-\item \textbf{No architecture ablation was run anywhere.} The entity-factored recurrent policy was never compared head to head against a flat network at scale, so section 2.3 describes a choice and not a finding.
+\item \textbf{\S\ref{sec:6.4}'s offline figures were measured at a 120 second episode cap} and the rest of the paper at 300. The damage numbers survive the difference; the defeat rates in that subsection do not transfer.
+\item \textbf{No architecture ablation was run anywhere.} The entity-factored recurrent policy was never compared head to head against a flat network at scale, so \S\ref{sec:2.3} describes a choice and not a finding.
 \item \textbf{The per-step observation latency figure has no artefact.} We quote it from development notes.
 \item \textbf{Several headline comparisons mix within-run slopes with between-arm levels.} Where we noticed, we say so in place; where we did not, treat a slope as evidence about one run's trajectory and not about the ranking of two methods.
 \end{itemize}
 
 
 \section{Media}
+\label{sec:11}
 
 Both clips are the real emulator at 10 Hz control, cropped to the game area, with game audio. Unedited, as played:
 
@@ -690,10 +826,15 @@ Both clips are the real emulator at 10 Hz control, cropped to the game area, wit
 \item \textbf{Deku Babas:} \url{https://youtu.be/fMMvd1HmMjI} (27 s)
 \end{itemize}
 
-\textbf{The melee task, end to end} (\texttt{media/\allowbreak{}deku-slot1/\allowbreak{}deku-slot1\_\allowbreak{}s01\_\allowbreak{}try01\_\allowbreak{}crop.mp4}, 29.7 s, md5 \texttt{d20c62aae595}). The agent starts just inside the room entrance at full health with all three Babas underground 530 to 830 units away, walks up, wakes them and clears the room. Kills at 7.3, 22.4 and 26.8 s, 1.5 hearts lost. First attempt.
+\textbf{The melee task, end to end} (\texttt{media/\allowbreak{}deku-\allowbreak{}slot1/\allowbreak{}deku-\allowbreak{}slot1\_\allowbreak{}s01\_\allowbreak{}try01\_\allowbreak{}crop.mp4}, 29.7 s, md5 \texttt{d20c62aae595}). The agent starts just inside the room entrance at full health with all three Babas underground 530 to 830 units away, walks up, wakes them and clears the room. Kills at 7.3, 22.4 and 26.8 s, 1.5 hearts lost. First attempt.
 
-\textbf{Queen Gohma from the full-health start} (\texttt{media/\allowbreak{}gohma-slot5/\allowbreak{}gohma-slot5\_\allowbreak{}s05\_\allowbreak{}try04\_\allowbreak{}crop.mp4}, 197.7 s, md5 \texttt{a184dbd29233}). She begins at 10 of 10 health on the ceiling with her eye red, 347 units away. The fight, from the episode's own log:
+\textbf{Queen Gohma from the full-health start} (\texttt{media/\allowbreak{}gohma-\allowbreak{}slot5/\allowbreak{}gohma-\allowbreak{}slot5\_\allowbreak{}s05\_\allowbreak{}try04\_\allowbreak{}crop.mp4}, 197.7 s, md5 \texttt{a184dbd29233}). She begins at 10 of 10 health on the ceiling with her eye red, 347 units away. The fight, from the episode's own log:
 
+\begin{center}
+\captionof{table}{The recorded episode, moment by moment. One episode, shown as a mechanism rather than as a rate.}
+\label{tab:therecordedepisodemomentbymo}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}rX@{}}
 \toprule
@@ -718,9 +859,15 @@ Ten sword hits and eight knockdowns, \textbf{of which the policy caused only fiv
 Both directories carry an \texttt{attempts.json} recording every attempt, won or lost, with each clip's duration checked against the episode's own length and a frozen-frame fraction confirming the capture is live gameplay rather than a still. Three separate capture faults were found and fixed to get these, including one that silently filmed an empty desktop while passing a duration check; they are recorded in \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record} section 17.
 
 \section{Retractions}
+\label{sec:12}
 
 Claims this project made internally and then overturned. These are corrections to our own working claims, not to anything published elsewhere. They are listed because the correction is the reusable part, and because a paper arguing that claims outrun evidence should show its own.
 
+\begin{center}
+\captionof{table}{Every claim this project published internally and then withdrew, with the control that killed it. The corrections are the reusable part and are kept rather than deleted.}
+\label{tab:everyclaimthisprojectpublish}
+\end{center}
+\vspace{-1.2em}
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}XXr@{}}
 \toprule
@@ -743,10 +890,11 @@ Off the easiest start v15 averages 4.26 health & Recomputed from the 760 rows: 3
 
 
 \section{Reproducibility}
+\label{sec:13}
 
 Every number above traces to a directory. \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md}{provenance record} carries the resume lineage per version, wall clock and cost, the step-axis discontinuities that make a curve misreadable without them, and why each version exists including the ones that failed. \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md}{claim audit} is one row per claim with its evidence class. \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/artifacts/MANIFEST.json}{\texttt{artifacts/MANIFEST.json}} identifies every checkpoint, dataset and result file by md5 rather than by filename, with its remote key where one exists, because a stray checkpoint file cannot otherwise be matched back to the run that produced it.
 
-Training histories are \textbf{exported, not linked}: each run group has a local directory with its configuration, summary and full history, including the identities of all per-machine runs so a fleet is recoverable and not just its aggregator. In practice one group's per-machine histories were not pulled before the machines were lost, which is the gap behind section 6.3.
+Training histories are \textbf{exported, not linked}: each run group has a local directory with its configuration, summary and full history, including the identities of all per-machine runs so a fleet is recoverable and not just its aggregator. In practice one group's per-machine histories were not pulled before the machines were lost, which is the gap behind \S\ref{sec:6.3}.
 
 The commands, so the two results a reader is most likely to want are runnable rather than described:
 
@@ -774,25 +922,29 @@ One warning for anyone pulling artefacts: four world-model checkpoints exist in 
 
 
 \section{Related work and positioning}
+\label{sec:14}
 
 Citations are verified and annotated in the \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/LITERATURE.md}{literature file}, which also lists the clusters not yet covered. We state what is not ours first, because the honest version of this section is mostly that.
 
-\textbf{Reading engine state instead of pixels is not new, and the nearest precedent is close.} Firoiu, Whitney and Tenenbaum (arXiv:1702.06230) trained agents for \emph{Super Smash Bros. Melee} under emulation, reading each player's position, velocity \textbf{and action state} from game memory every frame, and beat human professionals. That is the same emulator family, the same commercial console game, and the same decision we made about the observation, including the decoded action state that makes an enemy's intent legible. Our setting differs, a single-agent 3D boss encounter with a chain of manufactured openings over 45 to 154 seconds rather than a reactive two-player fight, and our interest is in what fails to improve a policy there. We claim the setting and the measured task specification, not the observation approach.
+\textbf{Reading engine state instead of pixels is not new, and the nearest precedent is close.} Firoiu, Whitney and Tenenbaum \cite{firoiu2017melee} trained agents for \emph{Super Smash Bros. Melee} under emulation, reading each player's position, velocity \textbf{and action state} from game memory every frame, and beat human professionals. That is the same emulator family, the same commercial console game, and the same decision we made about the observation, including the decoded action state that makes an enemy's intent legible. Our setting differs, a single-agent 3D boss encounter with a chain of manufactured openings over 45 to 154 seconds rather than a reactive two-player fight, and our interest is in what fails to improve a policy there. We claim the setting and the measured task specification, not the observation approach.
 
-\textbf{Our imitation results are an instance of two known effects.} Ross, Gordon and Bagnell (DAgger, AISTATS 2011) established that cloning's errors compound because the learner's own mistakes carry it into states the expert never visited, with regret quadratic in the horizon. That is section 6.1, and 81\% of our clone's episodes ending in death is what it looks like at a 154 second horizon. Weihs, Jain and colleagues (ADVISOR, NeurIPS 2021) named the \textbf{imitation gap}: when the teacher acts on information or capability the student lacks, imitation is actively harmful and can be beaten by pure RL. Our fifteen arms are an instance of it, with one feature their canonical case does not have. Their teacher is \emph{privileged}, seeing what the student cannot; our human sees exactly the observation the policy sees, so the gap is capability and strategy rather than information. And the usual framing has demonstrations rescuing a weak learner, where ours are a far stronger demonstrator, 100 wins from 100, degrading a policy that is worse at the task but better at its own state distribution. ADVISOR's per-state weighting is the obvious thing we did not try.
+\textbf{Where this sits among agents that play commercial games.} The results this field is known for are at a scale we are not working at: AlphaStar \cite{vinyals2019alphastar} and OpenAI Five \cite{openai2019dota} reach professional human play on commercial titles with tens of thousands of years of experience, and the open-world Minecraft line \cite{guss2019minerl,fan2022minedojo} studies human demonstration corpora orders of magnitude larger than our 100 recorded wins. Deep RL on emulated console games begins with DQN \cite{mnih2015dqn}. Our setting is the opposite end of that axis: one boss, one harness, 509.6 million steps across the whole project for \$1,381, and a question about which of five method families does better rather than how far one of them can be pushed. The comparison we can make at this scale and they cannot easily make at theirs is a matched one.
 
-\textbf{Our shaping failure is the textbook one.} Ng, Harada and Russell (ICML 1999) proved that only a potential difference leaves the optimal policy unchanged. Our shaping is not potential-based, and the consequence was measured rather than predicted: a shaping cluster reached 88\% of total reward magnitude, the policy optimised it correctly by driving red-eye aim to 3.36 times chance, and still died 64.5\% of the time with the boss at 8 of 10 health.
+\textbf{Our imitation results are an instance of two known effects.} Ross and Bagnell \cite{ross2010reductions}, and then DAgger \cite{ross2011dagger}, established that cloning's errors compound because the learner's own mistakes carry it into states the expert never visited, with regret quadratic in the horizon. That is \S\ref{sec:6.1}, and 81\% of our clone's episodes ending in death is what it looks like at a 154 second horizon. Weihs, Jain and colleagues \cite{weihs2021advisor} named the \textbf{imitation gap}: when the teacher acts on information or capability the student lacks, imitation is actively harmful and can be beaten by pure RL. Our fifteen arms are an instance of it, with one feature their canonical case does not have. Their teacher is \emph{privileged}, seeing what the student cannot; our human sees exactly the observation the policy sees, so the gap is capability and strategy rather than information. And the usual framing has demonstrations rescuing a weak learner, where ours are a far stronger demonstrator, 100 wins from 100, degrading a policy that is worse at the task but better at its own state distribution. ADVISOR's per-state weighting is the obvious thing we did not try.
 
-\textbf{Masked prediction over decision data is not ours either.} MTM (Wu et al., ICML 2023) already trains one network to reconstruct trajectories from random subsets of themselves, serving as forward model, inverse model or offline agent depending on the mask. We claim two narrower things: the masking \emph{structure}, over an entity-by-field grid of raw engine fields with whole-actor tubes, field-group tubes and time blocks rather than random subsets; and the \textbf{free-signal floor}, a ridge fit on the cells still visible, which matters on a state vector where speed is the norm of velocity and position is the previous position plus velocity, so that a masked cell is frequently exact arithmetic on a visible one.
+\textbf{Our shaping failure is the textbook one.} Ng, Harada and Russell \cite{ng1999shaping} proved that only a potential difference leaves the optimal policy unchanged. Our shaping is not potential-based, and the consequence was measured rather than predicted: a shaping cluster reached 88\% of total reward magnitude, the policy optimised it correctly by driving red-eye aim to 3.36 times chance, and still died 64.5\% of the time with the boss at 8 of 10 health.
 
-\textbf{Losing to persistence is a known and under-reported failure, and it is being systematised as we write.} A NeurIPS 2026 paper, "Your world model may be worse than copying the last frame", reports that of 20 recent world-model papers, 12 give a prediction-quality number and \textbf{9 of those give nothing to read it against}. The copy-last-frame floor has been standard in video prediction for years and is known to beat learned models on mostly static data. So section 7 confirms rather than discovers. What we add is sharper: our model is zero-initialised so that it \textbf{begins exactly at persistence}, and 120 epochs then move it away at -0.0874 $\pm$ 0.0218 per epoch, while the action-shuffle control reads unchanged, and the failure is carried through a closed loop, on six smaller models from the same trainer, to 0 defeats in 607 real episodes. Starting at the floor and walking away from it is a stronger statement than failing to reach it.
+\textbf{Masked prediction over decision data is not ours either.} MTM \cite{wu2023mtm} already trains one network to reconstruct trajectories from random subsets of themselves, serving as forward model, inverse model or offline agent depending on the mask. We claim two narrower things: the masking \emph{structure}, over an entity-by-field grid of raw engine fields with whole-actor tubes, field-group tubes and time blocks rather than random subsets; and the \textbf{free-signal floor}, a ridge fit on the cells still visible, which matters on a state vector where speed is the norm of velocity and position is the previous position plus velocity, so that a masked cell is frequently exact arithmetic on a visible one.
 
-\textbf{Most of our measurement section is confirmation, and we would rather say so.} Henderson et al. (AAAI 2018) and Agarwal et al. (NeurIPS 2021, Outstanding Paper) established that few-seed point estimates mislead, that aggregates need interval estimates, and that conclusions flip when this is done properly. Our four measured noise floors, our winner's curse, and our selector-resolution arithmetic are all instances. Two things in section 9 we have \textbf{not} found stated elsewhere and offer cautiously, inviting correction. First, that a metric averaged over a start distribution the experimenter both \textbf{chooses and optimises under} is not a property of the policy, which is adjacent to Agarwal's critique of aggregation across tasks but concerns initial conditions that are themselves part of the objective. Second, the end-to-end case where a sparse binary outcome concealed an 8.7-fold improvement and then motivated two measurably harmful reward changes.
+\textbf{Losing to persistence is a known and under-reported failure, and it is being systematised as we write.} A NeurIPS 2026 workshop paper, "Your world model may be worse than copying the last frame" \cite{surazhsky2026copyframe}, reports that of 20 recent world-model papers, 12 give a prediction-quality number and \textbf{9 of those give nothing to read it against}. The copy-last-frame floor has been standard in video prediction for years and is known to beat learned models on mostly static data. So \S\ref{sec:7} confirms rather than discovers. What we add is sharper: our model is zero-initialised so that it \textbf{begins exactly at persistence}, and 120 epochs then move it away at -0.0874 $\pm$ 0.0218 per epoch, while the action-shuffle control reads unchanged, and the failure is carried through a closed loop, on six smaller models from the same trainer, to 0 defeats in 607 real episodes. Starting at the floor and walking away from it is a stronger statement than failing to reach it.
+
+\textbf{Most of our measurement section is confirmation, and we would rather say so.} Henderson et al. \cite{henderson2018matters} and Agarwal et al. \cite{agarwal2021precipice} established that few-seed point estimates mislead, that aggregates need interval estimates, and that conclusions flip when this is done properly. Our four measured noise floors, our winner's curse, and our selector-resolution arithmetic are all instances. Two things in \S\ref{sec:9} we have \textbf{not} found stated elsewhere and offer cautiously, inviting correction. First, that a metric averaged over a start distribution the experimenter both \textbf{chooses and optimises under} is not a property of the policy, which is adjacent to Agarwal's critique of aggregation across tasks but concerns initial conditions that are themselves part of the objective. Second, the end-to-end case where a sparse binary outcome concealed an 8.7-fold improvement and then motivated two measurably harmful reward changes.
 
 \textbf{What the paper offers that we have not found elsewhere} is therefore not an algorithm. It is a task whose causal chain is measured rather than asserted, from 100 human victories, including the trap that the engine's own "vulnerable" flag labels 1.3\% of real damage events; and a matched head-to-head of five method families on one task, one harness, one episode cap and one graded metric. Breadth at matched instruments is the contribution, not any single arm.
 
 
 \section{Conclusion}
+\label{sec:15}
 
 An agent reading a commercial game's memory learns real combat: it clears a three-enemy encounter from all ten local start states, one watched episode each and so qualitative rather than a rate, and on a dungeon boss it manufactures stuns, clears larvae and lands ten-hit kills on 8.33\% of evaluation episodes across six trained starts, reaching 28.95\% from the most favourable and 0 of 76 from the least.
 
@@ -801,6 +953,225 @@ It does so without the reward for winning ever reaching the decisions that cause
 One hundred human victories did not help. Cloning them reaches 74.5\% next-action accuracy and 0.33 of 10 health. Of fifteen mechanisms for folding them into the policy gradient, none trends toward the policy trained without them; one arm's single-machine mean nominally exceeds it, inside a spread that one configuration run twice already covers. The mechanism that demonstrably worked cost damage at t = -4.98. Offline return-conditioned learning on the same games plus the agent's own failures does substantially better than cloning and still loses to the policy gradient by 14 standard errors. A world model trained to 120 epochs ends further from "nothing changes" than it began and ignores the action entirely, and policies dreamed inside six smaller models from the same trainer won 0 of 607 real episodes.
 
 What remains out of reach is not the last six health points: the policy takes all ten in the episodes it wins. It is reliability. Competence arrived before consistency, and the honest summary of this report is that we know a great deal about why, mostly because we eventually started measuring the right quantity.
+
+
+\begin{thebibliography}{99}
+\small
+
+\bibitem{agarwal2021precipice}
+R.~Agarwal, M.~Schwarzer, P.~S. Castro, A.~Courville and M.~G. Bellemare.
+\newblock Deep Reinforcement Learning at the Edge of the Statistical Precipice.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2021. arXiv:2108.13264.
+
+\bibitem{andrychowicz2021onpolicy}
+M.~Andrychowicz et~al.
+\newblock What Matters for On-Policy Deep Actor-Critic Methods? A Large-Scale Study.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2021. arXiv:2006.05990.
+
+\bibitem{assran2023ijepa}
+M.~Assran et~al.
+\newblock Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture (I-JEPA).
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2023, pp.~15619--15629. arXiv:2301.08243.
+
+\bibitem{bardes2024vjepa}
+A.~Bardes et~al.
+\newblock Revisiting Feature Prediction for Learning Visual Representations from Video (V-JEPA).
+\newblock \emph{Transactions on Machine Learning Research (TMLR)}, 2024. arXiv:2404.08471.
+
+\bibitem{bellemare2013ale}
+M.~G. Bellemare, Y.~Naddaf, J.~Veness and M.~Bowling.
+\newblock The Arcade Learning Environment: An Evaluation Platform for General Agents.
+\newblock \emph{Journal of Artificial Intelligence Research}, 47:253--279, 2013. arXiv:1207.4708.
+
+\bibitem{burda2019rnd}
+Y.~Burda, H.~Edwards, A.~Storkey and O.~Klimov.
+\newblock Exploration by Random Network Distillation (RND).
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2019. arXiv:1810.12894.
+
+\bibitem{chen2021dt}
+L.~Chen et~al.
+\newblock Decision Transformer: Reinforcement Learning via Sequence Modeling.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)} 34, 2021. arXiv:2106.01345.
+
+\bibitem{cho2014gru}
+K.~Cho et~al.
+\newblock Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation.
+\newblock In \emph{Conference on Empirical Methods in Natural Language Processing (EMNLP)}, 2014. arXiv:1406.1078.
+
+\bibitem{chung2014gru}
+J.~Chung, C.~Gulcehre, K.~Cho and Y.~Bengio.
+\newblock Empirical Evaluation of Gated Recurrent Neural Networks on Sequence Modeling.
+\newblock NIPS Deep Learning and Representation Learning Workshop, 2014. arXiv:1412.3555.
+
+\bibitem{ecoffet2021goexplore}
+A.~Ecoffet, J.~Huizinga, J.~Lehman, K.~O. Stanley and J.~Clune.
+\newblock First Return, Then Explore (Go-Explore).
+\newblock \emph{Nature}, 590:580--586, 2021. DOI 10.1038/s41586-020-03157-9.
+
+\bibitem{emmons2022rvs}
+S.~Emmons, B.~Eysenbach, I.~Kostrikov and S.~Levine.
+\newblock RvS: What is Essential for Offline RL via Supervised Learning?
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2022. arXiv:2112.10751.
+
+\bibitem{fan2022minedojo}
+L.~Fan et~al.
+\newblock MineDojo: Building Open-Ended Embodied Agents with Internet-Scale Knowledge.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS) Datasets and Benchmarks}, 2022. arXiv:2206.08853.
+
+\bibitem{firoiu2017melee}
+V.~Firoiu, W.~F. Whitney and J.~B. Tenenbaum.
+\newblock Beating the World's Best at Super Smash Bros. with Deep Reinforcement Learning.
+\newblock \emph{arXiv preprint arXiv:1702.06230}, 2017.
+
+\bibitem{guss2019minerl}
+W.~H. Guss et~al.
+\newblock MineRL: A Large-Scale Dataset of Minecraft Demonstrations.
+\newblock In \emph{International Joint Conference on Artificial Intelligence (IJCAI)}, 2019. arXiv:1907.13440.
+
+\bibitem{ha2018worldmodels}
+D.~Ha and J.~Schmidhuber.
+\newblock World Models.
+\newblock \emph{arXiv preprint arXiv:1803.10122}, 2018.
+
+\bibitem{hafner2020dreamer}
+D.~Hafner, T.~Lillicrap, J.~Ba and M.~Norouzi.
+\newblock Dream to Control: Learning Behaviors by Latent Imagination (Dreamer).
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2020. arXiv:1912.01603.
+
+\bibitem{hafner2025dreamerv3}
+D.~Hafner, J.~Pasukonis, J.~Ba and T.~Lillicrap.
+\newblock Mastering Diverse Control Tasks through World Models (DreamerV3).
+\newblock \emph{Nature}, 640:647--653, 2025. arXiv:2301.04104.
+
+\bibitem{henderson2018matters}
+P.~Henderson, R.~Islam, P.~Bachman, J.~Pineau, D.~Precup and D.~Meger.
+\newblock Deep Reinforcement Learning that Matters.
+\newblock In \emph{AAAI Conference on Artificial Intelligence (AAAI)}, 32(1):3207--3214, 2018. arXiv:1709.06560.
+
+\bibitem{kieto2026dyna}
+J.~Kieto.
+\newblock Learning in Dreams, Winning in Reality: A Continuous Dyna Loop for a Ten-Hero MOBA.
+\newblock \emph{arXiv preprint arXiv:2610.08033}, 2026.
+
+\bibitem{kingma2015adam}
+D.~P. Kingma and J.~Ba.
+\newblock Adam: A Method for Stochastic Optimization.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2015. arXiv:1412.6980.
+
+\bibitem{mnih2015dqn}
+V.~Mnih et~al.
+\newblock Human-Level Control through Deep Reinforcement Learning.
+\newblock \emph{Nature}, 518:529--533, 2015. DOI 10.1038/nature14236.
+
+\bibitem{ng1999shaping}
+A.~Y. Ng, D.~Harada and S.~Russell.
+\newblock Policy Invariance Under Reward Transformations: Theory and Application to Reward Shaping.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 1999, pp.~278--287.
+
+\bibitem{nichol2018gymretro}
+A.~Nichol, V.~Pfau, C.~Hesse, O.~Klimov and J.~Schulman.
+\newblock Gotta Learn Fast: A New Benchmark for Generalization in RL.
+\newblock \emph{arXiv preprint arXiv:1804.03720}, 2018.
+
+\bibitem{openai2019dota}
+OpenAI: C.~Berner et~al.
+\newblock Dota 2 with Large Scale Deep Reinforcement Learning (OpenAI Five).
+\newblock \emph{arXiv preprint arXiv:1912.06680}, 2019.
+
+\bibitem{pleines2022recurrentppo}
+M.~Pleines, M.~Pallasch, F.~Zimmer and M.~Preuss.
+\newblock Generalization, Mayhems and Limits in Recurrent Proximal Policy Optimization.
+\newblock \emph{arXiv preprint arXiv:2205.11104}, 2022.
+
+\bibitem{ross2010reductions}
+S.~Ross and J.~A. Bagnell.
+\newblock Efficient Reductions for Imitation Learning.
+\newblock In \emph{International Conference on Artificial Intelligence and Statistics (AISTATS)}, PMLR 9:661--668, 2010.
+
+\bibitem{ross2011dagger}
+S.~Ross, G.~J. Gordon and J.~A. Bagnell.
+\newblock A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning (DAgger).
+\newblock In \emph{International Conference on Artificial Intelligence and Statistics (AISTATS)}, PMLR 15:627--635, 2011. arXiv:1011.0686.
+
+\bibitem{schrittwieser2020muzero}
+J.~Schrittwieser et~al.
+\newblock Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model (MuZero).
+\newblock \emph{Nature}, 588:604--609, 2020. arXiv:1911.08265.
+
+\bibitem{schulman2016gae}
+J.~Schulman, P.~Moritz, S.~Levine, M.~Jordan and P.~Abbeel.
+\newblock High-Dimensional Continuous Control Using Generalized Advantage Estimation (GAE).
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2016. arXiv:1506.02438.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford and O.~Klimov.
+\newblock Proximal Policy Optimization Algorithms (PPO).
+\newblock \emph{arXiv preprint arXiv:1707.06347}, 2017.
+
+\bibitem{surazhsky2026copyframe}
+M.~Surazhsky.
+\newblock Your World Model May Be Worse Than Copying the Last Frame.
+\newblock NeurIPS 2026 Workshop on Robot Learning with World Models, 2026. \url{https://neurips.cc/virtual/2026/166122}.
+
+\bibitem{sutton1991dyna}
+R.~S. Sutton.
+\newblock Dyna, an Integrated Architecture for Learning, Planning, and Reacting.
+\newblock \emph{ACM SIGART Bulletin}, 2(4):160--163, 1991. DOI 10.1145/122344.122377.
+
+\bibitem{villegas2017mcnet}
+R.~Villegas, J.~Yang, S.~Hong, X.~Lin and H.~Lee.
+\newblock Decomposing Motion and Content for Natural Video Sequence Prediction.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2017. arXiv:1706.08033.
+
+\bibitem{villegas2019highfidelity}
+R.~Villegas, A.~Pathak, H.~Kannan, D.~Erhan, Q.~V. Le and H.~Lee.
+\newblock High Fidelity Video Prediction with Large Stochastic Recurrent Neural Networks.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2019. arXiv:1911.01655.
+
+\bibitem{vinyals2019alphastar}
+O.~Vinyals et~al.
+\newblock Grandmaster Level in StarCraft II Using Multi-Agent Reinforcement Learning (AlphaStar).
+\newblock \emph{Nature}, 575:350--354, 2019. DOI 10.1038/s41586-019-1724-z.
+
+\bibitem{weihs2021advisor}
+L.~Weihs et~al.
+\newblock Bridging the Imitation Gap by Adaptive Insubordination (ADVISOR).
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2021. arXiv:2007.12173.
+
+\bibitem{wu2023mtm}
+P.~Wu et~al.
+\newblock Masked Trajectory Models for Prediction, Representation, and Control (MTM).
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2023. arXiv:2305.02968.
+
+\end{thebibliography}
+
+\appendix
+\section{Artefact provenance}
+\label{app:a}
+
+Every model this report draws a conclusion from, identified by content rather than by filename. The md5s and byte counts are measured, not transcribed: the full register in \href{https://github.com/JordyKieto/ppo-hyrule/blob/main/artifacts/MANIFEST.json}{\texttt{artifacts/MANIFEST.json}} covers 122 artefacts including datasets, logs and result rows, and records for each whether it is present locally, present in remote storage, and obtainable. The reason for matching by hash is in \S\ref{sec:13}: four world-model checkpoints exist in our remote storage under the same filenames as the ones below, at roughly a third of the size, and they are an earlier run.
+
+\begin{center}
+\captionof{table}{The six models the report's claims rest on. Generated from the artefact register rather than typed, so a file that is replaced cannot keep an old hash in the paper.}
+\label{tab:thesixmodelsthereportsclaims}
+\end{center}
+\vspace{-1.2em}
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}XXrXr@{}}
+\toprule
+\textbf{artefact} & \textbf{what it is} & \textbf{used by} & \textbf{md5} & \textbf{bytes} \\
+\midrule
+\texttt{checkpoints/\allowbreak{}kept/\allowbreak{}deku-\allowbreak{}combat-\allowbreak{}gru-\allowbreak{}v2b-\allowbreak{}20p\_\allowbreak{}u00120.pt} & the solved melee policy & \S\ref{sec:3} & \texttt{51cd69f624b82f12} & 7,419,801 \\
+\texttt{checkpoints/\allowbreak{}kept/\allowbreak{}gohma-\allowbreak{}kl-\allowbreak{}v15-\allowbreak{}r4\_\allowbreak{}latest.pt} & the best boss policy, v15 rank 4 & \S\ref{sec:5}, \S\ref{sec:6}, \S\ref{sec:9} & \texttt{397e27b2beb688b9} & 8,184,685 \\
+\texttt{checkpoints/\allowbreak{}kept/\allowbreak{}bc\_\allowbreak{}human\_\allowbreak{}100\_\allowbreak{}strat.pt} & the best behaviour clone & \S\ref{sec:6.1} & \texttt{6408314168deb916} & 2,729,213 \\
+\texttt{checkpoints/\allowbreak{}kept/\allowbreak{}rvs\_\allowbreak{}M5\_\allowbreak{}s5.pt} & the best offline return-conditioned policy & \S\ref{sec:6.4} & \texttt{b4aafda19665af9f} & 2,732,188 \\
+\texttt{recovered/\allowbreak{}gohma-\allowbreak{}wm-\allowbreak{}r1/\allowbreak{}runs/\allowbreak{}wm\_\allowbreak{}obs/\allowbreak{}wm.pt} & the observation-space world model & \S\ref{sec:7} & \texttt{ba85403916e16883} & 127,202,146 \\
+\texttt{runs/sjepa/p1.last.pt} & the masked-prediction encoder & \S\ref{sec:8} & \texttt{fcad90898b4c9308} & 9,881,105 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The release copies on \href{https://huggingface.co/jordykieto/ppo-hyrule}{Hugging Face} carry the same hashes. The four world-model and two token-model checkpoints not listed here are in the register with their own hashes; they are intermediate results that no claim in this report depends on.
 
 
 \end{document}

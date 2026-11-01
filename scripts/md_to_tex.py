@@ -86,6 +86,25 @@ SPECIALS = {"&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
             "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
 
 
+SECTIONS: set[str] = set()
+
+
+def scan_sections(md: str) -> set[str]:
+    """Every section and subsection number this paper actually has.
+
+    Cross-references are rewritten only to numbers in this set, which is what keeps
+    "provenance record section 19" -- a pointer into a DIFFERENT document -- from being
+    turned into a dangling \\ref to a section of this one. There is no section 19 here,
+    so it is left as prose automatically rather than by a hand-maintained exception.
+    """
+    found = set()
+    for ln in md.split("\n"):
+        m = re.match(r"^#{2,3}\s+(\d+(?:\.\d+)*)\.?\s", ln)
+        if m:
+            found.add(m.group(1))
+    return found
+
+
 def esc(t: str) -> str:
     out = []
     for ch in t:
@@ -108,13 +127,37 @@ def inline(t: str) -> str:
               .replace("#", r"\#").replace("~", r"\textasciitilde{}").replace("^", r"\textasciicircum{}"))
         if len(x) > 24:
             x = x.replace("/", "/\\allowbreak{}").replace(r"\_", r"\_\allowbreak{}")
+            if "/" in x:          # a path: hyphenated segments must break too, or a cell
+                x = x.replace("-", "-\\allowbreak{}")   # like a checkpoint name overflows
         return r"\texttt{" + x + "}"
 
+    # [@key] and [@key1; @key2] become real citations.
+    t = re.sub(r"\[@([\w\d]+(?:\s*;\s*@[\w\d]+)*)\]",
+               lambda m: park(r"\cite{" + ",".join(
+                   k.strip().lstrip("@") for k in m.group(1).split(";")) + "}"), t)
+    # "section 9.1", and "sections 5 and 12", become hyperlinked references -- but ONLY for
+    # numbers this paper actually has, so a pointer into another document is left as prose.
+    def _secref(m):
+        nums = re.findall(r"\d+(?:\.\d+)?", m.group(0))
+        if not all(n in SECTIONS for n in nums):
+            return m.group(0)
+        joiner = " and " if " and " in m.group(0) else ", "
+        return park(joiner.join(r"\S\ref{sec:" + n + "}" for n in nums))
+
+    t = re.sub(r"\b[Ss]ections?\s+\d+(?:\.\d+)?(?:\s*(?:,|and)\s*\d+(?:\.\d+)?)*", _secref, t)
     # {{fig:name}} becomes a real cross-reference, so a figure number cannot drift from the
     # prose the way a hand-typed "Figure 3" does when a figure is inserted above it. Parked
     # before escaping, like any other raw LaTeX.
     t = re.sub(r"\{\{fig:(\w+)\}\}", lambda m: park(r"Figure~\ref{fig:" + m.group(1) + "}"), t)
     t = re.sub(r"`([^`]+)`", lambda m: park(tt(m.group(1))), t)
+    # Inline math is LaTeX already: escaping it prints \$\delta\_\{t\}\$ as literal text
+    # and then halts the engine with "Missing $ inserted".
+    #
+    # The negative lookahead is load-bearing. This paper quotes money -- "$266 for the world
+    # model track and $1,381 in total" -- and a bare $...$ rule pairs those two dollar signs
+    # and sets the sentence between them as mathematics. Currency is always $ followed by a
+    # digit; none of this paper's math is.
+    t = re.sub(r"\$(?!\d)([^$\n]+?)\$", lambda m: park("$" + m.group(1) + "$"), t)
     t = re.sub(r"\[([^\]]+)\]\(([^)]+)\)",
                lambda m: park(r"\href{" + m.group(2).replace("%", r"\%").replace("#", r"\#") + "}{"
                               + esc(m.group(1)) + "}"), t)
@@ -171,6 +214,7 @@ def convert(md: str) -> str:
     lines = md.split("\n")
     out: list[str] = []
     i, in_list, in_abstract = 0, False, False
+    appendix_started = False
 
     def close_list():
         nonlocal in_list
@@ -180,6 +224,17 @@ def convert(md: str) -> str:
 
     while i < len(lines):
         ln = lines[i]
+        if ln.strip() == "$$":                                     # display equation
+            close_list()
+            i += 1
+            buf = []
+            while i < len(lines) and lines[i].strip() != "$$":
+                buf.append(lines[i]); i += 1
+            i += 1
+            body = "\n".join(buf)
+            env = "align" if "\\\\" in body else "equation"
+            out += [r"\begin{" + env + "}", body, r"\end{" + env + "}"]
+            continue
         if ln.startswith("```"):                                   # fenced code
             close_list()
             i += 1
@@ -206,7 +261,34 @@ def convert(md: str) -> str:
             ]
             i += 1
             continue
-        if re.match(r"^\s*\|", ln):                                # pipe table
+        cap = re.match(r"^Table:\s*(.+?)\s*$", ln)                 # captioned table
+        # one blank line between the caption and the table is allowed, because requiring
+        # them to be adjacent silently emits the caption as a paragraph of prose instead
+        nxt = i + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if cap and nxt < len(lines) and re.match(r"^\s*\|", lines[nxt]):
+            close_list()
+            caption = cap.group(1)
+            i = nxt
+            rows = []
+            while i < len(lines) and re.match(r"^\s*\|", lines[i]):
+                if not re.fullmatch(r"[\s|:-]+", lines[i]):
+                    rows.append([c for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            key = re.sub(r"\W+", "", caption.split(".")[0].lower())[:28]
+            # \captionof rather than a table float: these tables ARE the argument of the
+            # paragraph above them, and floating nineteen of them through a 26-page paper
+            # separates each from the sentence it answers. This numbers and captions them
+            # in place.
+            out += [r"\begin{center}",
+                    r"\captionof{table}{" + inline(caption) + "}",
+                    r"\label{tab:" + key + "}",
+                    r"\end{center}",
+                    r"\vspace{-1.2em}",
+                    table(rows)]
+            continue
+        if re.match(r"^\s*\|", ln):                                # pipe table, inline
             close_list()
             rows = []
             while i < len(lines) and re.match(r"^\s*\|", lines[i]):
@@ -221,16 +303,32 @@ def convert(md: str) -> str:
         if ln.startswith("## "):
             close_list()
             name = re.sub(r"^##\s*(?:\d+\.?\s*)?", "", ln).strip()
+            app = re.match(r"^##\s+Appendix\s+([A-Z])\.\s*(.+)$", ln)
+            if app:
+                if in_abstract:
+                    out.append(r"\end{abstract}"); in_abstract = False
+                if not appendix_started:
+                    out.append(r"\appendix")
+                    appendix_started = True
+                out.append(r"\section{" + inline(app.group(2).strip()) + "}")
+                out.append(r"\label{app:" + app.group(1).lower() + "}")
+                i += 1; continue
             if name.lower() == "abstract":
                 out.append(r"\begin{abstract}\noindent"); in_abstract = True
             else:
                 if in_abstract:
                     out.append(r"\end{abstract}"); in_abstract = False
                 out.append(r"\section{" + inline(name) + "}")
+                num = re.match(r"^##\s+(\d+(?:\.\d+)*)\.?\s", ln)
+                if num:
+                    out.append(r"\label{sec:" + num.group(1) + "}")
             i += 1; continue
         if ln.startswith("### "):
             close_list()
             out.append(r"\subsection{" + inline(re.sub(r"^###\s*[\d.]*\s*", "", ln).strip()) + "}")
+            num = re.match(r"^###\s+(\d+(?:\.\d+)*)\.?\s", ln)
+            if num:
+                out.append(r"\label{sec:" + num.group(1) + "}")
             i += 1; continue
         if ln.startswith("> "):
             close_list()
@@ -255,6 +353,8 @@ def convert(md: str) -> str:
                 i += 1; item += " " + lines[i].strip()
             out.append(r"\item " + inline(item))
             i += 1; continue
+        if ln.strip() == "<!--BIBLIOGRAPHY-->":
+            close_list(); out.append(r"\BIBLIOGRAPHYHERE"); i += 1; continue
         if ln.strip() in ("---", "***"):
             close_list(); i += 1; continue
         if not ln.strip():
@@ -271,12 +371,107 @@ def convert(md: str) -> str:
     return "\n".join(out)
 
 
+def bibliography(md: str, path: "Path | None" = None) -> str:
+    """Emit thebibliography from paper/REFERENCES.md, including only VERIFIED entries.
+
+    The reference list is NOT typed into the tex. It is generated from a table whose rows
+    each carry a status, so an entry nobody could confirm cannot reach the PDF: this paper
+    argues that a number is not a result until its controls run, and a citation nobody
+    checked is the same failure in a different column.
+
+    Fails loudly rather than silently dropping anything:
+      * a \\cite key with no row  -> the reference would print as [?]
+      * a \\cite key whose row is UNVERIFIED
+      * a VERIFIED row no \\cite uses -> dead weight, or a citation that was meant to exist
+    """
+    path = path or REPO / "paper" / "REFERENCES.md"
+    if not path.exists():
+        raise SystemExit(f"missing {path}: the paper cites work and must carry its references")
+    rows, cols = [], None
+    for ln in path.read_text().split("\n"):
+        if not ln.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if re.fullmatch(r"[\s|:-]+", ln):
+            continue
+        if cols is None:
+            cols = [c.lower() for c in cells]
+            continue
+        if len(cells) == len(cols):
+            row = dict(zip(cols, cells))
+            # the table writes cells in backticks for legibility in the markdown
+            row["key"] = row["key"].strip().strip("`").strip()
+            row["status"] = row["status"].strip().strip("`").strip()
+            rows.append(row)
+    for need in ("key", "authors", "title", "venue", "status"):
+        if cols is None or need not in cols:
+            raise SystemExit(f"{path}: table needs a '{need}' column, found {cols}")
+
+    cited = set(re.findall(r"\[@([\w\d]+(?:\s*;\s*@[\w\d]+)*)\]", md))
+    keys = {k.strip().lstrip("@") for group in cited for k in group.split(";")}
+    bykey = {r["key"]: r for r in rows}
+
+    missing = sorted(k for k in keys if k not in bykey)
+    if missing:
+        raise SystemExit(f"cited but not in REFERENCES.md: {missing}")
+    unver = sorted(k for k in keys if bykey[k]["status"].upper() != "VERIFIED")
+    if unver:
+        raise SystemExit(f"cited but not VERIFIED: {unver}")
+    unused = sorted(r["key"] for r in rows
+                    if r["status"].upper() == "VERIFIED" and r["key"] not in keys)
+    if unused:
+        raise SystemExit(f"VERIFIED but never cited: {unused}")
+
+    def raw(cell: str, key: str, col: str) -> str:
+        """Bibliography cells are author-written LaTeX (\\emph, ~ ties), not markdown.
+
+        Running them through inline() would escape the backslashes and print the markup.
+        They are passed through verbatim, so the only thing worth checking is that the
+        braces balance -- an unbalanced one swallows the rest of the document.
+        """
+        t = cell.strip()
+        if t.startswith("`") and t.endswith("`"):
+            t = t[1:-1].strip()
+        if t.count("{") != t.count("}"):
+            raise SystemExit(f"REFERENCES.md {key}: unbalanced braces in '{col}': {t!r}")
+        return t
+
+    def stop(t: str) -> str:
+        """Add the terminal period only when the cell does not already end a sentence.
+
+        An author list ending `et~al.` and a title ending `?` already carry it; appending
+        blindly prints `et~al..` and `?.` in the reference list.
+        """
+        return t if t.endswith((".", "?", "!")) else t + "."
+
+    items = [r"\begin{thebibliography}{99}", r"\small", ""]
+    for key in sorted(keys):
+        r = bykey[key]
+        items += [r"\bibitem{" + key + "}",
+                  stop(raw(r["authors"], key, "authors")),
+                  r"\newblock " + stop(raw(r["title"], key, "title")),
+                  r"\newblock " + stop(raw(r["venue"], key, "venue")),
+                  ""]
+    items.append(r"\end{thebibliography}")
+    print(f"  bibliography: {len(keys)} entries, all VERIFIED and all cited")
+    return "\n".join(items)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-build", action="store_true")
     a = ap.parse_args()
     md = (REPO / "paper" / "paper.md").read_text()
-    tex = PREAMBLE + "\n" + convert(md) + "\n\n\\end{document}\n"
+    SECTIONS.clear()
+    SECTIONS.update(scan_sections(md))
+    body = convert(md)
+    bib = bibliography(md)
+    # References belong before the appendices, which is where the marker sits in paper.md.
+    if r"\BIBLIOGRAPHYHERE" in body:
+        body = body.replace(r"\BIBLIOGRAPHYHERE", bib, 1)
+    else:
+        body = body + "\n\n" + bib
+    tex = PREAMBLE + "\n" + body + "\n\n\\end{document}\n"
     out = REPO / "paper" / "paper.tex"
     out.write_text(tex)
     print(f"wrote {out} ({len(tex.splitlines())} lines)")

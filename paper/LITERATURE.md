@@ -107,7 +107,7 @@ between the copy-last-frame floor and a ceiling. *Verified by conference listing
 not read the paper.*
 
 **Context from video prediction:** the copy-last-frame baseline is long established as a floor and is known to
-beat learned models on mostly static data. Babaeizadeh et al., "High Fidelity Video Prediction with Large
+beat learned models on mostly static data. Villegas, Pathak, Kannan, Erhan, Le and Lee, "High Fidelity Video Prediction with Large
 Stochastic Recurrent Neural Networks" (arXiv:1911.01655), report it outperforming all their models on Human
 3.6M and conclude per-frame metrics are unreliable there. Villegas et al. (arXiv:1706.08033) report it beating
 their model on UCF101 and omit it on KITTI where most pixels move. The `vp-suite` library ships a
@@ -194,4 +194,4 @@ Named so the gap is visible rather than implied. None of these are cited in `pap
 - [Agarwal et al., Statistical Precipice, NeurIPS 2021](https://proceedings.neurips.cc/paper_files/paper/2021/file/f514cec81cb148559cf475e7426eed5e-Paper.pdf), [arXiv:2108.13264](https://arxiv.org/abs/2108.13264)
 - [Henderson et al., Deep RL That Matters, AAAI 2018](https://ojs.aaai.org/index.php/AAAI/article/view/11694), [arXiv:1709.06560](https://arxiv.org/abs/1709.06560)
 - [Your world model may be worse than copying the last frame, NeurIPS 2026](https://neurips.cc/virtual/2026/166122)
-- [Babaeizadeh et al., arXiv:1911.01655](https://arxiv.org/pdf/1911.01655) and [Villegas et al., arXiv:1706.08033](https://arxiv.org/pdf/1706.08033)
+- [Villegas et al., arXiv:1911.01655](https://arxiv.org/pdf/1911.01655) and [Villegas et al., arXiv:1706.08033](https://arxiv.org/pdf/1706.08033)

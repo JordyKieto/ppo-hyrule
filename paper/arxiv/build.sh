@@ -41,6 +41,15 @@ fi
 ( cd "$T" && tectonic -X compile paper.tex --outdir . --keep-logs >/dev/null 2>&1 )
 OVERFULL=$(grep -c '^Overfull' "$T/paper.log" || true)
 echo "overfull boxes: $OVERFULL"
+
+# A \ref or \cite that resolves to nothing prints as a bold [?] in the PDF and is the
+# single easiest defect to ship, because the build still succeeds.
+UNDEF=$(grep -cE 'Reference .* undefined|Citation .* undefined' "$T/paper.log" || true)
+echo "undefined references/citations: $UNDEF"
+if [ "$UNDEF" -ne 0 ]; then
+  grep -E 'Reference .* undefined|Citation .* undefined' "$T/paper.log" | head -10
+  rm -rf "$T"; exit 1
+fi
 test "$OVERFULL" -eq 0 || { echo "LAYOUT FAULT: $OVERFULL overfull boxes"; rm -rf "$T"; exit 1; }
 rm -rf "$T"
 
