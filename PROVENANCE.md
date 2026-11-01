@@ -2146,7 +2146,10 @@ refuse an existing jsonl — **that is an open item, not a fixed one.**
 | `logs/sjepa_p1.log`, `logs/sjepa_p1_probe.log` | `fcddc74051c6cdd8e3be809a9d7a45d8`, `3055f114cf09df1fd5b464d51ab9e6fa` | 3,492 / 3,915 |
 
 In S3, verified by listing the destination and comparing bytes (§16), not by the upload's exit code:
-`s3://zelda-rl/fleet/ckpt_auto/p1/p1.last.pt` (9,881,105) and `.../p1/p1.jsonl` (5,982).
+`s3://zelda-rl/fleet/ckpt_auto/p1/p1.last.pt` (9,881,105) and
+`s3://zelda-rl/fleet/ckpt_auto/evals/p1/p1.jsonl` (5,982) — two DIFFERENT prefixes, because `save_ckpt` uploads under the run name while `EvalSink` prepends `evals/`. An earlier draft of this
+line put both under `p1/`: I read two consecutive `aws s3 ls` outputs as one listing. Checking the
+destination is only half of §16; reading the output correctly is the other half.
 
 No W&B run: this was CPU-local under `ZRL_ALLOW_NO_WANDB=1`, so the jsonl + S3 copy is the record. `EvalSink`
 has a gap worth knowing — `log()` writes the jsonl **only `if rows`** and otherwise sends metrics to W&B
