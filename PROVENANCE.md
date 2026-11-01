@@ -2448,3 +2448,40 @@ on every pod that `fleet ckpt` had already put there by presigned S3 GET **24 se
 **Not fixed in this session, deliberately**: the repo is being rsynced to 33 pods, and editing it mid-push is
 what cost rank 26 its bootstrap (§18.6). The fix is to skip the rsync when the remote file already matches by
 size — the same `stat` comparison `fleet ckpt` already does. Proposed, with the measurement above.
+
+### 18.8 FIRST READING, update 1 — **nothing is attributable, and the premise needs revising**
+
+33/33 pods training (`fleet audit` 32 WORKING then 33 after rank 26 rejoined; trainer-shaped check:
+`scripts/gohma_beh_alive.py` shows tmux `train`, 8 Dolphins and a fresh log on every pod). Control n=3,
+treatment n=28 reporting at update 1.
+
+**Read nothing into the arm difference.** At update 1 both arms ARE v15 — one update of gradient separates
+them — so every delta below is noise, and the boss-damage delta flipped sign (−0.038 → +0.037) between two
+readings four minutes apart as one more treatment pod reported. That is §48 happening live: the number moved
+with the population, not with the model. Two of fourteen counters crossed |t|=2 (both FAVOURING the control),
+which is unremarkable for fourteen correlated comparisons at n=3.
+
+**What IS decision-grade already: four of the measured baselines are wrong, and they were mine.** I took them
+from 5,610 v10-era episodes, and v15 is a different policy. At update 1, both arms:
+
+| counter | my v10-era baseline | v15 ACTUAL (update 1) | verdict |
+|---|---|---|---|
+| hearts picked / ep | ~0.14 | **0.23–0.25** | not zero |
+| items picked / ep | 0.878 | **0.74–1.21** | not zero |
+| red-eye conversion | **0.048** | **0.23–0.30**, i.e. **5x** my figure | badly wrong |
+| lock-on fraction | **0.223** (corpus 0.63) | **0.39–0.40** | nearly double |
+| facing fraction | no counter existed | **0.67–0.70** of her live steps | already high |
+| **grass cut / ep** | **0.0000 (0% of eps)** | **0.065–0.273** | the ONE near-zero behaviour |
+
+So the brief's premise — "these behaviours are near zero, so any movement is the term biting" — holds for
+**grass only**. Hearts, items, lock-on, facing and red-eye conversion are all mid-range in v15 already. The
+premise came from one watched episode (`media/gohma-slot5`, which collected no hearts in 191 s) plus my
+v10-era numbers, and a 0.23 hearts/episode rate is entirely consistent with one episode collecting none.
+
+**The consequence for reading this run.** A term now has to MOVE a number that already sits mid-range, not
+lift it off the floor, so the effect size to look for is much smaller than "zero to non-zero" and the
+|t| bar matters more. It also means `g_facing` at a 150-step cap is nudging a policy already facing her 70%
+of the time, which is the term I would expect to do least.
+
+**Also worth recording against the watched episode:** it reported lock-on at 15% of ticks; across 31 pods at
+update 1 the same checkpoint reads **39–40%**. Another single-episode figure that does not generalise.
