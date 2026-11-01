@@ -18,6 +18,8 @@
 \hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
 
 \setlist{itemsep=2pt,topsep=4pt}
+\emergencystretch=3em          % long \texttt{} paths cannot hyphenate; let the line stretch instead
+\usepackage{seqsplit}
 \renewcommand{\arraystretch}{1.15}
 
 \pagestyle{fancy}
@@ -92,7 +94,7 @@ Stated here rather than buried, because the paper's own argument is that claims 
 
 The game is \emph{The Legend of Zelda: Ocarina of Time} (GameCube build \texttt{NACE01}) under Dolphin 2603a with the video backend disabled. Observations are read zero-copy from Dolphin's shared memory arena at about 25 microseconds per step. Control runs at 10 Hz, one action every 6 vertical interrupts.
 
-Every memory offset is taken from the \href{https://github.com/zeldaret/oot}{OoT decompilation} rather than from inspection, with the retail Player structure at the decompilation's offset minus \texttt{0x10}. One shared definition (\texttt{zelda\_rl/state\_layout.py}) is imported by both the data collector and every model, so the two cannot drift.
+Every memory offset is taken from the \href{https://github.com/zeldaret/oot}{OoT decompilation} rather than from inspection, with the retail Player structure at the decompilation's offset minus \texttt{0x10}. One shared definition (\texttt{zelda\_\allowbreak{}rl/\allowbreak{}state\_\allowbreak{}layout.py}) is imported by both the data collector and every model, so the two cannot drift.
 
 Reading structured state out of an emulator instead of rendering pixels is not our idea. Firoiu, Whitney and Tenenbaum (arXiv:1702.06230) did it for \emph{Super Smash Bros. Melee} under the same emulator family, reading each player's position, velocity and action state from memory every frame; section 14 states what we take from them and what we do not claim.
 
@@ -108,7 +110,7 @@ Actions are a discrete product of nine world-relative directions and a button se
 
 Reward is computed by one tracker (\texttt{zelda\_rl/combat.py}) shared by the real environment and the learned one, so the two cannot disagree by construction.
 
-\textbf{The reward configuration is pinned per policy, not quoted from the current file.} That file is edited between experiments, so a sentence describing "the reward" describes whatever it happens to be on the day it is read, which for a project whose central finding is that reward composition decided the outcome is not good enough. \texttt{../docs/REWARD\_PROVENANCE.md} resolves the exact coefficients for every reported policy from the commit it trained under, parsed out of version control rather than recalled. Below is the one that matters: \textbf{v15, which carries every headline number in this report.} It is the \texttt{simple} preset plus exactly one term.
+\textbf{The reward configuration is pinned per policy, not quoted from the current file.} That file is edited between experiments, so a sentence describing "the reward" describes whatever it happens to be on the day it is read, which for a project whose central finding is that reward composition decided the outcome is not good enough. \texttt{../\allowbreak{}docs/\allowbreak{}REWARD\_\allowbreak{}PROVENANCE.md} resolves the exact coefficients for every reported policy from the commit it trained under, parsed out of version control rather than recalled. Below is the one that matters: \textbf{v15, which carries every headline number in this report.} It is the \texttt{simple} preset plus exactly one term.
 
 \textbf{Outcomes.} These are what the task is about, and they are uncapped.
 
@@ -272,7 +274,7 @@ Our best boss policy is \texttt{gohma-kl-v15}, referred to below as v15. The mea
 
 \subsection{The profile}
 
-\begin{center}\small
+\begin{center}\footnotesize
 \begin{tabularx}{\linewidth}{@{}rXrrrrrr@{}}
 \toprule
 \textbf{start} & \textbf{Gohma at start} & \textbf{distance} & \textbf{wins / 76} & \textbf{defeat rate} & \textbf{95\% CI} & \textbf{mean damage} & \textbf{share of her starting HP} \\
@@ -449,7 +451,7 @@ Two further offline results are worth recording because they close plausible esc
 
 \section{The world model did not get far enough}
 
-Four phases over two months, each with its own architecture family, dataset scale and reason for being abandoned. The baseline throughout is \textbf{persistence}, the prediction that nothing changes, and \textbf{skill} is \texttt{1 - model error / persistence error}: zero means exactly as good as doing nothing, positive is better than doing nothing, and negative is worse. Every number in this section is a skill score in that sense.
+Four phases over two months, each with its own architecture family, dataset scale and reason for being abandoned. The baseline throughout is \textbf{persistence}, the prediction that nothing changes, and \textbf{skill} is \texttt{1 - model error /\allowbreak{} persistence error}: zero means exactly as good as doing nothing, positive is better than doing nothing, and negative is worse. Every number in this section is a skill score in that sense.
 
 The baseline is not ours. Copying the last frame is long established as the floor in video prediction, where it is known to beat learned models on mostly static data (Babaeizadeh et al., arXiv:1911.01655; Villegas et al., arXiv:1706.08033), and the NeurIPS 2026 paper "Your world model may be worse than copying the last frame" reports that of 20 recent world-model papers, 12 give a prediction-quality number and 9 of those give nothing to read it against. This section therefore confirms a known and under-reported failure mode rather than discovering one; section 14 states the narrower thing we think is ours.
 
@@ -645,9 +647,9 @@ Both clips are the real emulator at 10 Hz control, cropped to the game area, wit
 \item \textbf{Deku Babas:} \url{https://youtu.be/fMMvd1HmMjI} (27 s)
 \end{itemize}
 
-\textbf{The melee task, end to end} (\texttt{media/deku-slot1/deku-slot1\_s01\_try01\_crop.mp4}, 29.7 s, md5 \texttt{d20c62aae595}). The agent starts just inside the room entrance at full health with all three Babas underground 530 to 830 units away, walks up, wakes them and clears the room. Kills at 7.3, 22.4 and 26.8 s, 1.5 hearts lost. First attempt.
+\textbf{The melee task, end to end} (\texttt{media/\allowbreak{}deku-slot1/\allowbreak{}deku-slot1\_\allowbreak{}s01\_\allowbreak{}try01\_\allowbreak{}crop.mp4}, 29.7 s, md5 \texttt{d20c62aae595}). The agent starts just inside the room entrance at full health with all three Babas underground 530 to 830 units away, walks up, wakes them and clears the room. Kills at 7.3, 22.4 and 26.8 s, 1.5 hearts lost. First attempt.
 
-\textbf{Queen Gohma from the full-health start} (\texttt{media/gohma-slot5/gohma-slot5\_s05\_try04\_crop.mp4}, 197.7 s, md5 \texttt{a184dbd29233}). She begins at 10 of 10 health on the ceiling with her eye red, 347 units away. The fight, from the episode's own log:
+\textbf{Queen Gohma from the full-health start} (\texttt{media/\allowbreak{}gohma-slot5/\allowbreak{}gohma-slot5\_\allowbreak{}s05\_\allowbreak{}try04\_\allowbreak{}crop.mp4}, 197.7 s, md5 \texttt{a184dbd29233}). She begins at 10 of 10 health on the ceiling with her eye red, 347 units away. The fight, from the episode's own log:
 
 \begin{center}\small
 \begin{tabularx}{\linewidth}{@{}rX@{}}
@@ -699,13 +701,13 @@ Off the easiest start v15 averages 4.26 health & Recomputed from the 760 rows: 3
 
 \section{Reproducibility}
 
-Every number above traces to a directory. \texttt{../PROVENANCE.md} carries the resume lineage per version, wall clock and cost, the step-axis discontinuities that make a curve misreadable without them, and why each version exists including the ones that failed. \texttt{CLAIMS.md} is one row per claim with its evidence class. \texttt{../artifacts/MANIFEST.json} identifies every checkpoint, dataset and result file by md5 rather than by filename, with its remote key where one exists, because a stray checkpoint file cannot otherwise be matched back to the run that produced it.
+Every number above traces to a directory. \texttt{../PROVENANCE.md} carries the resume lineage per version, wall clock and cost, the step-axis discontinuities that make a curve misreadable without them, and why each version exists including the ones that failed. \texttt{CLAIMS.md} is one row per claim with its evidence class. \texttt{../\allowbreak{}artifacts/\allowbreak{}MANIFEST.json} identifies every checkpoint, dataset and result file by md5 rather than by filename, with its remote key where one exists, because a stray checkpoint file cannot otherwise be matched back to the run that produced it.
 
 Training histories are \textbf{exported, not linked}: each run group has a local directory with its configuration, summary and full history, including the identities of all per-machine runs so a fleet is recoverable and not just its aggregator. In practice one group's per-machine histories were not pulled before the machines were lost, which is the gap behind section 6.3.
 
 The commands, so the two results a reader is most likely to want are runnable rather than described:
 
-\begin{Verbatim}[fontsize=\small,frame=single,framesep=4pt]
+\begin{Verbatim}[fontsize=\footnotesize,frame=single,framesep=4pt]
 # watch the solved melee policy play, in a real emulator window
 DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
   .venv/bin/python-dbg scripts/play.py checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt \

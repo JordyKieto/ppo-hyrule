@@ -48,6 +48,8 @@ PREAMBLE = r"""\documentclass[11pt]{article}
 \hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
 
 \setlist{itemsep=2pt,topsep=4pt}
+\emergencystretch=3em          % long \texttt{} paths cannot hyphenate; let the line stretch instead
+\usepackage{seqsplit}
 \renewcommand{\arraystretch}{1.15}
 
 \pagestyle{fancy}
@@ -92,11 +94,16 @@ def inline(t: str) -> str:
         slots.append(s)
         return f"\x00{len(slots) - 1}\x00"
 
-    t = re.sub(r"`([^`]+)`", lambda m: park(r"\texttt{" + m.group(1).replace("\\", r"\textbackslash{}")
-                                            .replace("_", r"\_").replace("{", r"\{").replace("}", r"\}")
-                                            .replace("&", r"\&").replace("%", r"\%").replace("$", r"\$")
-                                            .replace("#", r"\#").replace("~", r"\textasciitilde{}")
-                                            .replace("^", r"\textasciicircum{}") + "}"), t)
+    def tt(x: str) -> str:
+        """Long paths inside \texttt cannot hyphenate and overflow the margin; let them break on / and _."""
+        x = (x.replace("\\", r"\textbackslash{}").replace("_", r"\_").replace("{", r"\{")
+              .replace("}", r"\}").replace("&", r"\&").replace("%", r"\%").replace("$", r"\$")
+              .replace("#", r"\#").replace("~", r"\textasciitilde{}").replace("^", r"\textasciicircum{}"))
+        if len(x) > 24:
+            x = x.replace("/", "/\\allowbreak{}").replace(r"\_", r"\_\allowbreak{}")
+        return r"\texttt{" + x + "}"
+
+    t = re.sub(r"`([^`]+)`", lambda m: park(tt(m.group(1))), t)
     t = re.sub(r"\[([^\]]+)\]\(([^)]+)\)",
                lambda m: park(r"\href{" + m.group(2).replace("%", r"\%").replace("#", r"\#") + "}{"
                               + esc(m.group(1)) + "}"), t)
@@ -138,7 +145,9 @@ def table(rows: list[list[str]]) -> str:
         env, arg = "tabular", ""
     else:
         env, arg = "tabularx", r"{\linewidth}"
-    out = [r"\begin{center}\small", f"\\begin{{{env}}}{arg}{{@{{}}{spec}@{{}}}}", r"\toprule"]
+    # Eight columns overflow at \small; the per-start profile table is the one that forced this.
+    size = r"\footnotesize" if ncol >= 7 else r"\small"
+    out = [r"\begin{center}" + size, f"\\begin{{{env}}}{arg}{{@{{}}{spec}@{{}}}}", r"\toprule"]
     out.append(" & ".join(r"\textbf{" + inline(h.strip().strip("*")) + "}" for h in head) + r" \\")
     out.append(r"\midrule")
     for b in body:
@@ -167,7 +176,7 @@ def convert(md: str) -> str:
             while i < len(lines) and not lines[i].startswith("```"):
                 buf.append(lines[i]); i += 1
             i += 1
-            out += [r"\begin{Verbatim}[fontsize=\small,frame=single,framesep=4pt]", *buf, r"\end{Verbatim}"]
+            out += [r"\begin{Verbatim}[fontsize=\footnotesize,frame=single,framesep=4pt]", *buf, r"\end{Verbatim}"]
             continue
         if re.match(r"^\s*\|", ln):                                # pipe table
             close_list()
