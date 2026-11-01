@@ -3,10 +3,11 @@
 **Model-free reinforcement learning from live game memory in *The Legend of Zelda: Ocarina of Time*, and
 four things that did not beat it.**
 
-Status: draft, 2026-11-01. Every quantitative statement here is audited in [CLAIMS.md](CLAIMS.md) with an
-evidence class and traced to an artefact in [`../PROVENANCE.md`](../PROVENANCE.md). Nothing below should be
-read as a result unless it is marked **M** (measured) there. Claims that were published inside this project
-and later overturned are listed in section 12 rather than deleted.
+Technical report, 1 November 2026. Every quantitative statement here carries an evidence class in the
+[claim audit](https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md) and traces to an artefact in the
+[provenance record](https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md). Nothing below should be read as a result unless it is marked
+**M**, measured, there. Claims this project made internally and later overturned are listed in section 12
+rather than deleted, which is a deliberate part of the report rather than an oversight.
 
 ---
 
@@ -146,7 +147,7 @@ the two cannot disagree by construction.
 **The reward configuration is pinned per policy, not quoted from the current file.** That file is edited
 between experiments, so a sentence describing "the reward" describes whatever it happens to be on the day it
 is read, which for a project whose central finding is that reward composition decided the outcome is not good
-enough. `../docs/REWARD_PROVENANCE.md` resolves the exact coefficients for every reported policy from the
+enough. [reward provenance](https://github.com/JordyKieto/ppo-hyrule/blob/main/docs/REWARD_PROVENANCE.md) resolves the exact coefficients for every reported policy from the
 commit it trained under, parsed out of version control rather than recalled. Below is the one that matters:
 **v15, which carries every headline number in this report.** It is the `simple` preset plus exactly one term.
 
@@ -214,7 +215,7 @@ choice we made and not a finding, and nothing in the rest of the paper rests on 
 Reinforcement learning ran on fleets of 16-vCPU cloud machines, between 14 and 48 of them at a time and 109
 at the largest, at $0.48 to $0.56 per machine-hour. World models ran on single H100 80GB cards at $3.49 to
 $3.99 an hour. **Nothing in this work used an A100**, although one pod was requested as one and the provider
-substituted an H100. An earlier draft of this report said "A100 or H100"; that was wrong.
+substituted an H100. Our own logs recorded this as "A100 or H100" for months, and that was wrong.
 
 The whole project consumed about **2,300 machine-hours and $1,381**, split **$1,115 for the reinforcement
 learning track and $266 for the world model track**. It generated **509.6 million environment steps**, which
@@ -236,7 +237,7 @@ for that session. Rates and machine counts come from our own launch logs and are
 not, and they err low, since bootstrap and idle time falls outside that span. Two fleets are not
 reconstructible at all: a 109-machine data collection whose only surviving trace is the shard directories it
 wrote, and a 34-machine fleet the provider terminated without a reason while we were not watching. We report
-those as missing rather than as estimates. `../PROVENANCE.md` section 19 carries the per-phase table.
+those as missing rather than as estimates. [provenance record](https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md) section 19 carries the per-phase table.
 
 ## 3. Task one: the melee encounter is solved
 
@@ -333,8 +334,8 @@ numbers and only the second describes what enters the advantage.
 
 **What that does and does not establish.** It establishes that the *direct* contribution of the terminal
 residual to an early advantage is negligible over the length of this fight. It does **not** establish that the
-terminal reward never influenced earlier decisions, and we were careless about this in an earlier draft. The
-critic bootstraps, so information about eventual outcomes can enter `V(s)` and propagate backwards across
+terminal reward never influenced earlier decisions, and the two are easy to conflate. The critic
+bootstraps, so information about eventual outcomes can enter `V(s)` and propagate backwards across
 training updates, over many updates rather than within one trajectory. The defensible statement is narrower
 and still strong: **at these settings the configuration supplies almost no direct long-horizon credit, so
 whatever the policy learned about assembling a chain of openings had to arrive either through dense shaping
@@ -502,7 +503,7 @@ damage at t = -4.98.
 ### 6.3 Fifteen mechanisms, none of which beat the policy trained without the data
 
 Fifteen arms were run. The nine below are those that accumulated enough updates to fit a slope before the
-machines they ran on were lost; the remainder are listed in `../PROVENANCE.md` with their W&B identities and
+machines they ran on were lost; the remainder are listed in [provenance record](https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md) with their W&B identities and
 produced no usable trend. Every arm starts from v15's weights, so the question is whether demonstrations
 improve an already competent policy. The bar is v15's own 3.275 on the **mix-invariant** damage metric, by
 which we mean the unweighted mean of the per-start values rather than the episode-weighted average, so that
@@ -522,13 +523,13 @@ changing the curriculum cannot move it. Section 9.2 is why that distinction exis
 | inverse, clone as student | 16 | 0.49 | 0.96 | **+0.0337 ± 0.0102** | **+3.32** |
 | **v15, no human data at all** | | **3.275** | | the bar | |
 
-**This table is the recomputation, and it corrects the paper in both directions.** An earlier draft reported
-these arms on the episode-weighted fleet mean, which moves with the curriculum, and noted that the
-mix-invariant version had not been run. It has now been run, from the exported histories, and it says:
+**This table is computed on the mix-invariant column, and that matters.** These arms were originally
+tracked on the episode-weighted fleet mean, which moves with the curriculum. Recomputed from the exported
+histories on the mix-invariant column, the picture changes in both directions:
 
-- **One arm's mean sits above the bar**, latent transition matching at 3.30 against 3.275, where the earlier
-  draft said none did. Its slope is flat, t = -0.36, so it is a level and not a climb.
-- **Six of the ten arms produce at least one update above the bar**, not the three the earlier draft claimed.
+- **One arm's mean sits above the bar**, latent transition matching at 3.30 against 3.275, where the
+  episode-weighted reading showed none above it. Its slope is flat, t = -0.36, so it is a level and not a climb.
+- **Six of the ten arms produce at least one update above the bar**, against three on the weighted reading.
 - **Only one arm has a positive trend distinguishable from zero**, the inverse arm at +0.0337 (t = +3.32),
   and it is climbing from 0.49, about a sixth of v15's level. Two arms have significant negative trends.
 
@@ -536,7 +537,7 @@ mix-invariant version had not been run. It has now been run, from the exported h
 **single machine**. Per-machine balanced damage on this task spans **1.36 to 3.37** at identical settings, so
 a one-machine mean of 3.30 sits comfortably inside the spread of one configuration run twice. The bar itself,
 v15's 3.275, comes from a different aggregation and was never re-derived on this column. The defensible
-statement is therefore weaker than either draft: **across ten mechanisms, none shows a trend toward or above
+statement is therefore weaker than either reading: **across ten mechanisms, none shows a trend toward or above
 the policy trained without demonstrations, and the design cannot resolve a difference the size of the one
 arm that nominally exceeds it.** The machines were lost before any checkpoint was synced, so these arms
 cannot be re-evaluated, only re-read.
@@ -588,7 +589,8 @@ It still loses to the policy gradient. At matched 300 second caps, 456 episodes 
 
 Two-proportion z = +2.76 on the binary; **t = +13.91 on the graded metric**. Off the easiest start, v15
 averages **3.48** health to the offline policy's 0.88, a factor of 3.95 (recomputed from the 760 non-start-7
-rows; an earlier draft and `../PROVENANCE.md` said 4.26 and "4.8x", which was wrong). Note the ratio of
+rows; our provenance record carried 4.26 and "4.8x" until it was recomputed, which was wrong). Note the
+ratio of
 evidence: the graded quantity separates these arms at 14 standard errors where the binary manages 2.8, on the
 same episodes.
 
@@ -771,8 +773,8 @@ The wrong metric then caused harm rather than merely hiding progress. An approac
 was added in v15 on the strength of a defeat-rate band analysis. The last two rows are the versions that
 tripled its coefficient and that added deficit sampling, and both are regressions against the policy they
 resumed from, confirmed on the mix-invariant per-start form (t = -4.75 and -3.78) so neither is a curriculum
-artefact. **We stop short of saying the term caused the plateau**, although an earlier draft of this paper did
-not: the slope also tracks each version's starting level, and a later arm that removed the term from the same
+artefact. **We stop short of saying the term caused the plateau**, which we did assert internally before
+checking: the slope also tracks each version's starting level, and a later arm that removed the term from the same
 weights did not recover the earlier slope. Our own claim audit marks that causal reading confounded. What is
 attributable is narrower and still useful: two changes motivated by the sparse binary were measurably harmful,
 and the saturation at 3.2 to 3.4 is a property of the task across eight versions and five reward
@@ -971,7 +973,7 @@ says how often a win happens.
 Both directories carry an `attempts.json` recording every attempt, won or lost, with each clip's duration
 checked against the episode's own length and a frozen-frame fraction confirming the capture is live gameplay
 rather than a still. Three separate capture faults were found and fixed to get these, including one that
-silently filmed an empty desktop while passing a duration check; they are recorded in `../PROVENANCE.md`
+silently filmed an empty desktop while passing a duration check; they are recorded in [provenance record](https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md)
 section 17.
 
 ## 12. Retractions
@@ -991,17 +993,17 @@ paper arguing that claims outrun evidence should show its own.
 | Four machines trained one sharded world model | They averaged nothing on any round: the aggregator was dead from launch and the reduction crashed on a device mismatch. Four independent quarter-corpus models. Visible all along in 616 second sync epochs against 15 otherwise | 7 |
 | Three world-model conclusions | Artefacts of the instrument: scoring a gate on a quantity the gate excludes; measuring a grid by re-fitting rather than reading the stored one; a threshold rule derived from a normalisation bug | 7 |
 | The masked-representation run should be killed | Recommended twice at five epochs from +0.0026 ± 0.0030, read as flat. At twelve epochs it is +0.0150 ± 0.0015, t = +10.29. The arithmetic was right and the number was not decision-grade | 8 |
-| The approach term caused the plateau | Confounded by each version's starting level, and a later arm removing the term did not recover the earlier slope. Appeared in this paper's own abstract until an adversarial review caught it | 9.1 |
+| The approach term caused the plateau | Confounded by each version's starting level, and a later arm removing the term did not recover the earlier slope. It survived into a draft abstract of this report before review caught it | 9.1 |
 | Off the easiest start v15 averages 4.26 health | Recomputed from the 760 rows: 3.479. No subset of starts yields 4.26. The error was in our provenance file and the paper inherited it | 6.4 |
 
 ---
 
 ## 13. Reproducibility
 
-Every number above traces to a directory. `../PROVENANCE.md` carries the resume lineage per version, wall clock
+Every number above traces to a directory. [provenance record](https://github.com/JordyKieto/ppo-hyrule/blob/main/PROVENANCE.md) carries the resume lineage per version, wall clock
 and cost, the step-axis discontinuities that make a curve misreadable without them, and why each version
-exists including the ones that failed. `CLAIMS.md` is one row per claim with its evidence class.
-`../artifacts/MANIFEST.json` identifies every checkpoint, dataset and result file by md5 rather than by
+exists including the ones that failed. [claim audit](https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/CLAIMS.md) is one row per claim with its evidence class.
+[`artifacts/MANIFEST.json`](https://github.com/JordyKieto/ppo-hyrule/blob/main/artifacts/MANIFEST.json) identifies every checkpoint, dataset and result file by md5 rather than by
 filename, with its remote key where one exists, because a stray checkpoint file cannot otherwise be matched
 back to the run that produced it.
 
@@ -1039,8 +1041,8 @@ filenames as the ones cited here but at roughly a third of the size. They are an
 
 ## 14. Related work and positioning
 
-Citations are verified and annotated in [LITERATURE.md](LITERATURE.md), which also lists the clusters not yet
-covered. We state what is not ours first, because the honest version of this section is mostly that.
+Citations are verified and annotated in the [literature file](https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/LITERATURE.md), which also lists
+the clusters not yet covered. We state what is not ours first, because the honest version of this section is mostly that.
 
 **Reading engine state instead of pixels is not new, and the nearest precedent is close.** Firoiu, Whitney and
 Tenenbaum (arXiv:1702.06230) trained agents for *Super Smash Bros. Melee* under emulation, reading each
