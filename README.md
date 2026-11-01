@@ -5,6 +5,19 @@ Zelda: Ocarina of Time* in an unmodified Dolphin emulator, reading the game's **
 pixels: every actor's position, velocity, health and decoded animation routine, zero-copy, about 25
 microseconds per step.
 
+<p align="center">
+  <img src="assets/gohma.gif" alt="The PPO policy defeating Queen Gohma: slingshot stun, sword hits, larvae cleared, the kill" width="420">
+  <img src="assets/deku-baba.gif" alt="The PPO policy clearing three Deku Babas from the room entrance" width="420">
+</p>
+<p align="center">
+  <b>Queen Gohma, full fight:</b> <a href="https://youtu.be/FBD1wEsdY3E">youtu.be/FBD1wEsdY3E</a> (3m11s, uncut) ·
+  <b>Deku Babas:</b> <a href="https://youtu.be/fMMvd1HmMjI">youtu.be/fMMvd1HmMjI</a> (27s, uncut)
+</p>
+
+The clips above are smash cuts. The YouTube links are the **unedited episodes**, and each has an
+`attempts.json` beside it recording every attempt, won or lost, so neither is read as a typical episode.
+The Gohma fight took four attempts at a start the policy wins 10.53% of the time.
+
 [**Paper**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Provenance**](PROVENANCE.md) ·
 [**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md)
 
@@ -30,8 +43,8 @@ shaping with effectively no gradient from the outcome.
 
 | clip | what it is |
 |---|---|
-| [`media/deku-slot1/`](media/deku-slot1/) | the solved melee task end to end: the agent walks in from the room entrance, wakes all three Babas and clears the room. 26.7 s, kills at 7.3, 22.4 and 26.8 s. |
-| [`media/gohma-slot5/`](media/gohma-slot5/) | a Queen Gohma defeat from the full-health start, 10 of 10 health on the ceiling 347 units away: larvae cleared, all ten health taken. |
+| [Deku Babas (YouTube)](https://youtu.be/fMMvd1HmMjI) · [`media/deku-slot1/`](media/deku-slot1/) | the solved melee task end to end: the agent walks in from the room entrance, wakes all three Babas and clears the room. 26.7 s of game time, kills at 7.3, 22.4 and 26.8 s, first attempt. |
+| [Queen Gohma (YouTube)](https://youtu.be/FBD1wEsdY3E) · [`media/gohma-slot5/`](media/gohma-slot5/) | a Gohma defeat from the full-health start, 10 of 10 health on the ceiling 347 units away. 191 s, ten sword hits, eight knockdowns of which it caused five, five larvae killed, two hearts lost. |
 
 Each directory carries an `attempts.json` listing **every** attempt, won or lost, so a clip is never read as
 a typical episode. That start wins 10.53% of the time, and all eight of its recorded wins kill larvae and take

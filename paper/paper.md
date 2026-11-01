@@ -19,11 +19,14 @@ from the problem and leaves control, timing and credit assignment.
 
 Two tasks. The first, a three-enemy melee encounter, is solved by recurrent PPO in under five hours on twenty
 CPU machines. The second, the dungeon boss Queen Gohma, is not solved, and the useful content of this report
-is why. Gohma takes damage only while stunned, a stun must be manufactured, and a kill is ten such
-manufactured openings inside a fight that takes a human 154 seconds. Our best policy defeats her on 8.33% of
-456 held-out episodes and removes 3.53 of her 10 health on average.
+is why. Gohma takes damage only while stunned, and a stun must be manufactured. From a full-health start a kill is
+ten sword hits spread across roughly five such openings, inside a fight that takes a human 154 seconds. Our best policy defeats her on 8.33% of
+456 evaluation episodes and removes 3.53 of her 10 health on average.
 
-Four alternatives were measured against that policy under matched conditions and **all four lost**. Behaviour
+Four alternatives were measured against that policy under matched conditions and **all four lost**: cloning
+human play, folding those demonstrations into the policy gradient, learning offline from return-conditioned
+trajectories, and planning inside a learned model. The masked-prediction result in section 8 is not one of
+the four; it is a separate positive finding about representation, not a competitor to the policy. Behaviour
 cloning on 100 recorded human victories reaches 74.5% held-out next-action accuracy, nearly four times the
 majority-action floor, and takes 0.33 of her 10 health with 1 win in 80 attempts. Fifteen separate mechanisms
 for injecting those demonstrations into the policy gradient produced no arm with an improving trend. Offline
@@ -35,7 +38,8 @@ The second half of the report is about measurement, because in this project the 
 of error than any method. A defeat is a 1 to 10% binary event. Read through it, six consecutive versions of the
 boss policy appeared flat and two experiments were launched to break the apparent plateau. Read through the
 graded quantity the reward actually pays for, the same six versions rose **8.7 times**, every step
-statistically solid, and one of the experiments launched to fix the plateau measurably caused one. We give the
+statistically solid, and the two changes launched to break the apparent plateau were both measurable
+regressions. We give the
 per-start profile rather than a pooled rate, because the pooled rate moves with a curriculum we choose, and we
 record nine claims this project published and then withdrew.
 
@@ -56,12 +60,33 @@ record nine claims this project published and then withdrew.
 4. **A negative result on learned world models, carried to the point where the mechanism is named.** The model
    fails the action-shuffle control outright, so it is not a controllable dynamics model in any sense, which
    explains the dream-trained policies without appealing to the policy (section 7).
-5. **One positive representation result that clears its controls**: a masked-prediction objective over the
-   structured state beats both an untrained network of identical architecture and a free-signal control on 9
-   of 10 frozen probes (section 8).
+5. **One positive representation result, stated at the resolution it earns.** Masked prediction over the
+   structured state improves **9 of 10 frozen downstream probes** against both an untrained network of
+   identical architecture and a free-signal control, while the **pretraining objective itself remains worse
+   than a trivial baseline**, on **one seed** (section 8). Those are two different conclusions and we keep
+   them apart.
 6. **A metric methodology, derived from its own failures.** Mix-invariance, selector resolution, the
    maximum-of-N bias, pooling as a measurement with its own failure modes, and the difference between a
    discount and a policy-gradient weight (section 9), each with the specific wrong decision it caused.
+
+### What we do not claim
+
+Stated here rather than buried, because the paper's own argument is that claims outrun evidence easily.
+
+- **We do not claim generalisation to unseen start states.** The four starts excluded from training are all at
+  half health and all beyond 368 units, so "held out" is collinear with "far" and no matched comparison exists.
+- **We do not claim the credit horizon is the binding constraint.** We show it supplies almost no direct
+  long-horizon credit. We did not run the experiment that would test whether fixing it helps, and the arms
+  that raised the horizon moved other things at the same time.
+- **We do not claim the approach-shaping term caused the plateau.** The dose-response is confounded by each
+  version's starting level, and our own claim audit marks that reading confounded.
+- **We do not claim the masked representation transfers to the boss.** The raw state it needs was never
+  recorded for Gohma, so the experiment cannot currently be run.
+- **We do not claim the entity-factored recurrent architecture is better than a flat network.** It was never
+  ablated head to head. No architectural novelty is claimed anywhere in this report.
+- **We do not claim the human's strategy is inferior.** The demonstrator won 100 of 100. What we show is that
+  imitating those demonstrations, by nine distinct mechanisms, did not improve a policy trained without them.
+- **We do not claim a new algorithm.** Every method here is taken from the literature and applied.
 
 ---
 
@@ -103,8 +128,11 @@ weights every update rather than averaging gradients.
 ### 2.4 Compute
 
 Twenty 16-vCPU cloud machines for reinforcement learning, A100 or H100 for world models. The melee task cost
-**$51 and 4 hours 52 minutes** for the policy that solved it, about **$1.30 per million environment steps** at
-3,300 to 3,800 steps per second fleet-wide.
+**$51 and 4 hours 52 minutes** for the policy that solved it. Taking 41.8 M environment steps as the
+denominator, that is **$1.22 per million** at **2,386 steps per second** fleet-wide. Two caveats on those
+figures: the step count reconstructed from the exported histories is 44.35 M rather than 41.8 M, and the cost
+covers the phase that produced the final policy rather than the whole session, which was $61.50 over six
+hours including a discarded run.
 
 ---
 
@@ -114,13 +142,15 @@ Three Deku Babas in the first room of the Deku Tree, with the room exit behind t
 an available failure. Success is all three defeated.
 
 At global update 150 the policy clears **10 of 10 start states locally with 0 deaths**, six of them without
-taking damage (one watched episode per state, so this is qualitative, not a rate). Across the fleet the same
-checkpoints average **78% success and 83% of Babas killed**, over 41.8 million environment steps, which is
-about 1,160 hours of game time.
+taking damage **(Q: one watched episode per state, not a rate)**. Over the same updates the aggregator machine, the only one whose history was
+exported, reads **72.9% success and 80.7% of Babas killed (M)**. A 78% / 83% fleet mean over all twenty machines
+appears in our logs and **is not recoverable from the exported artefacts**, so we quote the recoverable
+number. Training ran 41.8 million environment steps, about 1,160 hours of game time.
 
 The learned behaviour is recognisable as play rather than as exploitation: it walks in from the entrance, wakes
 Babas that are underground, locks on, and times attacks against the lunge animation. The clip accompanying this
-report (section 11) is one such episode, 26.7 seconds, three kills at 7.3, 22.4 and 26.8 seconds.
+report (section 11) is one such episode: the episode runs 26.7 seconds and the clip 29.7, the difference
+being the hold after the last kill. Three kills, at 7.3, 22.4 and 26.8 seconds.
 
 This task matters mainly as calibration. It establishes that the observation, the action space and the
 optimiser are jointly sufficient to learn real combat in this engine, which is what makes the boss result a
@@ -135,7 +165,8 @@ manufactured: a slingshot seed into her eye while it is red, or a Deku Nut while
 spends much of the fight on the ceiling where she cannot be reached, and she spawns larvae.
 
 We mined the structure from 100 recorded human victories (54,626 steps, every one a win). This is the
-specification of the task, measured rather than asserted:
+specification of the task, measured rather than asserted **(M throughout this section, re-derivable from the
+corpus alone)**:
 
 | quantity, per human win | value |
 |---|---|
@@ -172,6 +203,12 @@ Conversion is conditional on her state at the moment of impact, across 371 impac
 So the projectile hit that looks productive, the red-eye shot on the ceiling, converts about two times in five,
 and 71 of 371 impacts were wasted entirely. Hitting the red eye is necessary and not sufficient.
 
+**A disclosure about the reward we actually ran, rather than the one we designed.** The boss tracker fully
+replaces the generic combat tracker's step function and never calls it, so the generic approach reward never
+fired in versions 1 through 14. Nothing in those runs paid the agent for crossing the room. We found this by
+reading both implementations, after fourteen versions, and the distance gradient in section 5.1 should be
+read knowing it. The term added in v15 to fix it is the one discussed in section 9.1.
+
 Two behaviours correlate **negatively** with damage dealt across the 100 wins: larvae hit at **-0.598** and
 time she spends on the ceiling at **-0.559**. Fighting the larvae is what a human does when the fight is going
 badly. Any method that imitates the corpus uniformly learns that behaviour in proportion to how often it
@@ -184,18 +221,23 @@ project, gamma 0.995 and lambda 0.95, that is 18.3 steps, or **1.8 seconds** at 
 takes 45 to 154 seconds.
 
 The consequence, asserted in a test against the real advantage computation: the terminal +60 for the kill
-reaches the first decision of the episode at **0.000% of face value**. Raising the horizon to gamma 0.99967 and
-lambda 1.0 brings it to 59.9% at 154 seconds.
+contributes to the first decision of the episode at **0.000% of its face value**. Raising the horizon to gamma
+0.99967 and lambda 1.0 brings that to 59.9% at 154 seconds.
 
 A conflation that cost this project time is worth stating, because it is easy to make. The often-quoted
-"47% at 15 seconds" is the **value** discount, `gamma^t`. The policy gradient is weighted by `(gamma * lambda)^t`,
-which at 15 seconds is **0.023%**. Those are different numbers and only the second one describes what the
-gradient sees.
+"47% at 15 seconds" is the **value** discount, `gamma^t`. The advantage is a `(gamma * lambda)`-weighted sum of
+temporal-difference residuals, so the weight on a residual 15 seconds ahead is **0.023%**. Those are different
+numbers and only the second describes what enters the advantage.
 
-**So the kill bonus has never reached the decisions that earn it, on any task in this project.** The melee task
-was solved by dense shaping inside the 1.8 second window. Everything the boss policy knows about assembling a
-chain of five manufactured openings, it learned from local shaping, with effectively no gradient from the
-outcome.
+**What that does and does not establish.** It establishes that the *direct* contribution of the terminal
+residual to an early advantage is negligible over the length of this fight. It does **not** establish that the
+terminal reward never influenced earlier decisions, and we were careless about this in an earlier draft. The
+critic bootstraps, so information about eventual outcomes can enter `V(s)` and propagate backwards across
+training updates, over many updates rather than within one trajectory. The defensible statement is narrower
+and still strong: **at these settings the configuration supplies almost no direct long-horizon credit, so
+whatever the policy learned about assembling a chain of openings had to arrive either through dense shaping
+inside the 1.8 second window or slowly through the value function.** The melee task is the clean case: it was
+solved by shaping inside that window.
 
 ---
 
@@ -203,6 +245,15 @@ outcome.
 
 Our best boss policy is `gohma-kl-v15`, referred to below as v15. The measurement is 456 episodes per arm,
 76 on each of six start states, a 300 second episode cap, and the same harness for every arm.
+
+**What is and is not held out, because the paper turns on start states and the two senses are easy to
+conflate.** These are *fresh evaluation episodes*, played after training with no gradient updates, but from
+the **same six start states the policy trained on**. They are not held-out initial conditions. The four start
+states genuinely excluded from training are reported separately and are unusable as a generalisation test,
+because all four are at half health and all four beyond 368 units, so "held out" is collinear with "far" and
+no matched comparison exists (section 10). Within-episode variation comes from sampled rather than greedy
+actions and from the emulator's own nondeterminism; the start state itself is a fixed savestate, so the
+confidence intervals describe the spread over episodes at a given start, not over start states.
 
 **The episode cap is part of the claim.** An earlier evaluation used a 120 second cap, below the 154 seconds a
 human win takes, and so could not observe many of the wins it was counting. It reported 5.00%; the same policy
@@ -220,6 +271,9 @@ seconds is withdrawn (section 12).
 | 6 | floor, eye red, 6 HP | 357 u | 2 | 2.63% | 0.72 to 9.10 | 1.01 ± 0.21 of 6 | 0.169 |
 | 8 | stunned, 10 HP | 448 u | 0 | **0.00%** | 0 to 4.81 | 1.26 ± 0.27 of 10 | 0.126 |
 | **pooled** | | | 38 / 456 | 8.33% | 6.13 to 11.23 | 3.53 ± 0.14 | |
+
+**(M.** Recomputed for this paper from the 456 rows, not quoted from a log. The pooled row reproduces the
+figure recorded at the time, which is the check that the split is being read correctly.**)**
 
 Three readings, in order of importance.
 
@@ -240,16 +294,44 @@ remaining health and her action state, and we do not fit a model to six points.
 
 ### 5.2 What the policy actually learned, and what it did not
 
-Across all 22 recorded wins on start 7, the slingshot converted **zero times**; every stun came from a Deku
-Nut. Across all 8 wins on start 5 it converted **exactly once**, presumably the red-eye shot the start hands
-it, with every later stun again a Deku Nut.
+Pooling every win in the matched evaluation, 38 of them, the policy was knocked down 192 times. Of those,
+**136 came from a Deku Nut, 10 from a slingshot seed, and 46 from her own descent** with no projectile
+involved. On start 7 the slingshot converted **zero times in 22 wins**; on start 5, exactly once per win, which
+is the red-eye shot that start hands it.
 
-So the policy largely solved this boss with the wrong tool. The human corpus fires 2.99 seeds and 1.71 nuts per
-win; the policy inverts that. In one recorded episode it had three consecutive red-eye windows and dropped all
-three before falling back to nuts. This is a real behavioural difference from the demonstrations and it is one
-reason imitation does not transfer (section 6).
+Two things follow. First, the policy solves this boss with a different tool from the demonstrator: the human
+corpus fires 2.99 seeds and 1.71 nuts per win and the policy inverts that ratio. We avoid calling it the wrong
+tool, because the Deku Nut is a legitimate mechanic and the policy found an affordance of its action space that
+works. Second, and less comfortably, **24% of the openings it exploits are not openings it created.** She
+descends on her own schedule and the policy converts what arrives. In the recorded episode of section 11 it dropped a cocked shot while her eye
+was red three times, at 17, 78 and 137 seconds, and passed up a fourth window at 139. It fired four seeds
+from the 26 it carried and only the opening one converted. Deku Nuts were already its default by 25 seconds,
+so this is not a policy falling back on nuts after the slingshot failed; the nut was the first tool it
+reached for.
 
-### 5.3 The trajectory, and the ceiling
+This is a real behavioural difference from the demonstrations. We note it beside the imitation results of
+section 6 as a hypothesis for why pressing the demonstrated action distribution onto this policy hurts it, and
+not as a demonstrated cause: state visitation, timing and recovery behaviour all differ too, and nothing here
+isolates item preference as the mechanism.
+
+### 5.3 What each version changed, and the trajectory
+
+Versions are referred to throughout by number. Each resumes from the previous one, which matters for reading
+the trend: the lineage's level change is a real measurement and the per-version slopes are not independent
+measurements of their own reward changes.
+
+| version | what changed | boss damage, start to end |
+|---|---|---|
+| v10 | observation v7: all larvae, velocities, facing, seed impacts | 0.38 to 1.21 |
+| v11 | 19 shaping terms zeroed, stun credit paid only on conversion, two missing actions added | 1.72 to 2.10 |
+| v12 | curriculum inverted toward full-health starts | 2.06 to 2.22 |
+| v13 | graded health curriculum | 2.41 to 2.75 |
+| v14 | penalty against drifting from v13, death penalty removed | 2.86 to 3.22 |
+| v15 | `g_approach`, a net-progress term toward Gohma | 3.17 to 3.32 |
+| v16 | the same term, coefficient tripled | 3.12 to 2.85 |
+| v17 | coefficient back to v15's, plus deficit-weighted start sampling | 3.19 to 2.86 |
+
+### 5.3.1 The trajectory, and the ceiling
 
 Across eight versions and five reward configurations, boss damage rose **0.38 to 3.32 of 10** and return rose
 **-12.6 to +56.8**, with every version's slope distinguishable from zero. It then **saturates at 3.2 to 3.4**:
@@ -304,14 +386,23 @@ arms are the ones with the easiest corpus.
 Within a single arm, accuracy does track its own damage, weakly and positively, at r = +0.441 ± 0.097. So the
 same number is a usable progress signal inside a run and an actively misleading selector between runs.
 
-And the single most compact statement of the problem: **v15, which does beat her, agrees with the human
-demonstrations on 3% of frames.** Two policies that both solve the task share almost no frame-level behaviour,
-so matching frames is a weak proxy for the thing being learned.
+And the single most compact statement of the problem. On the human's own frames, v15's greedy action matches
+the human's on **3%** of them. The comparison that makes that number bite is not the 0.9% chance floor over
+108 actions but the **20.1% majority-action floor**: a policy that did nothing at all would agree with the
+human more often than v15 does. Read it as one-directional and thin. It is measured on the demonstrator's
+state distribution and not the policy's, with greedy actions where v15 acts by sampling, at one update of one
+machine, with no standard error, and we never measured the converse. Weak as it is, it is the measurement that
+says frame matching is a poor proxy here: the term built to raise it did raise it, from 3% to 23%, and cost
+damage at t = -4.98.
 
 ### 6.3 Fifteen mechanisms, none of which beat the policy trained without the data
 
-Every arm below starts from v15's weights, so the question is whether demonstrations improve an already
-competent policy. The bar is v15's own 3.275 on the mix-invariant damage metric.
+Fifteen arms were run. The nine below are those that accumulated enough updates to fit a slope before the
+machines they ran on were lost; the remainder are listed in `../PROVENANCE.md` with their W&B identities and
+produced no usable trend. Every arm starts from v15's weights, so the question is whether demonstrations
+improve an already competent policy. The bar is v15's own 3.275 on the **mix-invariant** damage metric, by
+which we mean the unweighted mean of the per-start values rather than the episode-weighted average, so that
+changing the curriculum cannot move it. Section 9.2 is why that distinction exists.
 
 | mechanism | updates | mean | max | slope ± SE | t |
 |---|---|---|---|---|---|
@@ -325,6 +416,17 @@ competent policy. The bar is v15's own 3.275 on the mix-invariant damage metric.
 | clone proposes, Q head selects | 9 | 0.38 | 0.51 | -0.0050 ± 0.0105 | -0.48 |
 | clone as initialisation | 6 | 0.28 | 0.35 | rising from nothing | |
 | **v15, no human data at all** | | **3.275** | | the bar | |
+
+**(I, not M.** One machine's history per arm, episode-weighted, against a bar from a different aggregation.
+See the caveat below.**)**
+
+**A caveat that we would rather state than have found.** This table is the episode-weighted fleet mean, and
+the bar it is compared against was derived on a different aggregation. Regenerated on the mix-invariant
+column, the ordering changes and one arm's series does sit above 3.275. Worse, every exported history is a
+single machine, and per-machine damage on this task spans 1.36 to 3.37, so no per-arm mean here is a
+measurement by this project's own standard. The recomputation on the mix-invariant column is the single
+cheapest thing that would firm this section up and it has not been run. Read the table as nine arms that did
+not visibly help, not as a ranking.
 
 **Three arms produced a single update above the bar and none produced a trend above it.** The constant
 coefficient is the informative row: agreement with the demonstrated action rose from 3% to 23% and the BC loss
@@ -342,6 +444,12 @@ before it was measured.
 Return-conditioned behaviour cloning, trained on the same 100 human wins **plus** a few hundred of the policy's
 own failures and 200 of its wins, with no policy gradient anywhere, reaches **1.76 ± 0.11 damage and 8 defeats
 in 240 episodes (3.3%)**. Both plain clones of the same 100 games scored **0 in 400**.
+
+**These were measured at a 120 second episode cap**, which section 5 says is below the time a human win takes
+and which invalidated an earlier headline. The damage figures are usable because damage accumulates
+throughout an episode; the defeat rates in this subsection are not comparable with the 300 second numbers
+anywhere else in the paper, and v15's own damage moved from 2.88 to 3.53 between the two caps. The one
+comparison below that is matched at 300 seconds is labelled as such.
 
 The informative contrast is the corpus, not the architecture:
 
@@ -364,8 +472,10 @@ It still loses to the policy gradient. At matched 300 second caps, 456 episodes 
 | boss damage | **3.53 ± 0.14** | 1.31 ± 0.08 |
 
 Two-proportion z = +2.76 on the binary; **t = +13.91 on the graded metric**. Off the easiest start, v15
-averages 4.26 health to the offline policy's 0.88. Note the ratio of evidence: the graded quantity separates
-these arms at 14 standard errors where the binary manages 2.8, on the same episodes.
+averages **3.48** health to the offline policy's 0.88, a factor of 3.95 (recomputed from the 760 non-start-7
+rows; an earlier draft and `../PROVENANCE.md` said 4.26 and "4.8x", which was wrong). Note the ratio of
+evidence: the graded quantity separates these arms at 14 standard errors where the binary manages 2.8, on the
+same episodes.
 
 Two further offline results are worth recording because they close plausible escape routes. Corpus size from
 800 to 1,800 episodes at fixed composition is worth **+0.17 ± 0.14**, indistinguishable from zero, while ten
@@ -392,6 +502,9 @@ abandoned. The baseline throughout is **persistence**, the prediction that nothi
 | tokens plus history, single H100 | **91.5 M** transitions, resident in VRAM | positive through 5 steps, -2.44 at 1800 |
 | boss observation model | 4.7 M transitions, 120 epochs | **getting worse at -0.0874 ± 0.0218 per epoch, t = -4.00** |
 
+**(M** for every row. The first three rows are Deku Baba models on Deku Baba data; only the last is the boss.
+The three diagnostic findings below are Deku Baba measurements and do not describe the boss model.**)**
+
 The last row is the clearest statement available. After 120 epochs, with the output layer zero-initialised so
 that the model **begins** exactly at persistence, 120 epochs of training moved it steadily away from doing
 nothing. Its event heads, pushed to catch rare damage events, learned to fire on almost everything: 930 to 950
@@ -399,8 +512,15 @@ false events per 1,000 quiet ticks at precision 0.003 to 0.009. And the decisive
 
 > **Shuffling the action changes the prediction by a factor of 1.00.** The action is decoration.
 
-That is not a model that is merely inaccurate. It is not a controllable dynamics model at all, so nothing can
-be planned inside it. It predicts the diagnosis of the closed loop built on top: a full real-games to model to
+Said precisely: under the action-shuffle control, at the horizon evaluated, the model's predictions are
+effectively invariant to which action it is given. That is an aggregate over states, and our own counterfactual
+measurement below says 43% of states are action-insensitive in the real game, so the aggregate will understate
+conditioning that exists only in the other 57%. We did not run the shuffle control restricted to the
+action-sensitive subset, and that is the measurement that would sharpen this. What the aggregate does support
+is that nothing can be planned in this model as it stands, since a planner's leverage is exactly the
+difference between actions. It is consistent with, and we think the main reason for, the result of the closed
+loop built on top, though policy optimisation, the reward read from predicted columns, and distribution shift
+could all contribute: a full real-games to model to
 dream-policy to real-evaluation loop ran nine iterations on six machines and its dream-trained candidates won
 **0 of 607 real episodes**, against the anchor policy's measured rate, with candidate damage flat to declining
 at -0.056 ± 0.033 per iteration. The loop's machinery is validated; its model is not.
@@ -455,18 +575,29 @@ identity map.
 | nearest enemy distance (world units) | 74.3 | 71.7 | 93.1 | **44.1** |
 | floor height (mean abs. error) | 4.16 | 3.11 | 4.54 | **2.08** |
 
-**9 of 10 probes beat both an untrained network of identical architecture and a ridge regression on whatever
-cells are still visible.** Counting is the strongest: 0.181 average error on how many enemies are alive when
-every cell that would tell you is hidden, against 0.539 for the free-signal control. This is the first
-representation in this project not beaten by random weights; the previous attempt was worse than untrained on
-7 of 10 fields.
+**All ten scored probes beat both an untrained network of identical architecture and a ridge regression on the
+cells still visible.** One of the ten, a background-flag classifier, ties the majority-class floor to three
+decimals and clears the other two by under one standard error, so we strike it by hand and report **9 of 10**.
+Five further probes are excluded outright because their target is constant in this dataset. Counting is the
+strongest surviving result: 0.181 average error on how many enemies are alive when every cell that would tell
+you is hidden, against 0.539 for the free-signal control. This is the first representation in this project not
+beaten by random weights; the previous attempt was worse than untrained on 7 of 10 fields.
 
 What it does not establish, stated in the same breath. **One seed**, where six seeds of one configuration have
 previously spanned a factor of 2.5 here. The objective **still loses to its own trivial control**: emitting an
 unrelated clip's representation scores 0.0273 against the model's 0.0815, so it is improving toward that
-control, from 8.1 times to 3.0 times, and has not passed it. A single regularisation constant across arms of
-different scale. And the low-shot axis did not run: a floor on sample count collapsed two fractions to the same
-number.
+control, from 8.1 times to 3.0 times, and has not passed it. The probe is **not capacity-matched**: the encoder
+arm is given 13,056 features and the free-signal control 7,344, so the winning arm has 1.8 times the width to
+regress on, and a single ridge constant is applied across arms whose features are layer-normalised in one case
+and about three-quarters zeros in the other. A per-arm sweep of that constant has not been run. The low-shot
+axis did not run at all: a floor on sample count collapsed two fractions to the same number.
+
+**Two deviations from the papers, shipped in the implementation rather than proposed.** I-JEPA's context
+encoder processes only the visible patches and V-JEPA removes the masked ones, putting learnable mask tokens
+in the **predictor**. We fed per-field mask embeddings to the **encoder**, which is the masked-autoencoder
+arrangement rather than the JEPA one, and used 54 distinct mask vectors where the papers use one shared vector
+plus a positional embedding. The result above is a property of what we ran, not of the published method, and a
+paper-faithful arm has not been run against it.
 
 ---
 
@@ -496,13 +627,23 @@ quantity the reward principally pays for, the same runs read:
 solid and it was reported as six consecutive failures.** A defeat requires ten successful openings; damage
 counts each one, so one signal can show a trend on a few hundred episodes and the other cannot.
 
-The wrong metric then caused harm rather than merely hiding progress. An approach-shaping term was added in v15
-on the strength of a defeat-rate analysis. The last two rows are the versions that raised its coefficient and
-added a related change. Both are regressions, confirmed on a mix-invariant per-start form so neither is a
-curriculum artefact.
+The wrong metric then caused harm rather than merely hiding progress. An approach-shaping term, `g_approach`,
+was added in v15 on the strength of a defeat-rate band analysis. The last two rows are the versions that
+tripled its coefficient and that added deficit sampling, and both are regressions against the policy they
+resumed from, confirmed on the mix-invariant per-start form (t = -4.75 and -3.78) so neither is a curriculum
+artefact. **We stop short of saying the term caused the plateau**, although an earlier draft of this paper did
+not: the slope also tracks each version's starting level, and a later arm that removed the term from the same
+weights did not recover the earlier slope. Our own claim audit marks that causal reading confounded. What is
+attributable is narrower and still useful: two changes motivated by the sparse binary were measurably harmful,
+and the saturation at 3.2 to 3.4 is a property of the task across eight versions and five reward
+configurations.
 
-**The rules this produces.** Rank candidate metrics by information per episode before choosing one: a binary at
-rate p carries p(1-p) of variance per episode and a graded quantity over 0 to 10 carries far more. Make the
+**The rules this produces.** Rank candidate metrics by how well they separate the comparison you actually want
+to make, not by their name. The binary responds only when the whole ten-hit chain completes, so every partial
+improvement is invisible to it, while the graded quantity moves with each hit. The claim is about the metric's
+response to the underlying change and not about its spread, since larger variance is not by itself more
+information. The empirical form is the one to quote: on the same 456 episodes per arm, boss damage separates
+our two best methods at t = 13.91 where the defeat rate manages z = 2.76. Make the
 headline the quantity the reward's largest terms pay for. Report a trend with its standard error, because
 "flat" and "rising" are claims about a slope. And never let a sparse metric justify adding a reward term.
 
@@ -575,7 +716,7 @@ offline seeds at identical settings produced **opposite** significant slopes, +0
 
 ---
 
-## 10. Limitations
+## 10. Limitations and threats to validity
 
 - **One seed** for the masked-representation result, and for several world-model comparisons. By this
   project's own measured floors that is below the resolution needed.
@@ -591,13 +732,32 @@ offline seeds at identical settings produced **opposite** significant slopes, +0
   longest horizon, and all of them are timeout episodes by construction.
 - **Reproducing on macOS requires a code-signed interpreter** to attach to emulator memory. Linux does not.
 - **The masked-representation substrate exists on one machine.** The 203,822-frame raw-state datasets behind
-  section 8 are not mirrored off-site, so that result is currently reproducible only from local disk.
+  section 8 are not mirrored off-site. The checkpoint is durable and its input is not, so that result is
+  currently reproducible only from local disk.
+- **No weights exist for any of section 6.3's fifteen arms.** The machines they ran on were lost before any
+  checkpoint was synced, so what survives is one machine's training history per arm. That table cannot be
+  re-evaluated, only re-read.
+- **The row file behind the 13-game clone's 0 of 80 no longer exists**, on this machine or in remote storage.
+  Only the aggregate training-run history remains, so that cell rests on thinner evidence than the table
+  implies.
+- **Section 6.4's offline figures were measured at a 120 second episode cap** and the rest of the paper at
+  300. The damage numbers survive the difference; the defeat rates in that subsection do not transfer.
+- **No architecture ablation was run anywhere.** The entity-factored recurrent policy was never compared head
+  to head against a flat network at scale, so section 2.3 describes a choice and not a finding.
+- **The per-step observation latency figure has no artefact.** We quote it from development notes.
+- **Several headline comparisons mix within-run slopes with between-arm levels.** Where we noticed, we say so
+  in place; where we did not, treat a slope as evidence about one run's trajectory and not about the ranking
+  of two methods.
 
 ---
 
 ## 11. Media
 
-Both clips are the real emulator at 10 Hz control, cropped to the game area, with game audio.
+Both clips are the real emulator at 10 Hz control, cropped to the game area, with game audio. Unedited, as
+played:
+
+- **Queen Gohma, full fight:** <https://youtu.be/FBD1wEsdY3E> (3 min 11 s)
+- **Deku Babas:** <https://youtu.be/fMMvd1HmMjI> (27 s)
 
 **The melee task, end to end** (`media/deku-slot1/deku-slot1_s01_try01_crop.mp4`, 29.7 s, md5 `d20c62aae595`).
 The agent starts just inside the room entrance at full health with all three Babas underground 530 to 830
@@ -616,11 +776,15 @@ from the episode's own log:
 | 53.9 to 65.4 s | she falls, two Deku Nut stuns, one hit, 5 down to 4 |
 | 102.0, 106.2 s | two more larvae killed |
 | 111.4 to 119.5 s | falls again, nut stun, two hits, 4 down to 2 |
-| 156.5 s | more larvae cleared, eight in total across the fight |
-| 181.9 to 191.0 s | final knockdown, nut stun, two hits, **defeated at 191.1 s** |
+| 156.5 s | more larvae cleared |
+| 181.9 to 191.0 s | she descends a third time unprompted, nut stun, two hits, **defeated at 191.1 s** |
 
-Ten sword hits, eight stuns (one from the slingshot, four from Deku Nuts), eight larvae killed, two hearts
-lost, Link down to half a heart at one point.
+Ten sword hits and eight knockdowns, **of which the policy caused only five**: one from the slingshot and four
+from Deku Nuts. The other three were her own descent, at 502, 644 and 688 units away, with no seed or nut
+involved. Thirteen larva hits and five kills in the per-tick log, two hearts lost, Link down to half a heart
+at one point. The episode counter reports eight larvae killed against the log's five, and we have not resolved
+which is right; the per-tick log is sampled at about 2 Hz plus every event, so it can miss a kill that the
+counter catches.
 
 **It took four attempts, and the three that failed are in the manifest**: deaths at 2, 5 and 2 of her 10
 health. That start wins 10.53% of the time (8 of 76 matched episodes), so four attempts is a slightly lucky
@@ -678,7 +842,30 @@ back to the run that produced it.
 
 Training histories are **exported, not linked**: each run group has a local directory with its configuration,
 summary and full history, including the identities of all per-machine runs so a fleet is recoverable and not
-just its aggregator.
+just its aggregator. In practice one group's per-machine histories were not pulled before the machines were
+lost, which is the gap behind section 6.3.
+
+The commands, so the two results a reader is most likely to want are runnable rather than described:
+
+```sh
+# watch the solved melee policy play, in a real emulator window
+DOLPHIN_BIN=~/.cache/zelda-rl/Dolphin.app/Contents/MacOS/Dolphin \
+  .venv/bin/python-dbg scripts/play.py checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt \
+    --slots-dir datasets/zelda/combat/deku-baba/states --slot 1
+
+# the masked-prediction result of section 8, end to end on CPU, about 35 minutes
+ZRL_ALLOW_NO_WANDB=1 .venv/bin/python -u scripts/train_sjepa.py \
+  --data 'datasets/transitions/v3-main' --data 'datasets/transitions/v3-moves' \
+  --data 'datasets/transitions/v3-approach' --data 'datasets/transitions/v3-scenarios' \
+  --out runs/sjepa/p1.pt --prep configs/sjepa_prep_v3.json --fit-prep \
+  --clip-len 8 --stride 12 --mask-ratio 0.75 --dim 96 --depth 3 --heads 4 --pred-depth 2 \
+  --batch 256 --lr 1e-3 --epochs 12 --torch-threads 6 --seed 0 --fresh --run-name p1
+
+.venv/bin/python -u scripts/probe_sjepa.py --ckpt runs/sjepa/p1.last.pt \
+  --data 'datasets/transitions/v3-main' --data 'datasets/transitions/v3-moves' \
+  --data 'datasets/transitions/v3-approach' --data 'datasets/transitions/v3-scenarios' \
+  --limit-clips 2500 --stride 16 --feat grid --min-n 200 --out results/sjepa/p1_probe.json
+```
 
 One warning for anyone pulling artefacts: four world-model checkpoints exist in remote storage under the same
 filenames as the ones cited here but at roughly a third of the size. They are an earlier run. Match by md5.
@@ -706,7 +893,8 @@ number used to compare them.
 
 An agent reading a commercial game's memory learns real combat: it clears a three-enemy encounter from every
 start state, and on a dungeon boss it manufactures stuns, clears adds and lands ten-hit kills on 8.33% of
-held-out episodes from six starts, reaching 28.95% from the most favourable and 0 of 76 from the least.
+evaluation episodes across six trained starts, reaching 28.95% from the most favourable and 0 of 76 from the
+least.
 
 It does so without the reward for winning ever reaching the decisions that cause it. At the credit horizon used
 throughout, the kill bonus arrives at the first decision of the episode at 0.000% of face value, so what the
@@ -719,5 +907,6 @@ games plus the agent's own failures does substantially better than cloning and s
 gradient by 14 standard errors. A world model trained to 120 epochs ends further from "nothing changes" than it
 began and ignores the action entirely, and policies dreamed inside it won 0 of 607 real episodes.
 
-The last six health points of the boss remain unreached, and the honest summary of this report is that we know
+What remains out of reach is not the last six health points: the policy takes all ten in the episodes it wins.
+It is reliability. Competence arrived before consistency, and the honest summary of this report is that we know
 a great deal about why, mostly because we eventually started measuring the right quantity.
