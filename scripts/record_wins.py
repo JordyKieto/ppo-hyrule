@@ -72,8 +72,12 @@ def fight_summary(text: str) -> dict:
     larvae = [int(n) for n in re.findall(r"larvae (\d+)", text)]
     if larvae:
         out["larvae_peak"] = max(larvae)
-        # The HUD samples the ALIVE count, so every step down is a larva that died.
-        out["larvae_killed"] = sum(max(0, a - b) for a, b in zip(larvae, larvae[1:]))
+        # The HUD samples the ALIVE count, so a step down is a larva that LEFT the room, which is not the
+        # same as a larva that died: one can despawn alive, with no damage event and no kill reward paid.
+        # Two of the slot-5 win's eight removals were exactly that, which is why this is not `larvae_killed`.
+        out["larvae_removed"] = sum(max(0, a - b) for a, b in zip(larvae, larvae[1:]))
+    # Kills, from the per-tick event dict, which pays only on a larva reaching 0 health.
+    out["larvae_killed"] = sum(int(n) for n in re.findall(r"'larva_kill': (\d+)", text))
     out["nut_stuns"] = len(re.findall(r"'nut_stun': True", text))
     out["seed_stuns"] = len(re.findall(r"'seed_stun': True", text))
     out["stun_events"] = len(re.findall(r"'boss_stunned': True", text))

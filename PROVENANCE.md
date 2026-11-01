@@ -1691,6 +1691,22 @@ follows is everything recoverable without resuming a pod.
 | D4 | **RETRACTION of the loop's own anchor decision.** With `base is None` accepting unconditionally, iteration 0 replaced v15 (5.00% kills, measured) with its own dream candidate **without ever scoring v15**. Every later iteration was then correctly rejected — against a baseline already worse than the policy the loop was given. Fixed: `anchor_decision()` returns `needs_baseline`, the loop scores the anchor first, `tests/test_dyna_anchor.py` asserts it | **M** | `scripts/dyna_loop.py`, `tests/test_dyna_anchor.py` |
 | D5 | The loop's per-episode trajectories survive (the collector uploads each episode to S3 as it is written); the loop's WMs, candidate policies and eval jsonl do not — those pods were terminated | **I** | S3 `zelda/ppo/gohma_steps2/`, absence of `zelda/save/dyna3_*` |
 
+**CORRECTION, 2026-11-01: the 0/607 and the 120-epoch fleet model are two different world models**, and the
+paper's section 7 presented them as one flow. `scripts/dyna_loop.py` trains its own observation-space world
+model inside every iteration, from scratch at iteration 0 and resumed thereafter, in the loop's own run
+directory; there is no code path by which it loads the fleet checkpoint, and the loop's own source comment
+says "It is not comparable to `runs/wm_obs/wm.pt`". So 0/607 is six models, one per machine, **256 wide
+against the fleet's 1024**, trained on 60 freshly collected episodes per iteration for **2 to about 18
+epochs** against 2,605 recorded episodes for 120. The timing rules it out independently: the loop ran
+17:12 to 19:26 UTC and the 120-epoch state did not exist until the fleet died at 20:56. **The action-shuffle
+control (x1.00) was never measured on any loop model.** That reading is from the fleet model, and the loop's
+per-iteration `iterNN_wmstatus.json` readouts were lost with the pods, so the shuffle result is the proposed
+mechanism for the loop's failure, not a measurement of it (**I**, not **M**). The counts in D1 to D3 are
+unaffected and correct: 9 iterations, 6 machines, 607 episodes, 0 defeats. Two limits on them: only **50 of 54
+evaluations were recovered**, so the per-iteration n is **55 to 76**, not the 120 claimed above; and the
+loop's evaluations ran at the **120 s cap withdrawn in section 9**, so the candidate-versus-anchor comparison
+inside the loop holds while the cited anchor rate (5.00%, 6/120) does not. Paper and this file both corrected.
+
 ### WM (key-event penalties)
 
 | row | claim | class | artefact |
@@ -2244,8 +2260,17 @@ The start is the documented baseline full fight: Link at the room entrance, all 
 830 units away, so he must walk up and wake them.
 
 **Queen Gohma, start 5, four attempts** (deaths at 2, 5 and 2 of her 10 health, then the win).
-`SUCCESS | killed 1/1 at [191.1] s | hearts lost 2.0 | return 231.1`. Ten sword hits, eight knockdowns, five
-larvae killed. At a measured 10.53% per episode, four attempts is a slightly lucky draw on the attempt count
+`SUCCESS | killed 1/1 at [191.1] s | hearts lost 2.0 | return 231.1`. Ten sword hits, eight knockdowns, **six
+larvae killed** (**CORRECTION, 2026-11-01**: this said five, and the clip manifest said eight; both printed
+numbers were wrong. `scripts/record_wins.py` summed downward steps in the HUD's alive-larva count and called
+each a death, counting two larvae that left the room alive, one untouched at 90.4 s and one at 1 of 2 health at
+179.9 s, neither with a damage event or a kill reward; `zelda_rl/gohma.py:306` **assigned** `ev["larva_kill"]`
+where it accumulates `larva_hit`, so the two larvae dying on the same tick at 156.5 s emitted one event. Six is
+forced three ways: 4 damage on that tick cannot come from one larva at 2 health, the alive count falls 3 to 1
+across it, and the return rises 5.98 = 4 x 0.5 damage + 2 x 2.0 kill, with total larva damage closing exactly
+at 13 = 6 x 2 plus the single point on the larva that despawned alive. Both faults are fixed; the per-actor
+counter `ep["larva_kills"]` was always right and is what the matched-evaluation rows carry, so no quantitative
+result changes). At a measured 10.53% per episode, four attempts is a slightly lucky draw on the attempt count
 and an entirely ordinary win.
 
 Per-tick records: `media/gohma-slot5/play_by_play.{csv,json}` (127 ticks) and an analysis in

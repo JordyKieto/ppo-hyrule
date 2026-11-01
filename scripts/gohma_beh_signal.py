@@ -85,7 +85,11 @@ def pull(exp: str, out: Path) -> None:
 def load(out: Path, ctl_tag: str, beh_tag: str) -> dict[str, dict[int, list[dict]]]:
     """{arm: {update: [one row per POD]}}. Keyed on the run-name tag, which is what distinguishes the arms."""
     arms: dict[str, dict[int, list[dict]]] = {"control": {}, "treatment": {}}
-    for f in sorted(out.glob("*.jsonl")):
+    # *.withdrawn.jsonl holds rows from a run that was superseded in place: the trainer appends and restarts
+    # its update counter at 1, so an unfiltered glob pools two rewards under one update number. That is
+    # AGENTS 49 fault 6, which was recorded as open and then repeated. Rows are split out rather than
+    # deleted, and this glob is what keeps them out of a comparison.
+    for f in sorted(f for f in out.glob("*.jsonl") if not f.name.endswith(".withdrawn.jsonl")):
         stem = f.stem
         arm = ("control" if f"-{ctl_tag}-r" in stem else "treatment" if f"-{beh_tag}-r" in stem else None)
         if arm is None:

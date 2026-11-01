@@ -303,7 +303,13 @@ class GohmaTracker(CombatTracker):
                         ep["larva_kills"] += 1
                         ep["larva_kills_sling"] += int(by_sling)
                         pay(f"larva_kill{tag}", c.g_larva_kill_sling if by_sling else c.g_larva_kill, "out")
-                        ev["larva_kill"] = "slingshot" if by_sling else "sword"
+                        # Accumulate like `larva_hit` above: two larvae can die on the same tick, and an
+                        # assignment here emitted one event for both (it did, at 156.5 s of the slot-5 win).
+                        ev["larva_kill"] = ev.get("larva_kill", 0) + 1
+                        # NB: not named `kind`. Assigning that name anywhere in step() makes the
+                        # module-level kind() a local for the WHOLE function, and line 256 calls it.
+                        kill_ev = "larva_kill_sling" if by_sling else "larva_kill_sword"
+                        ev[kill_ev] = ev.get(kill_ev, 0) + 1
             tr.hp = e.hp
         for p in [p for p in self.tracks if p not in cur.enemies]:
             tr = self.tracks.pop(p)

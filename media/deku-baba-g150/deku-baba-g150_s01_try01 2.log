@@ -1,0 +1,27 @@
+▶ checkpoints/kept/deku-combat-gru-v2b-20p_u00120.pt (update 120, combat, GRU memory) | slots [1] | sampled | real time
+
+── slot 1 ep 1: Link 3.0 hearts | targets 3
+  t=  0.0s S+A          V= 37.17 hp 3.0 | babas 3/3 nearest 531 | locked False shield False | R= -0.00
+  t=  0.9s S+A          V= 38.41 hp 3.0 | babas 3/3 nearest 405 | locked False shield False | R=  0.62
+  t=  2.8s -+A          V= 39.16 hp 3.0 | babas 3/3 nearest 186 | locked False shield False | R=  1.70
+  t=  4.1s -+Z+A        V= 42.95 hp 3.0 | babas 3/3 nearest 176 | locked False shield False | R=  1.78
+  t=  4.6s -+Z+A        V= 46.14 hp 3.0 | babas 3/3 nearest 160 | locked True shield False | R=  2.16 | EVENTS {'lockon': True}
+  t=  5.4s -+Z+A        V= 44.05 hp 3.0 | babas 3/3 nearest 42 | locked True shield False | R=  3.09 | EVENTS {'lockon': True}
+  t=  5.6s -+Z+A        V= 44.19 hp 2.5 | babas 3/3 nearest 93 | locked False shield False | R=  0.84 | EVENTS {'link_damage': 8}
+  t=  5.9s -+Z+A        V= 44.69 hp 2.5 | babas 3/3 nearest 125 | locked True shield False | R=  0.98 | EVENTS {'lockon': True}
+  t=  6.2s -+Z+A        V= 47.22 hp 2.5 | babas 3/3 nearest 125 | locked True shield False | R=  0.99 | EVENTS {'lunge_hit': True}
+  t=  6.7s -+Z+A        V= 49.23 hp 2.5 | babas 3/3 nearest 83 | locked True shield False | R=  1.48 | EVENTS {'lockon': True}
+  t=  6.8s -+Shield     V= 49.47 hp 2.5 | babas 2/3 nearest 347 | locked False shield False | R= 16.18 | EVENTS {'hit': 2, 'defeat': 1, 'kill_mult': 2.54}
+  t=  8.8s S            V= 39.63 hp 2.5 | babas 2/3 nearest 272 | locked False shield False | R= 16.54
+  t= 10.8s W+Shield     V= 43.05 hp 2.5 | babas 2/3 nearest 192 | locked False shield True | R= 16.92
+  t= 12.2s -+Z+A        V= 44.32 hp 2.5 | babas 2/3 nearest 141 | locked True shield False | R= 17.48 | EVENTS {'lockon': True}
+  t= 12.3s -            V= 44.41 hp 2.5 | babas 2/3 nearest 141 | locked True shield False | R= 18.49 | EVENTS {'block': True}
+  t= 13.6s -+Z+A        V= 40.20 hp 2.5 | babas 2/3 nearest 78 | locked True shield False | R= 19.12 | EVENTS {'lockon': True}
+  t= 14.5s -+Z+A        V= 45.85 hp 2.5 | babas 2/3 nearest 70 | locked False shield False | R= 20.22 | EVENTS {'hit': 1}
+  t= 14.7s -+Z+A        V= 44.79 hp 2.5 | babas 1/3 nearest 392 | locked False shield False | R= 34.08 | EVENTS {'stun_hit': True, 'hit': 1, 'defeat': 1, 'kill_mult': 2.47}
+  t= 16.1s NE           V= 37.86 hp 2.5 | babas 1/3 nearest 308 | locked False shield False | R= 34.49
+  t= 18.1s -            V= 42.71 hp 2.0 | babas 1/3 nearest 71 | locked False shield False | R= 33.50 | EVENTS {'link_damage': 8}
+  t= 18.6s NE           V= 41.32 hp 2.0 | babas 1/3 nearest 137 | locked True shield False | R= 33.40 | EVENTS {'lunge_hit': True}
+  t= 20.6s -+Shield     V= 44.55 hp 2.0 | babas 1/3 nearest 145 | locked True shield True | R= 33.40
+  t= 21.2s -+Z+A        V= 47.32 hp 2.0 | babas 0/3 nearest None | locked False shield False | R= 81.71 | EVENTS {'hit': 2, 'defeat': 1, 'kill_mult': 2.57}
+■ slot 1: SUCCESS | killed 3/3 at [6.9, 14.8, 21.3] s | hearts lost 1.0 | return 81.7

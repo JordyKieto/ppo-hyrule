@@ -14,8 +14,11 @@ and later overturned are listed in section 12 rather than deleted.
 
 We train agents to fight in an unmodified commercial 3D game, *Ocarina of Time*, running under the Dolphin
 emulator. The agent never sees a pixel. It reads the emulator's memory directly, giving a structured view of
-the world: every actor's position, velocity, health and decoded animation routine. This removes perception
-from the problem and leaves control, timing and credit assignment.
+the world: every actor's position, velocity, health and decoded animation routine. **This removes the
+pixel-processing problem, not the perception problem.** The agent still has to work out, from a
+variable-length vector, which actor is the boss, what her decoded action routine implies about what she is
+about to do, and what the geometry means in a frame that rotates with the camera. What it does not have to do
+is recover any of that from an image.
 
 Two tasks. The first, a three-enemy melee encounter, is solved by recurrent PPO in under five hours on twenty
 CPU machines. The second, the dungeon boss Queen Gohma, is not solved, and the useful content of this report
@@ -33,8 +36,9 @@ majority-action floor, and takes 0.33 of her 10 health with 1 win in 80 attempts
 for injecting those demonstrations into the policy gradient produced no arm trending toward the policy
 trained without them. Offline
 return-conditioned behaviour cloning reaches 1.31 health and 3.95% defeats at matched episode caps. A learned
-world model trained for 120 epochs ends further from "nothing changes" than it started, ignores the action
-entirely, and the policies dream-trained inside it won 0 of 607 real episodes.
+world model trained for 120 epochs ends further from "nothing changes" than it started and ignores the action
+entirely. Separately, a closed planning loop in which each of six machines trained its own smaller world model
+on its own freshly collected games produced dream-trained policies that won 0 of 607 real episodes.
 
 The second half of the report is about measurement, because in this project the instrument was a larger source
 of error than any method. A defeat is a 1 to 10% binary event. Read through it, six consecutive versions of the
@@ -110,11 +114,19 @@ Tenenbaum (arXiv:1702.06230) did it for *Super Smash Bros. Melee* under the same
 player's position, velocity and action state from memory every frame; section 14 states what we take from them
 and what we do not claim.
 
-Reading memory is not a shortcut past the hard part. The state is a variable set of actors over twenty fields
-each, and the quantity that matters most for combat, an enemy's current **action routine**, is a function
-pointer we decode into a named behaviour state. A Deku Baba telegraphs its lunge; Gohma's eye turns red before
-she is vulnerable. Those are the observations a human plays on and they are directly available here, which is
-the reason the environment is interesting rather than a reason it is easy.
+Reading memory is not a shortcut past the hard part, and it is worth being precise about which part it
+removes. It removes **rendering and pixel processing**. It does not remove perception. The observation is a
+variable set of actors over twenty fields each, 1,033 numbers for the boss task, and more than half of them
+describe slots that are empty at any given moment. Nothing in that vector is labelled: the policy has to
+learn which row is the boss, which rows are larvae worth ignoring, what the decoded action routine implies
+about what happens next, and what the distances and velocities mean in a frame that rotates with the camera.
+That is a perception problem, posed over structured state instead of over pixels.
+
+What the structure buys is that the quantity mattering most for combat, an enemy's current **action
+routine**, is present at all. It is a function pointer we decode into a named behaviour state. A Deku Baba
+telegraphs its lunge; Gohma's eye turns red before she is vulnerable. Those are the cues a human plays on,
+and here they are in the observation rather than three frames of animation away from it. That is the reason
+the environment is interesting rather than a reason it is easy.
 
 **Vocabulary, fixed once.** A *machine* is one cloud pod and is also called a rank by the tooling. An *arm*
 is one configuration under test. An *update* is one iteration of the policy-gradient optimiser. *u* is a world
@@ -133,12 +145,61 @@ the two cannot disagree by construction.
 
 **The reward configuration is pinned per policy, not quoted from the current file.** That file is edited
 between experiments, so a sentence describing "the reward" describes whatever it happens to be on the day it
-is read. `../docs/REWARD_PROVENANCE.md` resolves the exact coefficients for every reported policy directly
-from the commit it trained under. For v15, which carries every headline number here: 39 shaping terms
-zeroed, damage at **+4.0 per health point**, the kill at **+60**, a stun credit of 15.0 paid only when it is
-converted into damage, and one distance term at 0.5 with a cap of 3. A later experiment, not reported as a
-result in this paper, raises damage to 20 and rescales the shaping. It is a separate preset precisely so that
-the numbers above keep meaning what they meant.
+is read, which for a project whose central finding is that reward composition decided the outcome is not good
+enough. `../docs/REWARD_PROVENANCE.md` resolves the exact coefficients for every reported policy from the
+commit it trained under, parsed out of version control rather than recalled. Below is the one that matters:
+**v15, which carries every headline number in this report.** It is the `simple` preset plus exactly one term.
+
+**Outcomes.** These are what the task is about, and they are uncapped.
+
+| term | value | pays for |
+|---|---|---|
+| `g_boss_defeat` | **+60** | the kill |
+| `g_boss_damage` | **+4.0** | per health point taken off her |
+| `g_boss_hp_progress` | 2.0 | multiplier making her last health worth more than her first |
+| `g_death_penalty` | 30.0 | dying. Scaled to **0** in v15 by a launch flag |
+| `w_link_damage` / `w_link_heal` | 0.25 / 0.05 | per health unit lost or regained, so 4.00 per heart |
+| `w_defeat` / `w_enemy_damage` | 5.0 / 1.0 | the generic combat outcomes, inherited |
+
+**The stun chain.** The one causal path to damage, and the largest shaping term in the reward.
+
+| term | value | cap | note |
+|---|---|---|---|
+| `g_seed_stun` | **15.0** | 60.0 | a slingshot stun, **paid only when converted into damage** |
+| `g_nut_stun` | 2.0 | 10.0 | a Deku Nut stun, same conversion gate |
+| `g_stun_hit` / `w_stun_hit` | 2.0 / 0.5 | | a sword hit landed while she is down |
+| `g_nut_miss` / `g_seed_miss` | 0.3 / 0.15 | | penalties, scaled up as that ammunition runs low |
+
+**Positioning, defence and larvae.** Everything else that pays at all.
+
+| term | value | cap |
+|---|---|---|
+| `g_approach` | **0.5** | 3.0 |
+| `w_approach`, firing as approach-while-stunned | 0.5 | per-step clip ±0.5 |
+| `g_spacing` | 0.02 | 1.5 |
+| `g_sword_ready` | 0.02 | 1.0 |
+| `g_larva_kill` / `g_larva_kill_sling` | 2.0 / 1.0 | |
+| `g_larva_damage` / `g_larva_damage_sling` | 0.5 / 0.25 | |
+| `w_block` / `w_dodge` / `w_shield_face` | 1.0 / 0.2 / 0.01 | |
+| `g_link_heal` | 0.1 | |
+
+**Twenty terms are zeroed**, and which ones is the interesting part. The whole slingshot-shaping cluster is
+off: `g_red_eye_seed`, `g_sling_red_eye`, `g_sling_ready`, `g_lock_red_eye`, `g_unfired_red_eye`,
+`g_drop_red_eye_shot`, `g_elevated_seed`. So are the pickups and grass (`g_seed_pickup`, `g_nut_pickup`,
+`g_grass_cut`), lock-on (`w_lockon`, `w_lock_step`) and the guard term. That cluster was removed on
+measurement, not on taste: section 14 gives the version where it reached 88% of total reward magnitude while
+the policy died 64.5% of the time.
+
+Three properties of this table are worth stating because they drive results later in the paper. **The stun
+credit is conditional**: `g_stun_on_convert` is on, so stunning her without landing a hit pays nothing, which
+is why the policy's stun counts and its damage move together. **`g_seed_stun` at 15.0 is by a wide margin
+the largest shaping term**, and section 5.2 shows the policy earns it about once in twenty wins, which is the
+clearest evidence in this report that the red-eye shot is under-executed rather than under-rewarded. And
+**none of these terms is potential-based** in the sense of Ng, Harada and Russell, so none of them is
+guaranteed to leave the optimal policy unchanged; section 9.1 returns to that.
+
+A later experiment, not reported as a result in this paper, raises damage to 20 and rescales the shaping onto
+one scale. It is a separate preset precisely so the numbers above keep meaning what they meant.
 
 ### 2.3 Policy and optimisation
 
@@ -562,10 +623,12 @@ than discovering one; section 14 states the narrower thing we think is ours.
 | object-centric causal model | same | the adopted paper's actual method was never run; what trained was its baseline |
 | entity tokens, fleet scale | **20.5 M** transitions | **validation loss fell 1.8 times while rollout skill collapsed from +0.003 to -0.41** |
 | tokens plus history, single H100 | **91.5 M** transitions, resident in VRAM | positive through 5 steps; the 1800-step figure is not a finding, see section 10 |
-| boss observation model | 4.7 M transitions, 120 epochs | **getting worse at -0.0874 ± 0.0218 per epoch, t = -4.00** |
+| boss observation model, 1024 wide | 4.7 M transitions, 120 epochs | **getting worse at -0.0874 ± 0.0218 per epoch, t = -4.00** |
 
 **(M** for every row. The first three rows are Deku Baba models on Deku Baba data; only the last is the boss.
-The three diagnostic findings below are Deku Baba measurements and do not describe the boss model.**)**
+The three diagnostic findings below are Deku Baba measurements and do not describe the boss model. **The last
+row is not the model behind the planning-loop result later in this section**: that loop trained six separate
+and much smaller models of its own, and none of them is in this table.**)**
 
 The last row is the clearest statement available. After 120 epochs, with the output layer zero-initialised so
 that the model **begins** exactly at persistence, 120 epochs of training moved it steadily away from doing
@@ -580,12 +643,20 @@ measurement below says 43% of states are action-insensitive in the real game, so
 conditioning that exists only in the other 57%. We did not run the shuffle control restricted to the
 action-sensitive subset, and that is the measurement that would sharpen this. What the aggregate does support
 is that nothing can be planned in this model as it stands, since a planner's leverage is exactly the
-difference between actions. It is consistent with, and we think the main reason for, the result of the closed
-loop built on top, though policy optimisation, the reward read from predicted columns, and distribution shift
-could all contribute: a full real-games to model to
-dream-policy to real-evaluation loop ran nine iterations on six machines and its dream-trained candidates won
-**0 of 607 real episodes**, against the anchor policy's measured rate, with candidate damage flat to declining
-at -0.056 ± 0.033 per iteration. The loop's machinery is validated; its model is not.
+difference between actions.
+
+A closed real-games to model to dream-policy to real-evaluation loop ran nine iterations on six machines, each
+machine training its *own* small 256-wide observation-space world model on its own freshly collected games
+rather than the 120-epoch model above; every dream-trained candidate won **0 of 607 real episodes**, with
+damage flat to declining at -0.056 ± 0.033 per iteration. The two failures are separate measurements of the
+same trainer and the same event weighting, and the loop's own per-iteration world-model readouts were lost with
+the pods, so the action-shuffle result is the mechanism we propose for the loop's failure, not a measurement of
+it. The loop's models were 256 units wide against the fleet model's 1024 and saw 60 freshly collected episodes
+per iteration for 2 to about 18 epochs, against 2,605 recorded episodes for 120 epochs. Two caveats attach to
+the 607: only **50 of the loop's 54 evaluations were recovered**, so the per-iteration n is 55 to 76 rather
+than the 120 quoted elsewhere in this report, and the loop's evaluations ran at the **120 second episode cap
+that sections 5 and 12 withdraw**, so the candidate-versus-anchor comparison within the loop holds but the
+anchor rate it was compared against does not. The loop's machinery is validated; its model is not.
 
 Three diagnostic findings generalise beyond this game:
 
@@ -873,15 +944,23 @@ from the episode's own log:
 | 53.9 to 65.4 s | she falls, two Deku Nut stuns, one hit, 5 down to 4 |
 | 102.0, 106.2 s | two more larvae killed |
 | 111.4 to 119.5 s | falls again, nut stun, two hits, 4 down to 2 |
-| 156.5 s | more larvae cleared |
+| 156.5 s | two larvae killed with the sword on the same tick |
 | 181.9 to 191.0 s | she descends a third time unprompted, nut stun, two hits, **defeated at 191.1 s** |
 
 Ten sword hits and eight knockdowns, **of which the policy caused only five**: one from the slingshot and four
 from Deku Nuts. The other three were her own descent, at 502, 644 and 688 units away, with no seed or nut
-involved. Thirteen larva hits and five kills in the per-tick log, two hearts lost, Link down to half a heart
-at one point. The episode counter reports eight larvae killed against the log's five, and we have not resolved
-which is right; the per-tick log is sampled at about 2 Hz plus every event, so it can miss a kill that the
-counter catches.
+involved. Thirteen larva hits and **six kills**, two hearts lost, Link down to half a heart
+at one point. Six is a correction: the clip manifest printed eight and the per-tick log printed five, and both
+numbers were wrong, for separate reasons we have since fixed. The manifest summed downward steps in the HUD's
+alive-larva count and called each one a death, which counts two larvae that left the room alive, one untouched
+at 90.4 s and one at 1 of 2 health at 179.9 s, neither with a damage event or a kill reward paid. The log
+**assigned** its kill event where it accumulates its hit event, so the two larvae that died on the same tick at
+156.5 s emitted one event between them. Three independent channels force six: 4 points of damage on that tick
+cannot come from one larva holding 2 health, the alive count falls from 3 to 1 across it, and the return rises
+5.98, which is 4 hits at 0.5 plus 2 kills at 2.0. Total larva damage closes exactly at 13, six larvae at 2
+health plus the single point taken off the one that despawned alive. **The per-actor episode counter was
+correct throughout**, and it is what the matched-evaluation rows carry, so nothing in the quantitative results
+is affected.
 
 **It took four attempts, and the three that failed are in the manifest**: deaths at 2, 5 and 2 of her 10
 health. That start wins 10.53% of the time (8 of 76 matched episodes), so four attempts is a slightly lucky
@@ -1005,7 +1084,8 @@ The copy-last-frame floor has been standard in video prediction for years and is
 on mostly static data. So section 7 confirms rather than discovers. What we add is sharper: our model is
 zero-initialised so that it **begins exactly at persistence**, and 120 epochs then move it away at
 -0.0874 ± 0.0218 per epoch, while the action-shuffle control reads unchanged, and the failure is carried
-through a closed loop to 0 defeats in 607 real episodes. Starting at the floor and walking away from it is a
+through a closed loop, on six smaller models from the same trainer, to 0 defeats in 607 real episodes.
+Starting at the floor and walking away from it is a
 stronger statement than failing to reach it.
 
 **Most of our measurement section is confirmation, and we would rather say so.** Henderson et al. (AAAI 2018)
@@ -1044,7 +1124,8 @@ trained without them; one arm's single-machine mean nominally exceeds it, inside
 configuration run twice already covers. The mechanism that demonstrably worked cost damage at t = -4.98. Offline return-conditioned learning on the same
 games plus the agent's own failures does substantially better than cloning and still loses to the policy
 gradient by 14 standard errors. A world model trained to 120 epochs ends further from "nothing changes" than it
-began and ignores the action entirely, and policies dreamed inside it won 0 of 607 real episodes.
+began and ignores the action entirely, and policies dreamed inside six smaller models from the same trainer
+won 0 of 607 real episodes.
 
 What remains out of reach is not the last six health points: the policy takes all ten in the episodes it wins.
 It is reliability. Competence arrived before consistency, and the honest summary of this report is that we know
