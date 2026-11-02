@@ -18,10 +18,19 @@ The clips above are smash cuts. The YouTube links are the **unedited episodes**,
 `attempts.json` beside it recording every attempt, won or lost, so neither is read as a typical episode.
 The Gohma fight took four attempts at a start the policy wins 10.53% of the time.
 
-[**Paper**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Provenance**](PROVENANCE.md) ·
-[**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md) ·
-[**Models on Hugging Face**](https://huggingface.co/jordykieto/ppo-hyrule) ·
-[**Data on Hugging Face**](https://huggingface.co/datasets/jordykieto/ppo-hyrule-data)
+<!-- research-links:start -->
+<p align="center">
+  <a href="https://github.com/JordyKieto/ppo-hyrule/blob/main/paper/paper.md"><img alt="Paper: GitHub" src="https://img.shields.io/badge/Paper-GitHub-24292f?logo=github&logoColor=white"></a>
+  <a href="https://github.com/JordyKieto/ppo-hyrule"><img alt="Code: GitHub" src="https://img.shields.io/badge/Code-GitHub-24292f?logo=github&logoColor=white"></a>
+  <a href="https://huggingface.co/jordykieto/ppo-hyrule"><img alt="Models: Hugging Face" src="https://img.shields.io/badge/Models-Hugging%20Face-ffd21e?logo=huggingface"></a>
+  <a href="https://huggingface.co/datasets/jordykieto/ppo-hyrule-data"><img alt="Datasets: Hugging Face" src="https://img.shields.io/badge/Datasets-Hugging%20Face-ffd21e?logo=huggingface"></a>
+  <a href="https://youtu.be/FBD1wEsdY3E"><img alt="Demo: YouTube" src="https://img.shields.io/badge/Demo-YouTube-ff0000?logo=youtube&logoColor=white"></a>
+</p>
+<p align="center"><sub>More research: <a href="https://github.com/JordyKieto/puffermoba-dyna">Learning in Dreams, Winning in Reality</a> · <a href="https://github.com/JordyKieto/neural-simulators">Neural Simulators for Interactive Environments</a> · <a href="https://github.com/JordyKieto/carla-imitation-learning">Imitation Learning for Autonomous Driving in CARLA</a> · <a href="https://jordykieto.tech/research">all research ↗</a></sub></p>
+<!-- research-links:end -->
+
+In this repo: [paper](paper/paper.md) · [claim audit](paper/CLAIMS.md) · [provenance](PROVENANCE.md) ·
+[artefact register](artifacts/MANIFEST.json) · [repo map](docs/MAP.md)
 
 **The policies are in this repository**, under `checkpoints/kept/`, because the paper's claims cannot be
 re-tested without them and each is under 10 MB. The 127 MB world model is on
