@@ -20,7 +20,8 @@ The Gohma fight took four attempts at a start the policy wins 10.53% of the time
 
 [**Paper**](paper/paper.md) · [**Claim audit**](paper/CLAIMS.md) · [**Provenance**](PROVENANCE.md) ·
 [**Artefact register**](artifacts/MANIFEST.json) · [**Repo map**](docs/MAP.md) ·
-[**Models on Hugging Face**](https://huggingface.co/jordykieto/ppo-hyrule)
+[**Models on Hugging Face**](https://huggingface.co/jordykieto/ppo-hyrule) ·
+[**Data on Hugging Face**](https://huggingface.co/datasets/jordykieto/ppo-hyrule-data)
 
 **The policies are in this repository**, under `checkpoints/kept/`, because the paper's claims cannot be
 re-tested without them and each is under 10 MB. The 127 MB world model is on
